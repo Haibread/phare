@@ -40,6 +40,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("otlp_endpoint", "otel_exporter_otlp_endpoint"),
     )
 
+    # External providers (optional; ingestion needs these to run against live accounts).
+    tmdb_api_key: str | None = None
+    tmdb_base_url: str = "https://api.themoviedb.org/3"
+    trakt_client_id: str | None = None
+    trakt_base_url: str = "https://api.trakt.tv"
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

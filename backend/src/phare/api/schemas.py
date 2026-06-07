@@ -5,6 +5,9 @@ All JSON fields are camelCase on the wire (alias generator), populatable by fiel
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
@@ -17,3 +20,24 @@ class HealthResponse(ApiModel):
     status: str
     service: str
     version: str
+
+
+class HistoryItemResponse(ApiModel):
+    id: uuid.UUID
+    title_id: uuid.UUID
+    title: str
+    kind: str
+    type: str
+    rating: float | None = None
+    occurred_at: datetime | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
+    source: str
+    excluded: bool
+
+
+class HistoryPage(ApiModel):
+    items: list[HistoryItemResponse]
+    page: int
+    per_page: int
+    total: int

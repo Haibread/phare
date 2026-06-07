@@ -30,6 +30,9 @@ from phare.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
+# Engines already instrumented, to keep repeated create_app() calls (tests) idempotent.
+_instrumented_engines: set[int] = set()
+
 
 def setup_telemetry(app: FastAPI, engine: Engine, settings: Settings) -> None:
     """Wire OTLP exporters (if configured) and instrument FastAPI + SQLAlchemy."""
@@ -55,4 +58,6 @@ def setup_telemetry(app: FastAPI, engine: Engine, settings: Settings) -> None:
         logger.info("telemetry.disabled")
 
     FastAPIInstrumentor.instrument_app(app)
-    SQLAlchemyInstrumentor().instrument(engine=engine)
+    if id(engine) not in _instrumented_engines:
+        SQLAlchemyInstrumentor().instrument(engine=engine)
+        _instrumented_engines.add(id(engine))
