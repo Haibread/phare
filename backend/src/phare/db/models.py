@@ -10,6 +10,7 @@ import enum
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -28,6 +29,10 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from phare.db.base import Base
+
+# Embedding vector dimension, fixed by the schema. Changing it (e.g. a different embedding
+# model) requires a migration + full re-embed; see docs/data-model.md.
+EMBEDDING_DIM = 1536
 
 
 class TitleKind(enum.StrEnum):
@@ -139,3 +144,20 @@ class WatchEvent(Base):
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class TitleEmbedding(Base):
+    """Content embedding for a title, stamped with the embedding model version.
+
+    Embeddings are at title (movie/show) level; never mix model versions in one space.
+    """
+
+    __tablename__ = "title_embedding"
+
+    # Composite PK so multiple model versions can coexist (clean cutover during a re-embed).
+    title_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("title.id", ondelete="CASCADE"), primary_key=True
+    )
+    model_version: Mapped[str] = mapped_column(String(100), primary_key=True)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -35,6 +35,8 @@ def engine() -> Iterator[Engine]:
         connection.execute(text(f"CREATE DATABASE {_TEST_DB}"))
 
     test_engine = create_engine(url.set(database=_TEST_DB))
+    with test_engine.begin() as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(test_engine)
     yield test_engine
     test_engine.dispose()
