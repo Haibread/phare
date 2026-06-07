@@ -31,8 +31,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://phare:phare@localhost:5432/phare"
 
     # NoDecode: keep pydantic-settings from JSON-decoding the env value so the
-    # validator below can accept a plain comma-separated string.
-    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # validator below can accept a plain comma-separated string. Defaults to the Vite dev
+    # server so `phare serve` works with the SPA out of the box; override in production.
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
+    )
 
     # OpenTelemetry: when unset, no exporter is wired (local dev / tests stay self-contained).
     otlp_endpoint: str | None = Field(
