@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     service_name: str = "phare-backend"
 
+    # Run Alembic upgrade on app startup. Convenient for dev / E2E / compose; off by default
+    # so production controls migrations explicitly.
+    migrate_on_startup: bool = False
+
     database_url: str = "postgresql+psycopg://phare:phare@localhost:5432/phare"
 
     # NoDecode: keep pydantic-settings from JSON-decoding the env value so the

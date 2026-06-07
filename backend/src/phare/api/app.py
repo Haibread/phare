@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    if get_settings().migrate_on_startup:
+        from phare.db.migrate import run_migrations
+
+        run_migrations()
     logger.info("startup")
     yield
     logger.info("shutdown")

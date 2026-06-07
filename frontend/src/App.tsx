@@ -12,10 +12,14 @@ function episodeLabel(item: HistoryItem): string {
 
 export function HistoryTable({ items }: { items: HistoryItem[] }): React.JSX.Element {
   if (items.length === 0) {
-    return <p className="muted">No history yet. Load sample data or sync from Trakt.</p>;
+    return (
+      <p className="muted" data-testid="history-empty">
+        No history yet. Load sample data or sync from Trakt.
+      </p>
+    );
   }
   return (
-    <table>
+    <table data-testid="history-table">
       <thead>
         <tr>
           <th>Title</th>
@@ -27,7 +31,7 @@ export function HistoryTable({ items }: { items: HistoryItem[] }): React.JSX.Ele
       </thead>
       <tbody>
         {items.map((item) => (
-          <tr key={item.id}>
+          <tr key={item.id} data-testid="history-row">
             <td>
               {item.title}
               {episodeLabel(item)}
@@ -130,6 +134,7 @@ export default function App(): React.JSX.Element {
         <h2>Profile</h2>
         <div className="row">
           <select
+            data-testid="profile-select"
             value={selectedId ?? ""}
             onChange={(event) => setSelectedId(event.target.value || null)}
             disabled={profiles.length === 0}
@@ -145,11 +150,17 @@ export default function App(): React.JSX.Element {
         <div className="row">
           <input
             type="text"
+            data-testid="new-profile-name"
             placeholder="New profile name"
             value={newName}
             onChange={(event) => setNewName(event.target.value)}
           />
-          <button type="button" onClick={onCreateProfile} disabled={busy || newName.trim() === ""}>
+          <button
+            type="button"
+            data-testid="create-profile"
+            onClick={onCreateProfile}
+            disabled={busy || newName.trim() === ""}
+          >
             Create
           </button>
         </div>
@@ -158,19 +169,26 @@ export default function App(): React.JSX.Element {
       <section>
         <h2>Get data in</h2>
         <div className="row">
-          <button type="button" onClick={onLoadSample} disabled={busy || selectedId === null}>
+          <button
+            type="button"
+            data-testid="load-sample"
+            onClick={onLoadSample}
+            disabled={busy || selectedId === null}
+          >
             Load sample data
           </button>
         </div>
         <div className="row">
           <input
             type="password"
+            data-testid="trakt-token"
             placeholder="Trakt access token"
             value={token}
             onChange={(event) => setToken(event.target.value)}
           />
           <button
             type="button"
+            data-testid="sync-trakt"
             onClick={onSync}
             disabled={busy || selectedId === null || token.trim() === ""}
           >
@@ -179,7 +197,11 @@ export default function App(): React.JSX.Element {
         </div>
       </section>
 
-      {status && <p className="status">{status}</p>}
+      {status && (
+        <p className="status" data-testid="status">
+          {status}
+        </p>
+      )}
 
       <section>
         <h2>History</h2>

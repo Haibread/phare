@@ -12,6 +12,12 @@ repos:
       - id: hadolint
   - repo: local
     hooks:
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        files: ^\.github/workflows/.*\.(yml|yaml)$
+        pass_filenames: true
       - id: frontend-biome
         name: biome check (frontend)
         entry: npm --prefix frontend run lint
