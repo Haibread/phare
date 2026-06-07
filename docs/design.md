@@ -1,0 +1,61 @@
+# Design
+
+## Engine: LLM steers, embeddings rank
+
+Pipeline: `events → taste extraction (LLM) → taste profile → candidate generation (vector +
+filters) → re-ranker → explanations (LLM)`.
+
+- **Taste extraction** (LLM, batch/on-demand, cheap): reads the profile's events — including the
+  signals others throw away: **abandonment, low ratings, rewatches, free-text feedback** — into
+  a structured taste profile.
+- **Candidate generation:** vector search around the taste vector + hard filters (exclude
+  watched, apply hard-avoids, apply chat intent filters).
+- **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
+  **recency-decayed** taste, then **anti-degeneracy**: cap popularity, enforce diversity,
+  guarantee catalog coverage over time.
+- **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
+  judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
+- **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.
+
+Why not LLM-as-ranker: it can't recall a large catalog, hallucinates titles, and is slower and
+costlier. It's good at reading fuzzy human signal — so that's all it does.
+
+## Two layers
+
+- **Stable taste** (who you are) → **UI rows**, precomputed/cached.
+- **Ephemeral mood/intent** ("tired, 90 min, funny") → **chat agent**, applied as extra
+  filters/boosts over the same engine.
+
+## Rows
+
+- `watch_again` — from own history.
+- `you_might_like` — the full pipeline. **This is the actual product**; most value/risk is here.
+- `popular` — global popularity.
+- `continue_watching` / `next_up` — in-progress shows, next episodes (TV roll-up).
+- **Dynamic LLM-generated rows** — an agent picks the day's rows from profile + mood + calendar
+  ("late October → horror you'd tolerate"; "finished Dune → the Villeneuve rabbit-hole"). Cheap
+  differentiator.
+
+## Scope of recommendations
+
+Primary: **recommend from the whole universe** (great content, period). Optional, behind action
+providers: watch on a linked platform if available, or **request** via Radarr/Sonarr/Jellyseerr.
+A "from my library / subscriptions / region only" mode is just a candidate-set filter on the same
+engine — supported, not the headline.
+
+## Privacy & safety (hard rules)
+
+- **Per-profile isolation**, enforced at the query layer: a profile reads only its own history,
+  ratings, taste, recommendations. No UI/API path to another user's data.
+- **No cross-user (collaborative) signal in v1.**
+- **The LLM never cites another user** in any output ("because Bob liked this" is a leak).
+- **Spoiler safety:** LLM output describes *appeal* (tone, themes, fit), never plot events of
+  unwatched content.
+- Open-source hygiene: never ship real data/logs; secrets only in the backend.
+
+## Deferred — do NOT build these yet
+
+Recording so agents don't pre-build them. Each needs a fresh decision before starting:
+collaborative filtering (privacy-safe, aggregated; only when N grows) · household / co-watching ·
+Plex/Jellyfin as *sources* · CSV import · MCP servers for providers · availability/region data
+(e.g. JustWatch).
