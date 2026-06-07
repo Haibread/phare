@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from phare.api import health
+from phare.api import health, history
 from phare.core.config import get_settings
 from phare.core.logging import configure_logging
 from phare.core.telemetry import setup_telemetry
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(history.router)
 
     setup_telemetry(app, get_engine(), settings)
     logger.info("app.ready", extra={"environment": settings.environment})
