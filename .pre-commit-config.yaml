@@ -10,3 +10,17 @@ repos:
     rev: v2.14.0
     hooks:
       - id: hadolint
+  - repo: local
+    hooks:
+      - id: frontend-biome
+        name: biome check (frontend)
+        entry: npm --prefix frontend run lint
+        language: system
+        files: ^frontend/.*\.(ts|tsx|json)$
+        pass_filenames: false
+      - id: frontend-typecheck
+        name: tsc --noEmit (frontend)
+        entry: npm --prefix frontend run typecheck
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false

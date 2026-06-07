@@ -48,7 +48,9 @@ def db_session(engine: Engine) -> Iterator[Session]:
     """A session wrapped in a transaction that is rolled back after each test."""
     connection = engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
+    # create_savepoint: a commit() inside request handlers becomes a SAVEPOINT release,
+    # so the outer rollback still undoes everything and tests stay isolated.
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
     try:
         yield session
     finally:
