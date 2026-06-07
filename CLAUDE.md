@@ -26,6 +26,8 @@ style, layout, and tooling, follow the convention skills; don't expect them dupl
 - LLM + embeddings: **OpenAI-compatible, behind a swappable provider interface**.
 - Frontend: **React + Vite SPA, client-rendered (no SSR)** — one backend, secrets only in it.
 - Everything external (Trakt, TMDB, LLM, *arr) sits behind a provider interface.
+- Observability: **structured logs + OpenTelemetry** (traces & metrics) exported over OTLP to a
+  swappable backend.
 
 ## Docs
 
