@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -20,6 +20,30 @@ class HealthResponse(ApiModel):
     status: str
     service: str
     version: str
+
+
+class CreateProfileRequest(ApiModel):
+    display_name: str = Field(min_length=1, max_length=100)
+
+
+class ProfileResponse(ApiModel):
+    id: uuid.UUID
+    display_name: str
+    created_at: datetime
+
+
+class ProfilePage(ApiModel):
+    items: list[ProfileResponse]
+    page: int
+    per_page: int
+    total: int
+
+
+class IngestSummary(ApiModel):
+    created: int
+    updated: int
+    skipped: int
+    titles_created: int
 
 
 class HistoryItemResponse(ApiModel):
