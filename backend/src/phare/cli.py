@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from phare.core.config import get_settings
 from phare.core.logging import configure_logging
+from phare.db.migrate import run_migrations
 
 app = typer.Typer(help="Phare backend.", no_args_is_help=True)
-
-# Project root that holds alembic.ini / migrations (src/phare/cli.py -> backend/).
-_ROOT = Path(__file__).resolve().parents[2]
 
 
 @app.command()
@@ -30,14 +27,8 @@ def serve(
 @app.command()
 def migrate() -> None:
     """Apply database migrations up to head."""
-    from alembic import command
-    from alembic.config import Config
-
     configure_logging(get_settings().log_level)
-    cfg = Config(str(_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(_ROOT / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
-    command.upgrade(cfg, "head")
+    run_migrations()
 
 
 def main() -> None:
