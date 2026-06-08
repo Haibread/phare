@@ -17,17 +17,18 @@ A compact snapshot of what's built and what's next. Update as features land.
   `POST /profiles/{id}/sample-data`, interim `POST /sources/trakt/sync` (paste token).
 - **UI** — React + Vite SPA: profile create/select, "Load sample data", "Sync from Trakt",
   history table (TV S/E labels). zod-validated client, structured logger, mobile-first.
-- **Embeddings (on `feat/step3-taste-embeddings`, not yet merged)** — OpenAI-compatible LLM
-  provider + versioned title embedding pipeline (pgvector, composite PK).
+- **Embeddings + taste (on `feat/step3-taste-embeddings`, not yet merged)** — OpenAI-compatible
+  LLM provider + versioned title embedding pipeline (pgvector, composite PK); LLM taste
+  extraction → structured, editable taste profile (`taste_profile`, sticky `user_overrides`);
+  `GET /profiles/{id}/taste`, `POST .../taste/generate`, `PUT .../taste`; UI taste panel.
 - **Tests/CI** — backend pytest (incl. provider HTTP via MockTransport, real-Postgres
   ingestion/history/profiles), frontend Vitest, **Playwright E2E** (create → sample-data →
   history), **GitHub Actions** (backend / frontend / e2e jobs).
 
 ## Branches / PRs
 
-- `main` — Steps 1 (skeleton) + 2 (ingestion), merged.
-- `feat/ui-quickstart` (PR #4) — UI + profiles/sample-data/sync + CORS fix + tests/CI/E2E.
-- `feat/step3-taste-embeddings` — LLM provider + embeddings (needs taste extraction, then PR).
+- `main` — Steps 1 (skeleton) + 2 (ingestion) + UI/tests/CI (PR #4), merged.
+- `feat/step3-taste-embeddings` — embeddings + taste extraction + taste UI (ready for PR).
 
 ## Run it
 
@@ -41,12 +42,12 @@ Set `MIGRATE_ON_STARTUP=true` to have the backend self-migrate (used by E2E/comp
 
 ## Next features (in rough order)
 
-1. **Taste extraction (Step 3b, T-203/204)** — LLM reads a profile's events → structured,
-   editable taste profile; `GET/PUT /me/taste`. Builds on the merged embeddings work.
-2. **Auth / token model (OQ-02)** — unblocks real Trakt OAuth + per-profile token storage and
+1. **Recommendation engine (M3)** — candidate generation (vector + filters) → re-ranker
+   (profile steering via the taste profile, diversity, swing slots) → explanations; the
+   `you_might_like` row. The embeddings + taste profile it needs now exist.
+2. **Recommendation logging** — log every rec shown (closed-loop metric groundwork).
+3. **Auth / token model (OQ-02)** — unblocks real Trakt OAuth + per-profile token storage and
    gives `/me` a real identity (currently the profile selector stands in).
-3. **Recommendation engine (M3)** — candidate generation (vector + filters) → re-ranker
-   (profile steering, diversity, swing slots) → explanations; the `you_might_like` row.
 4. **Recommendation logging** — log every rec shown (closed-loop metric groundwork).
 5. **Evaluation (M4)** — persona guardrail suite in CI, temporal holdout, anti-degeneracy
    metrics, LLM-judge.

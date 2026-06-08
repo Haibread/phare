@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     trakt_client_id: str | None = None
     trakt_base_url: str = "https://api.trakt.tv"
 
+    # LLM + embeddings (OpenAI-compatible). Embedding dim is fixed by the schema; switching to
+    # an embedding model of a different dimension requires a migration + re-embed.
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str | None = None
+    llm_chat_model: str = "gpt-4o-mini"
+    llm_embedding_model: str = "text-embedding-3-small"
+    llm_embedding_dim: int = 1536
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

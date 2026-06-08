@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import hashlib
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 
 from phare.db.models import TitleKind
@@ -44,3 +45,27 @@ class FakeSourceProvider:
             if since is not None and event.occurred_at and event.occurred_at < since:
                 continue
             yield event
+
+
+class FakeLLMProvider:
+    """Deterministic LLMProvider: stable pseudo-embeddings + a canned completion."""
+
+    name = "fake-llm"
+
+    def __init__(self, dim: int = 1536, completion: str = "{}") -> None:
+        self.dim = dim
+        self.completion = completion
+        self.embed_calls = 0
+        self.prompts: list[str] = []
+
+    def complete(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.completion
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.embed_calls += 1
+        return [self._vector(text) for text in texts]
+
+    def _vector(self, text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode()).digest()
+        return [digest[i % len(digest)] / 255.0 for i in range(self.dim)]

@@ -49,6 +49,17 @@ const ingestSummarySchema = z.object({
 });
 export type IngestSummary = z.infer<typeof ingestSummarySchema>;
 
+export const tasteSchema = z.object({
+  profileId: z.string(),
+  summary: z.string().nullable(),
+  structured: z.record(z.unknown()),
+  userOverrides: z.record(z.unknown()),
+  confidence: z.number().nullable(),
+  modelVersion: z.string().nullable(),
+  generatedAt: z.string().nullable(),
+});
+export type Taste = z.infer<typeof tasteSchema>;
+
 async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   const response = await fetch(url, {
@@ -88,4 +99,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ profileId, accessToken }),
     }),
+  getTaste: (profileId: string) => request(`/profiles/${profileId}/taste`, tasteSchema),
+  generateTaste: (profileId: string) =>
+    request(`/profiles/${profileId}/taste/generate`, tasteSchema, { method: "POST" }),
 };
