@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { HistoryTable } from "./App";
-import type { HistoryItem } from "./api";
+import { HistoryTable, TastePanel } from "./App";
+import type { HistoryItem, Taste } from "./api";
 
 function item(overrides: Partial<HistoryItem>): HistoryItem {
   return {
@@ -37,5 +37,29 @@ describe("HistoryTable", () => {
     );
     expect(screen.getByText("Dune")).toBeInTheDocument();
     expect(screen.getByText(/Severance\s*S1E2/)).toBeInTheDocument();
+  });
+});
+
+describe("TastePanel", () => {
+  it("prompts to generate when there is no taste profile", () => {
+    render(<TastePanel taste={null} busy={false} onGenerate={() => {}} />);
+    expect(screen.getByText(/no taste profile yet/i)).toBeInTheDocument();
+    expect(screen.getByTestId("generate-taste")).toHaveTextContent("Generate taste profile");
+  });
+
+  it("renders the summary and likes when present", () => {
+    const taste: Taste = {
+      profileId: "p1",
+      summary: "Likes cerebral sci-fi.",
+      structured: { likes: ["slow-burn sci-fi"], hard_avoids: ["gore"] },
+      userOverrides: {},
+      confidence: 0.7,
+      modelVersion: "test",
+      generatedAt: "2026-01-01T00:00:00Z",
+    };
+    render(<TastePanel taste={taste} busy={false} onGenerate={() => {}} />);
+    expect(screen.getByText("Likes cerebral sci-fi.")).toBeInTheDocument();
+    expect(screen.getByText(/slow-burn sci-fi/)).toBeInTheDocument();
+    expect(screen.getByText(/gore/)).toBeInTheDocument();
   });
 });

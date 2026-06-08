@@ -1,7 +1,43 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
-import type { HistoryItem, Profile } from "./api";
+import type { HistoryItem, Profile, Taste } from "./api";
 import { logger } from "./logger";
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+export function TastePanel({
+  taste,
+  busy,
+  onGenerate,
+}: {
+  taste: Taste | null;
+  busy: boolean;
+  onGenerate: () => void;
+}): React.JSX.Element {
+  return (
+    <div data-testid="taste-panel">
+      <div className="row">
+        <button type="button" data-testid="generate-taste" onClick={onGenerate} disabled={busy}>
+          {taste ? "Regenerate taste profile" : "Generate taste profile"}
+        </button>
+      </div>
+      {taste === null ? (
+        <p className="muted">No taste profile yet. Generate one (requires an LLM key).</p>
+      ) : (
+        <div data-testid="taste-content">
+          <p>{taste.summary}</p>
+          <p className="muted">
+            Likes: {stringList(taste.structured.likes).join(", ") || "—"} · Avoids:{" "}
+            {stringList(taste.structured.hard_avoids).join(", ") || "—"}
+            {taste.confidence !== null && ` · confidence ${taste.confidence}`}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function episodeLabel(item: HistoryItem): string {
   if (item.seasonNumber !== null && item.episodeNumber !== null) {
@@ -51,6 +87,7 @@ export default function App(): React.JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [taste, setTaste] = useState<Taste | null>(null);
   const [newName, setNewName] = useState("");
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<string | null>(null);
@@ -67,6 +104,14 @@ export default function App(): React.JSX.Element {
     setHistory(page.items);
   }, []);
 
+  const refreshTaste = useCallback(async (profileId: string) => {
+    try {
+      setTaste(await api.getTaste(profileId));
+    } catch {
+      setTaste(null); // 404 = not generated yet
+    }
+  }, []);
+
   useEffect(() => {
     refreshProfiles().catch((error: unknown) => {
       logger.error("profiles.load_failed", { error: String(error) });
@@ -77,12 +122,14 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (selectedId === null) {
       setHistory([]);
+      setTaste(null);
       return;
     }
     refreshHistory(selectedId).catch((error: unknown) =>
       setStatus(`Failed to load history: ${String(error)}`),
     );
-  }, [selectedId, refreshHistory]);
+    void refreshTaste(selectedId);
+  }, [selectedId, refreshHistory, refreshTaste]);
 
   async function run(action: () => Promise<string>): Promise<void> {
     setBusy(true);
@@ -123,6 +170,15 @@ export default function App(): React.JSX.Element {
       const summary = await api.syncTrakt(selectedId, token.trim());
       await refreshHistory(selectedId);
       return `Synced from Trakt: ${summary.created} new, ${summary.updated} updated.`;
+    });
+
+  const onGenerateTaste = () =>
+    run(async () => {
+      if (selectedId === null) {
+        return "Select or create a profile first.";
+      }
+      setTaste(await api.generateTaste(selectedId));
+      return "Generated taste profile.";
     });
 
   return (
@@ -202,6 +258,11 @@ export default function App(): React.JSX.Element {
           {status}
         </p>
       )}
+
+      <section>
+        <h2>Taste profile</h2>
+        <TastePanel taste={taste} busy={busy} onGenerate={onGenerateTaste} />
+      </section>
 
       <section>
         <h2>History</h2>

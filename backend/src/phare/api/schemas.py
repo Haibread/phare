@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -44,6 +45,20 @@ class IngestSummary(ApiModel):
     updated: int
     skipped: int
     titles_created: int
+
+
+class TasteResponse(ApiModel):
+    profile_id: uuid.UUID
+    summary: str | None = None
+    structured: dict[str, Any]
+    user_overrides: dict[str, Any]
+    confidence: float | None = None
+    model_version: str | None = None
+    generated_at: datetime | None = None
+
+
+class UpdateTasteRequest(ApiModel):
+    user_overrides: dict[str, Any]
 
 
 class HistoryItemResponse(ApiModel):
