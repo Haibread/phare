@@ -164,6 +164,46 @@ class TitleEmbedding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SourceToken(Base):
+    """A per-profile access token for an external source (Trakt/Plex/Jellyfin), encrypted.
+
+    The plaintext is never stored; ``token_encrypted`` is Fernet ciphertext derived from
+    ``SECRET_KEY``. One token per (profile, source).
+    """
+
+    __tablename__ = "source_token"
+    __table_args__ = (UniqueConstraint("profile_id", "source", name="uq_source_token"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
+    source: Mapped[str] = mapped_column(String(50))
+    token_encrypted: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RecommendationLog(Base):
+    """Every recommendation shown to a profile (a row item or a chat suggestion).
+
+    Closed-loop groundwork: pairing these with later watch events is how we'll measure whether
+    recommendations actually land. Per-profile and FK-cascaded — no cross-user data.
+    """
+
+    __tablename__ = "recommendation_log"
+    __table_args__ = (Index("ix_recommendation_log_profile", "profile_id", "shown_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
+    title_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("title.id", ondelete="CASCADE"))
+    row_key: Mapped[str] = mapped_column(String(50))
+    rank: Mapped[int] = mapped_column(Integer)
+    score: Mapped[float | None] = mapped_column(Float)
+    is_swing: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    source: Mapped[str] = mapped_column(String(20))  # "row" | "chat"
+    shown_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class TasteProfile(Base):
     """The LLM-extracted, user-editable taste profile — one per profile.
 

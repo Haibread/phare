@@ -61,6 +61,25 @@ class Settings(BaseSettings):
     llm_embedding_model: str = "text-embedding-3-small"
     llm_embedding_dim: int = 1536
 
+    # Recommendation engine tuning (safe defaults; rarely need changing).
+    recommend_row_size: int = 12
+    recommend_swing_slots: int = 2
+
+    # Auth (opt-in): when AUTH_PASSWORD is unset the API is open (single-user dev posture).
+    # SECRET_KEY signs bearer tokens and derives the source-token encryption key; it falls back
+    # to AUTH_PASSWORD when unset, so the minimal config is just AUTH_PASSWORD.
+    auth_password: str | None = None
+    secret_key: str | None = None
+    auth_token_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.auth_password)
+
+    @property
+    def signing_secret(self) -> str | None:
+        return self.secret_key or self.auth_password
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

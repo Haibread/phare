@@ -17,45 +17,63 @@ A compact snapshot of what's built and what's next. Update as features land.
   `POST /profiles/{id}/sample-data`, interim `POST /sources/trakt/sync` (paste token).
 - **UI** — React + Vite SPA: profile create/select, "Load sample data", "Sync from Trakt",
   history table (TV S/E labels). zod-validated client, structured logger, mobile-first.
-- **Embeddings + taste (on `feat/step3-taste-embeddings`, not yet merged)** — OpenAI-compatible
-  LLM provider + versioned title embedding pipeline (pgvector, composite PK); LLM taste
-  extraction → structured, editable taste profile (`taste_profile`, sticky `user_overrides`);
-  `GET /profiles/{id}/taste`, `POST .../taste/generate`, `PUT .../taste`; UI taste panel.
-- **Tests/CI** — backend pytest (incl. provider HTTP via MockTransport, real-Postgres
-  ingestion/history/profiles), frontend Vitest, **Playwright E2E** (create → sample-data →
-  history), **GitHub Actions** (backend / frontend / e2e jobs).
-
-## Branches / PRs
-
-- `main` — Steps 1 (skeleton) + 2 (ingestion) + UI/tests/CI (PR #4), merged.
-- `feat/step3-taste-embeddings` — embeddings + taste extraction + taste UI (ready for PR).
+- **Embeddings + taste** — OpenAI-compatible LLM provider + versioned title embedding pipeline
+  (pgvector, composite PK); LLM taste extraction → structured, editable taste profile
+  (`taste_profile`, sticky `user_overrides`); `GET /profiles/{id}/taste`, `POST .../taste/generate`,
+  `PUT .../taste`; UI taste panel.
+- **Recommendation engine (M3) + chat agent** — local-hash embedding fallback (offline retrieval,
+  no key) behind a single embedding-version source of truth; taste centroid → pgvector candidate
+  generation (excludes watched + hard-avoids) → deterministic re-ranker (affinity × similarity,
+  MMR genre diversity, popularity cap, reserved **swing** slots) → spoiler-safe explanations
+  (LLM or template). Rows `you_might_like` / `watch_again` / `popular` / `continue_watching`;
+  chat agent applies parsed mood/intent (LLM or keyword fallback) over the same engine.
+  `POST /catalog/{sample,import,embed}`, `GET /profiles/{id}/recommendations`,
+  `POST /profiles/{id}/chat`; sample catalog + TMDB popular import; UI rows + chat + swing badges.
+- **Recommendation logging** — every row/chat item logged (`recommendation_log`);
+  `GET /profiles/{id}/recommendations/log` (closed-loop groundwork).
+- **Opt-in auth + token model** — `AUTH_PASSWORD`-gated bearer auth (stateless HMAC), `/auth/login`,
+  `/me`; per-profile source tokens encrypted at rest (`source_token`, Fernet from `SECRET_KEY`).
+  No-op when unconfigured (open dev posture); SPA shows a login gate only when required.
+- **More sources** — Plex + Jellyfin source providers (own history only),
+  `POST /sources/{plex,jellyfin}/sync`, reusing stored per-profile tokens.
+- **Evaluation (M4)** — `eval/` persona guardrail suite + anti-degeneracy metrics (popularity bias,
+  diversity, novelty, coverage, holdout recall); `phare evaluate` CLI + a dedicated CI job; optional
+  LLM-judge (skipped without a key).
+- **Frontend container** — multi-stage nginx (non-root) image + compose `frontend` service, so
+  `docker compose up` runs db + backend (self-migrating) + SPA.
+- **Tests/CI** — backend pytest (provider HTTP via MockTransport, real-Postgres engine/rows/auth/
+  eval), frontend Vitest, **Playwright E2E** (history + recommendations + chat journeys),
+  **GitHub Actions** (backend / evaluation / frontend / e2e jobs).
 
 ## Run it
 
 ```bash
+docker compose up --build                                  # whole stack: db + backend + SPA :8080
+# …or for development:
 docker compose up -d db
 cd backend && uv run phare migrate && uv run phare serve   # :8000
 cd frontend && npm install && npm run dev                  # :5173
 cd e2e && npm install && npx playwright install chromium && npm test   # E2E
 ```
-Set `MIGRATE_ON_STARTUP=true` to have the backend self-migrate (used by E2E/compose).
+Set `MIGRATE_ON_STARTUP=true` to have the backend self-migrate (used by E2E/compose, default in
+compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embedding/chat model.
 
 ## Next features (in rough order)
 
-1. **Recommendation engine (M3)** — candidate generation (vector + filters) → re-ranker
-   (profile steering via the taste profile, diversity, swing slots) → explanations; the
-   `you_might_like` row. The embeddings + taste profile it needs now exist.
-2. **Recommendation logging** — log every rec shown (closed-loop metric groundwork).
-3. **Auth / token model (OQ-02)** — unblocks real Trakt OAuth + per-profile token storage and
-   gives `/me` a real identity (currently the profile selector stands in).
-4. **Recommendation logging** — log every rec shown (closed-loop metric groundwork).
-5. **Evaluation (M4)** — persona guardrail suite in CI, temporal holdout, anti-degeneracy
-   metrics, LLM-judge.
-6. **Frontend container + compose service** — one-command `docker compose up` for the whole app.
+1. **Closed-loop conversion metric** — join `recommendation_log` against later watch events to
+   measure top-K → watched within N days (the north-star signal; logging now exists).
+2. **Real Trakt OAuth connect flow** — replace the interim paste-token endpoint (token storage +
+   `/me` identity now exist to build on).
+3. **Dynamic LLM-generated rows** — agent picks the day's rows from taste + mood + calendar.
+4. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
+   product decision; see `docs/design.md` deferred list).
 
 ## Known gaps / debt
 
-- No real auth yet (single-user dev posture).
-- Trakt sync is an interim paste-token endpoint, not OAuth.
-- Frontend not containerised (run via `npm run dev`).
+- Auth is opt-in instance-level (single shared password), not multi-account; Trakt is still a
+  paste-token sync, not OAuth.
+- Plex/Jellyfin episode→show id mapping depends on what the history payload exposes
+  (`SeriesProviderIds` / `grandparentGuids`); unmapped episodes are skipped, not guessed.
+- The offline local-hash embedder is for dev/CI only — it gives relative similarity, not semantic
+  quality; production wants a real embedding model (and a full re-embed on switch).
 - Major Postgres version bumps need a dump/restore, not just an image tag change.

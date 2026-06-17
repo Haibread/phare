@@ -23,14 +23,27 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-phare}:${POSTGRES_PASSWORD:-phare}@db:5432/${POSTGRES_DB:-phare}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
+      MIGRATE_ON_STARTUP: ${MIGRATE_ON_STARTUP:-true}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SERVICE_NAME: ${SERVICE_NAME:-phare-backend}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      SECRET_KEY: ${SECRET_KEY:-}
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports:
+      - "8080:8080"
 
 volumes:
   pgdata: {}

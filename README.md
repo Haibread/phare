@@ -8,4 +8,48 @@ Core bet: **the LLM steers, embeddings rank** — classic content-based retrieva
 recommending; the LLM turns fuzzy human signal into an editable taste profile that steers it and
 writes the explanations.
 
-Design lives in [`docs/`](docs/); how to build lives in [`CLAUDE.md`](CLAUDE.md).
+Design lives in [`docs/`](docs/); how to build lives in [`CLAUDE.md`](CLAUDE.md); a running
+snapshot of what's built is in [`docs/status.md`](docs/status.md).
+
+## What's here
+
+- **Recommendation engine** — taste centroid → pgvector candidate generation → a deterministic
+  re-ranker (taste affinity, genre diversity, popularity cap, reserved **swing** slots) → spoiler-
+  safe explanations. Surfaced as `you_might_like` / `watch_again` / `popular` / `continue_watching`
+  rows.
+- **Chat agent** — ephemeral mood/intent ("something funny under 90 minutes") applied as extra
+  filters over the same engine.
+- **Runs fully offline** — with no `LLM_API_KEY`, a local hash embedder powers retrieval and
+  explanations/chat fall back to deterministic templates, so the whole pipeline works (and is
+  tested) with zero credentials.
+- **Sources** — Trakt, Plex, and Jellyfin (your own history only); TMDB for metadata + a popular-
+  titles catalog import. A built-in **sample catalog** lets you try it with no accounts.
+- **Opt-in auth** — set `AUTH_PASSWORD` to gate the instance; per-profile source tokens are
+  encrypted at rest. Unset = open (single-user dev posture).
+- **Evaluation** — persona guardrails + anti-degeneracy metrics (`phare evaluate`), gating CI.
+
+## Run it
+
+```bash
+cp .env.example .env                       # optional; sensible defaults work out of the box
+
+# One command for the whole stack (db + backend + SPA on http://localhost:8080):
+docker compose up --build
+
+# …or run the pieces directly for development:
+docker compose up -d db
+cd backend && uv run phare migrate && uv run phare serve        # API on :8000
+cd frontend && npm install && npm run dev                       # SPA on :5173
+```
+
+Then create a profile, **Load sample data** + **Load sample catalog**, and hit **Load
+recommendations** — or ask the chat agent for something.
+
+## Test it
+
+```bash
+cd backend  && uv run ruff check . && uv run pytest      # engine, API, providers, eval, auth
+cd frontend && npm run lint && npm run typecheck && npm test
+cd e2e      && npm ci && npx playwright install chromium && npm test   # full-stack journeys
+cd backend  && uv run phare evaluate                     # persona guardrails + metrics
+```
