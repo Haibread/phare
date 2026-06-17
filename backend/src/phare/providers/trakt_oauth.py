@@ -89,6 +89,25 @@ class TraktOAuth:
                 "client_secret": self._client_secret,
             },
         )
+        return self._token_result(response)
+
+    def refresh(self, refresh_token: str) -> PollResult:
+        """Exchange a refresh token for a fresh access (+ refresh) token."""
+        response = self._client.post(
+            "/oauth/token",
+            json={
+                "refresh_token": refresh_token,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
+                "grant_type": "refresh_token",
+            },
+        )
+        logger.info("trakt_oauth.refresh")
+        return self._token_result(response)
+
+    @staticmethod
+    def _token_result(response: httpx.Response) -> PollResult:
         if response.status_code == 200:
             data = response.json()
             return PollResult(
@@ -99,5 +118,5 @@ class TraktOAuth:
         status = _STATUS_BY_CODE.get(response.status_code)
         if status is None:
             response.raise_for_status()  # genuinely unexpected — surface it
-        logger.debug("trakt_oauth.poll", extra={"status": status})
+        logger.debug("trakt_oauth.token", extra={"status": status})
         return PollResult(status=status or PollStatus.pending)

@@ -39,9 +39,11 @@ A compact snapshot of what's built and what's next. Update as features land.
   No-op when unconfigured (open dev posture); SPA shows a login gate only when required.
 - **More sources** — Plex + Jellyfin source providers (own history only),
   `POST /sources/{plex,jellyfin}/sync`, reusing stored per-profile tokens.
-- **Trakt OAuth device flow** — `POST /sources/trakt/connect/{start,poll}`: the user authorizes a
-  short code at trakt.tv, the backend polls and stores the access token (encrypted), so syncing no
-  longer needs a pasted token. UI connect button + polling. (Covered by MockTransport + component
+- **Trakt OAuth device flow + token refresh** — `POST /sources/trakt/connect/{start,poll}`: the
+  user authorizes a short code at trakt.tv, the backend polls and stores the access **and refresh**
+  tokens (encrypted), so syncing no longer needs a pasted token. When a sync hits a 401 the backend
+  transparently refreshes the access token from the stored refresh token and retries once, asking
+  to reconnect only if that fails. UI connect button + polling. (Covered by MockTransport + endpoint
   tests; a live E2E would need a Trakt sandbox.)
 - **Dynamic themed rows** — the LLM names the day's themes from taste + calendar ("Spooky season",
   "More Sci-Fi for you", a discovery row); the engine fills each through the same retrieval +
@@ -71,15 +73,12 @@ compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embeddi
 
 ## Next features (in rough order)
 
-1. **Trakt token refresh** — store + use the refresh token to renew expired access tokens.
-2. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
+1. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
    product decision; see `docs/design.md` deferred list).
 
 ## Known gaps / debt
 
 - Auth is opt-in instance-level (single shared password), not multi-account.
-- Trakt OAuth stores the access token but not yet the refresh token, so a connection eventually
-  expires and must be re-done (token refresh is the next item).
 - Plex/Jellyfin episode→show id mapping depends on what the history payload exposes
   (`SeriesProviderIds` / `grandparentGuids`); unmapped episodes are skipped, not guessed.
 - The offline local-hash embedder is for dev/CI only — it gives relative similarity, not semantic
