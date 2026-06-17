@@ -60,11 +60,66 @@ export const tasteSchema = z.object({
 });
 export type Taste = z.infer<typeof tasteSchema>;
 
+export const recommendationItemSchema = z.object({
+  titleId: z.string(),
+  title: z.string(),
+  kind: z.string(),
+  year: z.number().nullable(),
+  genres: z.array(z.string()),
+  score: z.number(),
+  isSwing: z.boolean(),
+  confidence: z.number().nullable(),
+  explanation: z.string().nullable(),
+  components: z.record(z.number()),
+});
+export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
+
+export const recommendationRowSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  items: z.array(recommendationItemSchema),
+});
+export type RecommendationRow = z.infer<typeof recommendationRowSchema>;
+
+const recommendationsResponseSchema = z.object({
+  rows: z.array(recommendationRowSchema),
+});
+
+const chatIntentSchema = z.object({
+  maxRuntime: z.number().nullable(),
+  includeGenres: z.array(z.string()),
+  excludeGenres: z.array(z.string()),
+  mood: z.string().nullable(),
+});
+
+export const chatReplySchema = z.object({
+  replyText: z.string(),
+  intent: chatIntentSchema,
+  items: z.array(recommendationItemSchema),
+});
+export type ChatReply = z.infer<typeof chatReplySchema>;
+
+const catalogSummarySchema = z.object({ created: z.number() });
+
+const meSchema = z.object({ authRequired: z.boolean(), authenticated: z.boolean() });
+export type Me = z.infer<typeof meSchema>;
+const tokenSchema = z.object({ token: z.string() });
+
+// Bearer token held in memory only (never localStorage) — secrets stay in the session.
+let authToken: string | null = null;
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+}
+
 async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authToken !== null) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
   if (!response.ok) {
     let detail = response.statusText;
@@ -84,6 +139,12 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
 }
 
 export const api = {
+  me: () => request("/me", meSchema),
+  login: (password: string) =>
+    request("/auth/login", tokenSchema, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
   listProfiles: () => request("/profiles", profilePageSchema),
   createProfile: (displayName: string) =>
     request("/profiles", profileSchema, {
@@ -102,4 +163,12 @@ export const api = {
   getTaste: (profileId: string) => request(`/profiles/${profileId}/taste`, tasteSchema),
   generateTaste: (profileId: string) =>
     request(`/profiles/${profileId}/taste/generate`, tasteSchema, { method: "POST" }),
+  seedCatalog: () => request("/catalog/sample", catalogSummarySchema, { method: "POST" }),
+  recommendations: (profileId: string) =>
+    request(`/profiles/${profileId}/recommendations`, recommendationsResponseSchema),
+  chat: (profileId: string, message: string) =>
+    request(`/profiles/${profileId}/chat`, chatReplySchema, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
 };

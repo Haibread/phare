@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
-import type { HistoryItem, Profile, Taste } from "./api";
+import { api, setAuthToken } from "./api";
+import type {
+  ChatReply,
+  HistoryItem,
+  Profile,
+  RecommendationItem,
+  RecommendationRow,
+  Taste,
+} from "./api";
 import { logger } from "./logger";
 
 function stringList(value: unknown): string[] {
@@ -83,15 +90,206 @@ export function HistoryTable({ items }: { items: HistoryItem[] }): React.JSX.Ele
   );
 }
 
+export function RecCard({ item }: { item: RecommendationItem }): React.JSX.Element {
+  return (
+    <article className="rec-card" data-testid="rec-card">
+      {item.isSwing && (
+        <span className="badge" data-testid="swing-badge">
+          Swing
+        </span>
+      )}
+      <h4>
+        {item.title}
+        {item.year !== null && <span className="muted"> ({item.year})</span>}
+      </h4>
+      <p className="muted">{item.genres.join(", ") || "—"}</p>
+      {item.explanation !== null && <p className="explanation">{item.explanation}</p>}
+      {item.confidence !== null && (
+        <p className="muted">confidence {Math.round(item.confidence * 100)}%</p>
+      )}
+    </article>
+  );
+}
+
+export function RecRow({ row }: { row: RecommendationRow }): React.JSX.Element {
+  return (
+    <div data-testid="rec-row" data-row-key={row.key}>
+      <h3>{row.title}</h3>
+      <div className="rec-strip">
+        {row.items.map((item) => (
+          <RecCard key={item.titleId} item={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function Recommendations({
+  rows,
+  busy,
+  onRefresh,
+}: {
+  rows: RecommendationRow[];
+  busy: boolean;
+  onRefresh: () => void;
+}): React.JSX.Element {
+  return (
+    <div data-testid="recommendations">
+      <div className="row">
+        <button type="button" data-testid="refresh-recs" onClick={onRefresh} disabled={busy}>
+          Load recommendations
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <p className="muted" data-testid="recs-empty">
+          No recommendations yet. Load sample data + catalog, then load recommendations.
+        </p>
+      ) : (
+        rows.map((row) => <RecRow key={row.key} row={row} />)
+      )}
+    </div>
+  );
+}
+
+type ChatTurn = { role: "user" | "agent"; text: string; items?: RecommendationItem[] };
+
+export function ChatPanel({
+  log,
+  busy,
+  onSend,
+}: {
+  log: ChatTurn[];
+  busy: boolean;
+  onSend: (message: string) => void;
+}): React.JSX.Element {
+  const [message, setMessage] = useState("");
+  const submit = () => {
+    const trimmed = message.trim();
+    if (trimmed !== "") {
+      onSend(trimmed);
+      setMessage("");
+    }
+  };
+  return (
+    <div data-testid="chat-panel">
+      <div className="chat-log">
+        {log.map((turn, index) => (
+          <div
+            // Chat turns are append-only; index is a stable key here.
+            key={`${turn.role}-${index}`}
+            className={`chat-bubble ${turn.role}`}
+            data-testid={`chat-${turn.role}`}
+          >
+            <p>{turn.text}</p>
+            {turn.items && turn.items.length > 0 && (
+              <div className="rec-strip">
+                {turn.items.map((item) => (
+                  <RecCard key={item.titleId} item={item} />
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="row">
+        <input
+          type="text"
+          data-testid="chat-input"
+          placeholder="e.g. something funny and short"
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && submit()}
+        />
+        <button
+          type="button"
+          data-testid="chat-send"
+          onClick={submit}
+          disabled={busy || message.trim() === ""}
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function LoginGate({
+  onLogin,
+  error,
+}: {
+  onLogin: (password: string) => void;
+  error: string | null;
+}): React.JSX.Element {
+  const [password, setPassword] = useState("");
+  return (
+    <main data-testid="login-gate">
+      <h1>Phare</h1>
+      <p className="muted">This instance is protected. Enter the password to continue.</p>
+      <div className="row">
+        <input
+          type="password"
+          data-testid="login-password"
+          placeholder="Password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && onLogin(password)}
+        />
+        <button
+          type="button"
+          data-testid="login-submit"
+          onClick={() => onLogin(password)}
+          disabled={password === ""}
+        >
+          Log in
+        </button>
+      </div>
+      {error !== null && (
+        <p className="status" data-testid="login-error">
+          {error}
+        </p>
+      )}
+    </main>
+  );
+}
+
 export default function App(): React.JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [taste, setTaste] = useState<Taste | null>(null);
+  const [rows, setRows] = useState<RecommendationRow[]>([]);
+  const [chatLog, setChatLog] = useState<ChatTurn[]>([]);
   const [newName, setNewName] = useState("");
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [needsLogin, setNeedsLogin] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  const checkAuth = useCallback(async () => {
+    const me = await api.me();
+    setNeedsLogin(me.authRequired && !me.authenticated);
+  }, []);
+
+  useEffect(() => {
+    checkAuth().catch((error: unknown) =>
+      logger.warn("auth.check_failed", { error: String(error) }),
+    );
+  }, [checkAuth]);
+
+  const onLogin = (password: string) => {
+    setLoginError(null);
+    api
+      .login(password)
+      .then(async (response) => {
+        setAuthToken(response.token);
+        setNeedsLogin(false);
+        await checkAuth();
+      })
+      .catch((error: unknown) => {
+        setLoginError(error instanceof Error ? error.message : String(error));
+      });
+  };
 
   const refreshProfiles = useCallback(async () => {
     const page = await api.listProfiles();
@@ -113,18 +311,25 @@ export default function App(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (needsLogin) {
+      return;
+    }
     refreshProfiles().catch((error: unknown) => {
       logger.error("profiles.load_failed", { error: String(error) });
       setStatus("Could not reach the backend. Is it running on :8000?");
     });
-  }, [refreshProfiles]);
+  }, [refreshProfiles, needsLogin]);
 
   useEffect(() => {
     if (selectedId === null) {
       setHistory([]);
       setTaste(null);
+      setRows([]);
+      setChatLog([]);
       return;
     }
+    setRows([]);
+    setChatLog([]);
     refreshHistory(selectedId).catch((error: unknown) =>
       setStatus(`Failed to load history: ${String(error)}`),
     );
@@ -181,6 +386,38 @@ export default function App(): React.JSX.Element {
       return "Generated taste profile.";
     });
 
+  const onLoadCatalog = () =>
+    run(async () => {
+      const summary = await api.seedCatalog();
+      return `Loaded sample catalog: ${summary.created} new titles.`;
+    });
+
+  const onRefreshRecs = () =>
+    run(async () => {
+      if (selectedId === null) {
+        return "Select or create a profile first.";
+      }
+      const response = await api.recommendations(selectedId);
+      setRows(response.rows);
+      const total = response.rows.reduce((sum, row) => sum + row.items.length, 0);
+      return `Loaded ${total} recommendations across ${response.rows.length} rows.`;
+    });
+
+  const onSendChat = (message: string) =>
+    run(async () => {
+      if (selectedId === null) {
+        return "Select or create a profile first.";
+      }
+      setChatLog((log) => [...log, { role: "user", text: message }]);
+      const reply: ChatReply = await api.chat(selectedId, message);
+      setChatLog((log) => [...log, { role: "agent", text: reply.replyText, items: reply.items }]);
+      return `Chat: ${reply.items.length} suggestions.`;
+    });
+
+  if (needsLogin) {
+    return <LoginGate onLogin={onLogin} error={loginError} />;
+  }
+
   return (
     <main>
       <h1>Phare</h1>
@@ -233,6 +470,9 @@ export default function App(): React.JSX.Element {
           >
             Load sample data
           </button>
+          <button type="button" data-testid="load-catalog" onClick={onLoadCatalog} disabled={busy}>
+            Load sample catalog
+          </button>
         </div>
         <div className="row">
           <input
@@ -262,6 +502,19 @@ export default function App(): React.JSX.Element {
       <section>
         <h2>Taste profile</h2>
         <TastePanel taste={taste} busy={busy} onGenerate={onGenerateTaste} />
+      </section>
+
+      <section>
+        <h2>Recommendations</h2>
+        <Recommendations rows={rows} busy={busy} onRefresh={onRefreshRecs} />
+      </section>
+
+      <section>
+        <h2>Chat</h2>
+        <p className="muted">
+          Tell the agent your mood — "tired, something funny under 90 minutes".
+        </p>
+        <ChatPanel log={chatLog} busy={busy} onSend={onSendChat} />
       </section>
 
       <section>

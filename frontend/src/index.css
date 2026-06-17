@@ -79,6 +79,60 @@ td {
   border-bottom: 1px solid rgba(127, 127, 127, 0.3);
 }
 
+.rec-strip {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.rec-card {
+  flex: 0 0 14rem;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.rec-card h4 {
+  margin: 0;
+}
+
+.rec-card .explanation {
+  font-size: 0.9rem;
+}
+
+.badge {
+  align-self: flex-start;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.3rem;
+  background: rgba(180, 120, 30, 0.25);
+  border: 1px solid rgba(180, 120, 30, 0.5);
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.chat-bubble {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.chat-bubble.user {
+  align-self: flex-end;
+  background: rgba(80, 130, 200, 0.18);
+}
+
 @media (min-width: 600px) {
   main {
     padding: 2rem;
