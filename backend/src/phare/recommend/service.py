@@ -57,11 +57,15 @@ class RecommendationService:
             self.session, self.embed_provider, self.embed_model_version
         ).embed_missing()
 
-    def _load_taste(self, profile_id: uuid.UUID) -> dict[str, object]:
+    def load_taste(self, profile_id: uuid.UUID) -> dict[str, object]:
+        """The effective taste profile (structured + sticky overrides), or {} if none yet."""
         taste = self.session.scalar(
             select(TasteProfile).where(TasteProfile.profile_id == profile_id)
         )
         return effective_profile(taste) if taste is not None else {}
+
+    # Backwards-compatible alias used internally.
+    _load_taste = load_taste
 
     def recommend(
         self,

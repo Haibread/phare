@@ -23,6 +23,7 @@ from phare.db.base import get_session
 from phare.db.models import Profile, RecommendationLog
 from phare.eval.conversion import conversion_stats
 from phare.providers.types import LLMProvider
+from phare.recommend.dynamic import dynamic_rows
 from phare.recommend.schema import Recommendation, Row
 from phare.recommend.service import RecommendationService
 
@@ -83,6 +84,23 @@ def get_recommendations(
     recommender = build_recommender(session, embedder, chat_llm)
     rows = recommender.rows(profile_id)
     session.commit()  # lazy embeddings (and any logging) persist
+    return RecommendationsResponse(rows=[to_row(row) for row in rows])
+
+
+@router.get(
+    "/profiles/{profile_id}/recommendations/dynamic", response_model=RecommendationsResponse
+)
+def get_dynamic_recommendations(
+    profile_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_session)],
+    embedder: Annotated[Embedder, Depends(get_embedder)],
+    chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+) -> RecommendationsResponse:
+    """Today's LLM-picked themed rows (calendar + taste fallback when no LLM is configured)."""
+    require_profile(session, profile_id)
+    recommender = build_recommender(session, embedder, chat_llm)
+    rows = dynamic_rows(recommender, profile_id, llm=chat_llm)
+    session.commit()
     return RecommendationsResponse(rows=[to_row(row) for row in rows])
 
 

@@ -28,4 +28,9 @@ test("create a profile, seed data + catalog, and get recommendations", async ({ 
 
   // The closed-loop conversion read-out renders; with fresh data it reports no matured history yet.
   await expect(page.getByTestId("conversion")).toContainText("not enough history yet");
+
+  // Today's picks: dynamic themed rows (calendar + taste fallback, offline).
+  await page.getByTestId("load-dynamic").click();
+  await expect(page.getByTestId("status")).toContainText("Today's picks");
+  await expect(page.getByTestId("dynamic-rows").getByTestId("rec-row").first()).toBeVisible();
 });

@@ -43,6 +43,10 @@ A compact snapshot of what's built and what's next. Update as features land.
   short code at trakt.tv, the backend polls and stores the access token (encrypted), so syncing no
   longer needs a pasted token. UI connect button + polling. (Covered by MockTransport + component
   tests; a live E2E would need a Trakt sandbox.)
+- **Dynamic themed rows** — the LLM names the day's themes from taste + calendar ("Spooky season",
+  "More Sci-Fi for you", a discovery row); the engine fills each through the same retrieval +
+  re-ranker. Deterministic calendar+taste fallback when no LLM is configured.
+  `GET /profiles/{id}/recommendations/dynamic`; a "Today's picks" UI section.
 - **Evaluation (M4)** — `eval/` persona guardrail suite + anti-degeneracy metrics (popularity bias,
   diversity, novelty, coverage, holdout recall); `phare evaluate` CLI + a dedicated CI job; optional
   LLM-judge (skipped without a key).
@@ -67,15 +71,15 @@ compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embeddi
 
 ## Next features (in rough order)
 
-1. **Dynamic LLM-generated rows** — agent picks the day's rows from taste + mood + calendar.
-2. **Trakt token refresh** — store + use the refresh token to renew expired access tokens.
-3. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
+1. **Trakt token refresh** — store + use the refresh token to renew expired access tokens.
+2. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
    product decision; see `docs/design.md` deferred list).
 
 ## Known gaps / debt
 
-- Auth is opt-in instance-level (single shared password), not multi-account; Trakt is still a
-  paste-token sync, not OAuth.
+- Auth is opt-in instance-level (single shared password), not multi-account.
+- Trakt OAuth stores the access token but not yet the refresh token, so a connection eventually
+  expires and must be re-done (token refresh is the next item).
 - Plex/Jellyfin episode→show id mapping depends on what the history payload exposes
   (`SeriesProviderIds` / `grandparentGuids`); unmapped episodes are skipped, not guessed.
 - The offline local-hash embedder is for dev/CI only — it gives relative similarity, not semantic
