@@ -272,6 +272,24 @@ export function LoginGate({
   );
 }
 
+export function TraktConnectNotice({
+  userCode,
+  verificationUrl,
+}: {
+  userCode: string;
+  verificationUrl: string;
+}): React.JSX.Element {
+  return (
+    <p className="status" data-testid="trakt-connect-notice">
+      Go to{" "}
+      <a href={verificationUrl} target="_blank" rel="noreferrer">
+        {verificationUrl}
+      </a>{" "}
+      and enter code <strong>{userCode}</strong>. Waiting for authorization…
+    </p>
+  );
+}
+
 export default function App(): React.JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -282,6 +300,10 @@ export default function App(): React.JSX.Element {
   const [chatLog, setChatLog] = useState<ChatTurn[]>([]);
   const [newName, setNewName] = useState("");
   const [token, setToken] = useState("");
+  const [traktConnect, setTraktConnect] = useState<{
+    userCode: string;
+    verificationUrl: string;
+  } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [needsLogin, setNeedsLogin] = useState(false);
@@ -395,10 +417,44 @@ export default function App(): React.JSX.Element {
       if (selectedId === null) {
         return "Select or create a profile first.";
       }
-      const summary = await api.syncTrakt(selectedId, token.trim());
+      // Empty input → use the stored (OAuth-connected) token.
+      const summary = await api.syncTrakt(selectedId, token.trim() || undefined);
       await refreshHistory(selectedId);
       return `Synced from Trakt: ${summary.created} new, ${summary.updated} updated.`;
     });
+
+  const onConnectTrakt = async () => {
+    if (selectedId === null) {
+      setStatus("Select or create a profile first.");
+      return;
+    }
+    setStatus(null);
+    try {
+      const start = await api.traktConnectStart();
+      setTraktConnect({ userCode: start.userCode, verificationUrl: start.verificationUrl });
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const deadline = Date.now() + start.expiresIn * 1000;
+      while (Date.now() < deadline) {
+        await sleep(start.interval * 1000);
+        const poll = await api.traktConnectPoll(selectedId, start.deviceCode);
+        if (poll.status === "connected") {
+          setTraktConnect(null);
+          setStatus("Trakt connected — you can sync now.");
+          return;
+        }
+        if (poll.status === "expired" || poll.status === "denied") {
+          setTraktConnect(null);
+          setStatus(`Trakt connection ${poll.status}.`);
+          return;
+        }
+      }
+      setTraktConnect(null);
+      setStatus("Trakt connection timed out — try again.");
+    } catch (error: unknown) {
+      setTraktConnect(null);
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const onGenerateTaste = () =>
     run(async () => {
@@ -508,13 +564,27 @@ export default function App(): React.JSX.Element {
           />
           <button
             type="button"
+            data-testid="connect-trakt"
+            onClick={onConnectTrakt}
+            disabled={busy || selectedId === null || traktConnect !== null}
+          >
+            Connect Trakt
+          </button>
+          <button
+            type="button"
             data-testid="sync-trakt"
             onClick={onSync}
-            disabled={busy || selectedId === null || token.trim() === ""}
+            disabled={busy || selectedId === null}
           >
             Sync from Trakt
           </button>
         </div>
+        {traktConnect !== null && (
+          <TraktConnectNotice
+            userCode={traktConnect.userCode}
+            verificationUrl={traktConnect.verificationUrl}
+          />
+        )}
       </section>
 
       {status && (

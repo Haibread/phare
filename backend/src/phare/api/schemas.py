@@ -151,6 +151,23 @@ class ChatReplyResponse(ApiModel):
     items: list[RecommendationItem]
 
 
+class TraktConnectStartResponse(ApiModel):
+    device_code: str
+    user_code: str
+    verification_url: str
+    interval: int
+    expires_in: int
+
+
+class TraktConnectPollRequest(ApiModel):
+    profile_id: uuid.UUID
+    device_code: str = Field(min_length=1)
+
+
+class TraktConnectStatusResponse(ApiModel):
+    status: str  # pending | connected | slow_down | expired | denied
+
+
 class HistoryItemResponse(ApiModel):
     id: uuid.UUID
     title_id: uuid.UUID

@@ -1,6 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ChatPanel, ConversionBadge, LoginGate, RecRow, Recommendations } from "./App";
+import {
+  ChatPanel,
+  ConversionBadge,
+  LoginGate,
+  RecRow,
+  Recommendations,
+  TraktConnectNotice,
+} from "./App";
 import type { Conversion, RecommendationItem, RecommendationRow } from "./api";
 
 function conversion(overrides: Partial<Conversion>): Conversion {
@@ -103,6 +110,15 @@ describe("ChatPanel", () => {
   it("disables send for an empty message", () => {
     render(<ChatPanel log={[]} busy={false} onSend={() => {}} />);
     expect(screen.getByTestId("chat-send")).toBeDisabled();
+  });
+});
+
+describe("TraktConnectNotice", () => {
+  it("shows the user code and verification link", () => {
+    render(<TraktConnectNotice userCode="ABCD-1234" verificationUrl="https://trakt.tv/activate" />);
+    const notice = screen.getByTestId("trakt-connect-notice");
+    expect(notice).toHaveTextContent("ABCD-1234");
+    expect(screen.getByRole("link")).toHaveAttribute("href", "https://trakt.tv/activate");
   });
 });
 

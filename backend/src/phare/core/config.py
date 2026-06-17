@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     tmdb_api_key: str | None = None
     tmdb_base_url: str = "https://api.themoviedb.org/3"
     trakt_client_id: str | None = None
+    trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"
 
     # LLM + embeddings (OpenAI-compatible). Embedding dim is fixed by the schema; switching to

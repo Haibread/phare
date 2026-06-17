@@ -101,6 +101,17 @@ export type ChatReply = z.infer<typeof chatReplySchema>;
 
 const catalogSummarySchema = z.object({ created: z.number() });
 
+export const traktConnectStartSchema = z.object({
+  deviceCode: z.string(),
+  userCode: z.string(),
+  verificationUrl: z.string(),
+  interval: z.number(),
+  expiresIn: z.number(),
+});
+export type TraktConnectStart = z.infer<typeof traktConnectStartSchema>;
+
+const traktConnectStatusSchema = z.object({ status: z.string() });
+
 export const conversionSchema = z.object({
   shown: z.number(),
   converted: z.number(),
@@ -167,10 +178,18 @@ export const api = {
     request(`/profiles/${profileId}/sample-data`, ingestSummarySchema, { method: "POST" }),
   history: (profileId: string) =>
     request(`/history?profileId=${profileId}&perPage=100`, historyPageSchema),
-  syncTrakt: (profileId: string, accessToken: string) =>
+  syncTrakt: (profileId: string, accessToken?: string) =>
     request("/sources/trakt/sync", ingestSummarySchema, {
       method: "POST",
-      body: JSON.stringify({ profileId, accessToken }),
+      // Omit the token when empty so the backend falls back to a stored (OAuth-connected) one.
+      body: JSON.stringify(accessToken ? { profileId, accessToken } : { profileId }),
+    }),
+  traktConnectStart: () =>
+    request("/sources/trakt/connect/start", traktConnectStartSchema, { method: "POST" }),
+  traktConnectPoll: (profileId: string, deviceCode: string) =>
+    request("/sources/trakt/connect/poll", traktConnectStatusSchema, {
+      method: "POST",
+      body: JSON.stringify({ profileId, deviceCode }),
     }),
   getTaste: (profileId: string) => request(`/profiles/${profileId}/taste`, tasteSchema),
   generateTaste: (profileId: string) =>
