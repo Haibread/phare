@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from phare.api.app import create_app
 from phare.core.config import get_settings
-from phare.core.tokens import get_source_token
+from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
 from phare.db.models import Profile
-from phare.providers.trakt_oauth import PollStatus, TraktOAuth
+from phare.providers.trakt import TraktSourceProvider
+from phare.providers.trakt_oauth import PollResult, PollStatus, TraktOAuth
 
 _DEVICE_CODE = {
     "device_code": "dev-123",
@@ -94,10 +97,10 @@ def test_connect_poll_stores_token(db_session: Session, monkeypatch) -> None:
     captured: dict[str, str] = {}
 
     def fake_poll(self: TraktOAuth, device_code: str):  # noqa: ANN202
-        from phare.providers.trakt_oauth import PollResult
-
         captured["device_code"] = device_code
-        return PollResult(status=PollStatus.connected, access_token="tok-xyz")
+        return PollResult(
+            status=PollStatus.connected, access_token="tok-xyz", refresh_token="ref-xyz"
+        )
 
     monkeypatch.setattr(TraktOAuth, "poll_token", fake_poll)
     client = _client(db_session, monkeypatch)
@@ -113,6 +116,99 @@ def test_connect_poll_stores_token(db_session: Session, monkeypatch) -> None:
         assert response.status_code == 200
         assert response.json()["status"] == "connected"
         assert captured["device_code"] == "dev-123"
-        assert get_source_token(db_session, get_settings(), profile.id, "trakt") == "tok-xyz"
+        # Both the access token and the refresh token are stored.
+        settings = get_settings()
+        assert get_source_token(db_session, settings, profile.id, "trakt") == "tok-xyz"
+        assert get_source_token(db_session, settings, profile.id, "trakt_refresh") == "ref-xyz"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_refresh_returns_new_tokens() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/oauth/token"
+        body = json.loads(request.content)
+        assert body["grant_type"] == "refresh_token"
+        assert body["refresh_token"] == "old-ref"
+        return httpx.Response(200, json={"access_token": "new-acc", "refresh_token": "new-ref"})
+
+    result = _oauth(handler).refresh("old-ref")
+    assert result.status is PollStatus.connected
+    assert (result.access_token, result.refresh_token) == ("new-acc", "new-ref")
+
+
+def test_sync_auto_refreshes_expired_token(db_session: Session, monkeypatch) -> None:
+    monkeypatch.setenv("TRAKT_CLIENT_ID", "c")
+    monkeypatch.setenv("TRAKT_CLIENT_SECRET", "s")
+    monkeypatch.setenv("TMDB_API_KEY", "t")
+    monkeypatch.setenv("SECRET_KEY", "sign-me")
+    get_settings.cache_clear()
+    settings = get_settings()
+    try:
+        profile = Profile(display_name="me")
+        db_session.add(profile)
+        db_session.flush()
+        # A stale access token + a usable refresh token.
+        store_source_token(db_session, settings, profile.id, "trakt", "expired-acc")
+        store_source_token(db_session, settings, profile.id, "trakt_refresh", "ref-1")
+
+        calls = {"pull": 0}
+
+        def fake_pull(self: TraktSourceProvider, since=None):  # noqa: ANN001, ANN202
+            calls["pull"] += 1
+            if calls["pull"] == 1:
+                request = httpx.Request("GET", "https://trakt/sync/history")
+                raise httpx.HTTPStatusError(
+                    "401", request=request, response=httpx.Response(401, request=request)
+                )
+            return iter([])  # second attempt: authorized, nothing new
+
+        monkeypatch.setattr(TraktSourceProvider, "pull", fake_pull)
+        monkeypatch.setattr(
+            TraktOAuth,
+            "refresh",
+            lambda self, rt: PollResult(
+                status=PollStatus.connected, access_token="new-acc", refresh_token="ref-2"
+            ),
+        )
+
+        app = create_app()
+        app.dependency_overrides[get_session] = lambda: db_session
+        response = TestClient(app).post("/sources/trakt/sync", json={"profileId": str(profile.id)})
+
+        assert response.status_code == 200
+        assert calls["pull"] == 2  # retried after the refresh
+        assert get_source_token(db_session, settings, profile.id, "trakt") == "new-acc"
+        assert get_source_token(db_session, settings, profile.id, "trakt_refresh") == "ref-2"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_sync_without_refresh_token_asks_to_reconnect(db_session: Session, monkeypatch) -> None:
+    monkeypatch.setenv("TRAKT_CLIENT_ID", "c")
+    monkeypatch.setenv("TRAKT_CLIENT_SECRET", "s")
+    monkeypatch.setenv("TMDB_API_KEY", "t")
+    monkeypatch.setenv("SECRET_KEY", "sign-me")
+    get_settings.cache_clear()
+    settings = get_settings()
+    try:
+        profile = Profile(display_name="me")
+        db_session.add(profile)
+        db_session.flush()
+        store_source_token(db_session, settings, profile.id, "trakt", "expired-acc")  # no refresh
+
+        def fake_pull(self: TraktSourceProvider, since=None):  # noqa: ANN001, ANN202
+            request = httpx.Request("GET", "https://trakt/sync/history")
+            raise httpx.HTTPStatusError(
+                "401", request=request, response=httpx.Response(401, request=request)
+            )
+
+        monkeypatch.setattr(TraktSourceProvider, "pull", fake_pull)
+
+        app = create_app()
+        app.dependency_overrides[get_session] = lambda: db_session
+        response = TestClient(app).post("/sources/trakt/sync", json={"profileId": str(profile.id)})
+        assert response.status_code == 401
+        assert "reconnect" in response.json()["detail"].lower()
     finally:
         get_settings.cache_clear()

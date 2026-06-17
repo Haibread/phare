@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
 from sqlalchemy.orm import Session
@@ -89,6 +90,19 @@ class JellyfinSyncRequest(ApiModel):
     api_key: str | None = Field(default=None, min_length=1)
 
 
+def _store_trakt_tokens(
+    session: Session,
+    settings: Settings,
+    profile_id: uuid.UUID,
+    access_token: str,
+    refresh_token: str | None,
+) -> None:
+    """Persist the Trakt access token (and refresh token, if given) for a profile."""
+    store_source_token(session, settings, profile_id, "trakt", access_token)
+    if refresh_token is not None:
+        store_source_token(session, settings, profile_id, "trakt_refresh", refresh_token)
+
+
 def _resolve_token(
     session: Session, profile_id: uuid.UUID, source: str, supplied: str | None
 ) -> str:
@@ -104,6 +118,26 @@ def _resolve_token(
     return token
 
 
+def _trakt_source(settings: Settings, access_token: str) -> TraktSourceProvider:
+    return TraktSourceProvider(
+        client_id=settings.trakt_client_id or "",
+        access_token=access_token,
+        base_url=settings.trakt_base_url,
+    )
+
+
+def _refresh_trakt_token(session: Session, settings: Settings, profile_id: uuid.UUID) -> str:
+    """Renew an expired Trakt access token from the stored refresh token, or 401 to reconnect."""
+    refresh = get_source_token(session, settings, profile_id, "trakt_refresh")
+    if refresh is None:
+        raise HTTPException(status_code=401, detail="Trakt token expired — reconnect Trakt")
+    result = _trakt_oauth(settings).refresh(refresh)
+    if result.status is not PollStatus.connected or result.access_token is None:
+        raise HTTPException(status_code=401, detail="Trakt refresh failed — reconnect Trakt")
+    _store_trakt_tokens(session, settings, profile_id, result.access_token, result.refresh_token)
+    return result.access_token
+
+
 @router.post("/sources/trakt/sync", response_model=IngestSummary)
 def sync_trakt(
     body: TraktSyncRequest,
@@ -114,12 +148,14 @@ def sync_trakt(
         raise HTTPException(status_code=400, detail="TRAKT_CLIENT_ID must be configured to sync")
     _require_tmdb(settings)
     token = _resolve_token(session, body.profile_id, "trakt", body.access_token)
-    source = TraktSourceProvider(
-        client_id=settings.trakt_client_id,
-        access_token=token,
-        base_url=settings.trakt_base_url,
-    )
-    return _ingest_from(session, body.profile_id, source)
+    try:
+        return _ingest_from(session, body.profile_id, _trakt_source(settings, token))
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 401:
+            raise
+        # Access token rejected on the first request (nothing ingested yet) — refresh + retry once.
+        fresh = _refresh_trakt_token(session, settings, body.profile_id)
+        return _ingest_from(session, body.profile_id, _trakt_source(settings, fresh))
 
 
 @router.post("/sources/trakt/connect/start", response_model=TraktConnectStartResponse)
@@ -148,7 +184,9 @@ def trakt_connect_poll(
         raise HTTPException(status_code=404, detail="Profile not found")
     result = _trakt_oauth(settings).poll_token(body.device_code)
     if result.status is PollStatus.connected and result.access_token is not None:
-        store_source_token(session, settings, body.profile_id, "trakt", result.access_token)
+        _store_trakt_tokens(
+            session, settings, body.profile_id, result.access_token, result.refresh_token
+        )
         session.commit()
     return TraktConnectStatusResponse(status=result.status.value)
 
