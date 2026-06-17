@@ -101,6 +101,18 @@ export type ChatReply = z.infer<typeof chatReplySchema>;
 
 const catalogSummarySchema = z.object({ created: z.number() });
 
+export const conversionSchema = z.object({
+  shown: z.number(),
+  converted: z.number(),
+  rate: z.number().nullable(),
+  swingShown: z.number(),
+  swingConverted: z.number(),
+  swingRate: z.number().nullable(),
+  topK: z.number(),
+  withinDays: z.number(),
+});
+export type Conversion = z.infer<typeof conversionSchema>;
+
 const meSchema = z.object({ authRequired: z.boolean(), authenticated: z.boolean() });
 export type Me = z.infer<typeof meSchema>;
 const tokenSchema = z.object({ token: z.string() });
@@ -166,6 +178,8 @@ export const api = {
   seedCatalog: () => request("/catalog/sample", catalogSummarySchema, { method: "POST" }),
   recommendations: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations`, recommendationsResponseSchema),
+  conversion: (profileId: string) =>
+    request(`/profiles/${profileId}/recommendations/conversion`, conversionSchema),
   chat: (profileId: string, message: string) =>
     request(`/profiles/${profileId}/chat`, chatReplySchema, {
       method: "POST",

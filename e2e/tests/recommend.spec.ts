@@ -25,4 +25,7 @@ test("create a profile, seed data + catalog, and get recommendations", async ({ 
   const firstCard = youMightLike.getByTestId("rec-card").first();
   await expect(firstCard).toBeVisible();
   await expect(firstCard.locator(".explanation")).not.toBeEmpty();
+
+  // The closed-loop conversion read-out renders; with fresh data it reports no matured history yet.
+  await expect(page.getByTestId("conversion")).toContainText("not enough history yet");
 });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, setAuthToken } from "./api";
 import type {
   ChatReply,
+  Conversion,
   HistoryItem,
   Profile,
   RecommendationItem,
@@ -124,12 +125,30 @@ export function RecRow({ row }: { row: RecommendationRow }): React.JSX.Element {
   );
 }
 
+export function ConversionBadge({ conversion }: { conversion: Conversion }): React.JSX.Element {
+  if (conversion.rate === null) {
+    return (
+      <p className="muted" data-testid="conversion">
+        Conversion (top-{conversion.topK}, {conversion.withinDays}d): not enough history yet.
+      </p>
+    );
+  }
+  return (
+    <p className="muted" data-testid="conversion">
+      Conversion (top-{conversion.topK}, {conversion.withinDays}d):{" "}
+      {Math.round(conversion.rate * 100)}% of {conversion.shown} shown were watched.
+    </p>
+  );
+}
+
 export function Recommendations({
   rows,
+  conversion,
   busy,
   onRefresh,
 }: {
   rows: RecommendationRow[];
+  conversion: Conversion | null;
   busy: boolean;
   onRefresh: () => void;
 }): React.JSX.Element {
@@ -140,6 +159,7 @@ export function Recommendations({
           Load recommendations
         </button>
       </div>
+      {conversion !== null && <ConversionBadge conversion={conversion} />}
       {rows.length === 0 ? (
         <p className="muted" data-testid="recs-empty">
           No recommendations yet. Load sample data + catalog, then load recommendations.
@@ -258,6 +278,7 @@ export default function App(): React.JSX.Element {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [taste, setTaste] = useState<Taste | null>(null);
   const [rows, setRows] = useState<RecommendationRow[]>([]);
+  const [conversion, setConversion] = useState<Conversion | null>(null);
   const [chatLog, setChatLog] = useState<ChatTurn[]>([]);
   const [newName, setNewName] = useState("");
   const [token, setToken] = useState("");
@@ -325,10 +346,12 @@ export default function App(): React.JSX.Element {
       setHistory([]);
       setTaste(null);
       setRows([]);
+      setConversion(null);
       setChatLog([]);
       return;
     }
     setRows([]);
+    setConversion(null);
     setChatLog([]);
     refreshHistory(selectedId).catch((error: unknown) =>
       setStatus(`Failed to load history: ${String(error)}`),
@@ -399,6 +422,7 @@ export default function App(): React.JSX.Element {
       }
       const response = await api.recommendations(selectedId);
       setRows(response.rows);
+      setConversion(await api.conversion(selectedId));
       const total = response.rows.reduce((sum, row) => sum + row.items.length, 0);
       return `Loaded ${total} recommendations across ${response.rows.length} rows.`;
     });
@@ -506,7 +530,12 @@ export default function App(): React.JSX.Element {
 
       <section>
         <h2>Recommendations</h2>
-        <Recommendations rows={rows} busy={busy} onRefresh={onRefreshRecs} />
+        <Recommendations
+          rows={rows}
+          conversion={conversion}
+          busy={busy}
+          onRefresh={onRefreshRecs}
+        />
       </section>
 
       <section>

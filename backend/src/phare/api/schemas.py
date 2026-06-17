@@ -123,6 +123,17 @@ class RecommendationLogPage(ApiModel):
     total: int
 
 
+class ConversionResponse(ApiModel):
+    shown: int
+    converted: int
+    rate: float | None = None
+    swing_shown: int
+    swing_converted: int
+    swing_rate: float | None = None
+    top_k: int
+    within_days: int
+
+
 class ChatRequest(ApiModel):
     message: str = Field(min_length=1, max_length=500)
 
