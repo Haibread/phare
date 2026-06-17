@@ -29,8 +29,11 @@ A compact snapshot of what's built and what's next. Update as features land.
   chat agent applies parsed mood/intent (LLM or keyword fallback) over the same engine.
   `POST /catalog/{sample,import,embed}`, `GET /profiles/{id}/recommendations`,
   `POST /profiles/{id}/chat`; sample catalog + TMDB popular import; UI rows + chat + swing badges.
-- **Recommendation logging** — every row/chat item logged (`recommendation_log`);
-  `GET /profiles/{id}/recommendations/log` (closed-loop groundwork).
+- **Recommendation logging + closed-loop conversion** — every row/chat item logged
+  (`recommendation_log`); `GET /profiles/{id}/recommendations/log`. The north-star metric joins
+  the log against later watch events — *of titles shown in the top-K, the fraction watched within
+  N days* — counting only matured impressions and reporting swing picks separately
+  (`GET .../recommendations/conversion`, surfaced in the UI).
 - **Opt-in auth + token model** — `AUTH_PASSWORD`-gated bearer auth (stateless HMAC), `/auth/login`,
   `/me`; per-profile source tokens encrypted at rest (`source_token`, Fernet from `SECRET_KEY`).
   No-op when unconfigured (open dev posture); SPA shows a login gate only when required.
@@ -60,12 +63,10 @@ compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embeddi
 
 ## Next features (in rough order)
 
-1. **Closed-loop conversion metric** — join `recommendation_log` against later watch events to
-   measure top-K → watched within N days (the north-star signal; logging now exists).
-2. **Real Trakt OAuth connect flow** — replace the interim paste-token endpoint (token storage +
+1. **Real Trakt OAuth connect flow** — replace the interim paste-token endpoint (token storage +
    `/me` identity now exist to build on).
-3. **Dynamic LLM-generated rows** — agent picks the day's rows from taste + mood + calendar.
-4. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
+2. **Dynamic LLM-generated rows** — agent picks the day's rows from taste + mood + calendar.
+3. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
    product decision; see `docs/design.md` deferred list).
 
 ## Known gaps / debt

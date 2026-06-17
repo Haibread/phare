@@ -1,7 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ChatPanel, LoginGate, RecRow, Recommendations } from "./App";
-import type { RecommendationItem, RecommendationRow } from "./api";
+import { ChatPanel, ConversionBadge, LoginGate, RecRow, Recommendations } from "./App";
+import type { Conversion, RecommendationItem, RecommendationRow } from "./api";
+
+function conversion(overrides: Partial<Conversion>): Conversion {
+  return {
+    shown: 0,
+    converted: 0,
+    rate: null,
+    swingShown: 0,
+    swingConverted: 0,
+    swingRate: null,
+    topK: 10,
+    withinDays: 14,
+    ...overrides,
+  };
+}
 
 function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
   return {
@@ -19,9 +33,21 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
   };
 }
 
+describe("ConversionBadge", () => {
+  it("shows the rate when there is matured history", () => {
+    render(<ConversionBadge conversion={conversion({ shown: 8, converted: 2, rate: 0.25 })} />);
+    expect(screen.getByTestId("conversion")).toHaveTextContent("25% of 8 shown");
+  });
+
+  it("falls back to a not-enough-history message", () => {
+    render(<ConversionBadge conversion={conversion({ rate: null })} />);
+    expect(screen.getByTestId("conversion")).toHaveTextContent("not enough history yet");
+  });
+});
+
 describe("Recommendations", () => {
   it("shows an empty state when there are no rows", () => {
-    render(<Recommendations rows={[]} busy={false} onRefresh={() => {}} />);
+    render(<Recommendations rows={[]} conversion={null} busy={false} onRefresh={() => {}} />);
     expect(screen.getByTestId("recs-empty")).toBeInTheDocument();
   });
 

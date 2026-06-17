@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
 from phare.api.schemas import (
+    ConversionResponse,
     RecommendationItem,
     RecommendationLogItem,
     RecommendationLogPage,
@@ -20,6 +21,7 @@ from phare.api.schemas import (
 from phare.core.config import get_settings
 from phare.db.base import get_session
 from phare.db.models import Profile, RecommendationLog
+from phare.eval.conversion import conversion_stats
 from phare.providers.types import LLMProvider
 from phare.recommend.schema import Recommendation, Row
 from phare.recommend.service import RecommendationService
@@ -82,6 +84,28 @@ def get_recommendations(
     rows = recommender.rows(profile_id)
     session.commit()  # lazy embeddings (and any logging) persist
     return RecommendationsResponse(rows=[to_row(row) for row in rows])
+
+
+@router.get("/profiles/{profile_id}/recommendations/conversion", response_model=ConversionResponse)
+def get_conversion(
+    profile_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_session)],
+    top_k: Annotated[int, Query(ge=1, le=100, alias="topK")] = 10,
+    within_days: Annotated[int, Query(ge=1, le=365, alias="withinDays")] = 14,
+) -> ConversionResponse:
+    """Closed-loop north star: of titles shown in the top-K, the fraction watched within N days."""
+    require_profile(session, profile_id)
+    stats = conversion_stats(session, profile_id=profile_id, top_k=top_k, within_days=within_days)
+    return ConversionResponse(
+        shown=stats.shown,
+        converted=stats.converted,
+        rate=stats.rate,
+        swing_shown=stats.swing_shown,
+        swing_converted=stats.swing_converted,
+        swing_rate=stats.swing_rate,
+        top_k=stats.top_k,
+        within_days=stats.within_days,
+    )
 
 
 @router.get("/profiles/{profile_id}/recommendations/log", response_model=RecommendationLogPage)
