@@ -64,6 +64,8 @@ jobs:
       - run: uv run phare migrate
       - name: Persona guardrails + anti-degeneracy metrics
         run: uv run phare evaluate
+      - name: Conversion metric smoke (empty DB → n/a)
+        run: uv run phare conversion
 
   frontend:
     runs-on: ubuntu-24.04

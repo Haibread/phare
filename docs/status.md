@@ -33,7 +33,7 @@ A compact snapshot of what's built and what's next. Update as features land.
   (`recommendation_log`); `GET /profiles/{id}/recommendations/log`. The north-star metric joins
   the log against later watch events — *of titles shown in the top-K, the fraction watched within
   N days* — counting only matured impressions and reporting swing picks separately
-  (`GET .../recommendations/conversion`, surfaced in the UI).
+  (`GET .../recommendations/conversion`, surfaced in the UI; also `phare conversion` from the CLI).
 - **Opt-in auth + token model** — `AUTH_PASSWORD`-gated bearer auth (stateless HMAC), `/auth/login`,
   `/me`; per-profile source tokens encrypted at rest (`source_token`, Fernet from `SECRET_KEY`).
   No-op when unconfigured (open dev posture); SPA shows a login gate only when required.

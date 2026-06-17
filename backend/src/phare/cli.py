@@ -77,6 +77,33 @@ def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] =
         raise typer.Exit(code=1)
 
 
+@app.command()
+def conversion(
+    profile: Annotated[
+        str | None, typer.Option(help="Profile UUID; omit to aggregate across all profiles")
+    ] = None,
+    top_k: Annotated[int, typer.Option(help="Top-K slate size to score")] = 10,
+    within_days: Annotated[int, typer.Option(help="Conversion window in days")] = 14,
+) -> None:
+    """Print the closed-loop conversion metric (top-K shown, watched within N days)."""
+    import uuid as _uuid
+
+    from sqlalchemy.orm import Session
+
+    from phare.db.base import get_engine
+    from phare.eval.conversion import conversion_stats, format_conversion
+
+    configure_logging(get_settings().log_level)
+    profile_id = _uuid.UUID(profile) if profile else None
+    with Session(get_engine()) as session:
+        stats = conversion_stats(
+            session, profile_id=profile_id, top_k=top_k, within_days=within_days
+        )
+    scope = f"profile {profile}" if profile else "all profiles"
+    for line in format_conversion(stats, scope):
+        typer.echo(line)
+
+
 def main() -> None:
     app()
 

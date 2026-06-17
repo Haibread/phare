@@ -50,6 +50,18 @@ class ConversionStats:
         return round(converted / shown, 4) if shown else None
 
 
+def _pct(rate: float | None) -> str:
+    return "n/a" if rate is None else f"{rate * 100:.1f}%"
+
+
+def format_conversion(stats: ConversionStats, scope: str) -> list[str]:
+    """Human-readable summary lines for the CLI."""
+    window = f"top-{stats.top_k}, {stats.within_days}d"
+    main = f"{_pct(stats.rate)} ({stats.converted}/{stats.shown} matured impressions)"
+    swing = f"{_pct(stats.swing_rate)} ({stats.swing_converted}/{stats.swing_shown})"
+    return [f"Conversion ({scope}, {window}): {main}", f"  swings (not scored): {swing}"]
+
+
 def conversion_stats(
     session: Session,
     *,
