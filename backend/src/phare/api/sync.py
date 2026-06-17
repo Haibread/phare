@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 import httpx
@@ -18,6 +19,7 @@ from phare.api.schemas import (
     TraktConnectStatusResponse,
 )
 from phare.core.config import Settings, get_settings
+from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
 from phare.db.models import Profile
@@ -54,13 +56,23 @@ def _require_tmdb(settings: object) -> str:
     return key
 
 
-def _ingest_from(session: Session, profile_id: uuid.UUID, source: SourceProvider) -> IngestSummary:
-    """Shared tail for every source: resolve via TMDB, ingest, commit, summarise."""
+def _ingest_from(
+    session: Session,
+    profile_id: uuid.UUID,
+    source: SourceProvider,
+    *,
+    source_name: str,
+    since: datetime | None,
+) -> IngestSummary:
+    """Shared tail for every source: resolve via TMDB, ingest, record the high-water mark."""
     if session.get(Profile, profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     settings = get_settings()
+    # Stamp the watermark from *before* the pull so mid-sync events aren't skipped next time.
+    started_at = datetime.now(UTC)
     metadata = TMDBMetadataProvider(api_key=settings.tmdb_api_key, base_url=settings.tmdb_base_url)
-    result = IngestionService(session, metadata).ingest(profile_id, source.pull())
+    result = IngestionService(session, metadata).ingest(profile_id, source.pull(since))
+    set_last_synced(session, profile_id, source_name, started_at)
     session.commit()
     return IngestSummary(
         created=result.created,
@@ -70,10 +82,18 @@ def _ingest_from(session: Session, profile_id: uuid.UUID, source: SourceProvider
     )
 
 
+def _since_for(
+    session: Session, profile_id: uuid.UUID, source_name: str, *, full: bool
+) -> datetime | None:
+    """Incremental cutoff: the last-synced time, unless a full re-sync was requested."""
+    return None if full else get_last_synced(session, profile_id, source_name)
+
+
 class TraktSyncRequest(ApiModel):
     profile_id: uuid.UUID
     # Optional: when omitted we use a previously stored token (auth/token model).
     access_token: str | None = Field(default=None, min_length=1)
+    full: bool = False  # force a full re-sync instead of incremental
 
 
 class PlexSyncRequest(ApiModel):
@@ -81,6 +101,7 @@ class PlexSyncRequest(ApiModel):
     base_url: str = Field(min_length=1)
     token: str | None = Field(default=None, min_length=1)
     account_id: str | None = None
+    full: bool = False
 
 
 class JellyfinSyncRequest(ApiModel):
@@ -88,6 +109,7 @@ class JellyfinSyncRequest(ApiModel):
     base_url: str = Field(min_length=1)
     user_id: str = Field(min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
+    full: bool = False
 
 
 def _store_trakt_tokens(
@@ -148,14 +170,27 @@ def sync_trakt(
         raise HTTPException(status_code=400, detail="TRAKT_CLIENT_ID must be configured to sync")
     _require_tmdb(settings)
     token = _resolve_token(session, body.profile_id, "trakt", body.access_token)
+    since = _since_for(session, body.profile_id, "trakt", full=body.full)
     try:
-        return _ingest_from(session, body.profile_id, _trakt_source(settings, token))
+        return _ingest_from(
+            session,
+            body.profile_id,
+            _trakt_source(settings, token),
+            source_name="trakt",
+            since=since,
+        )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code != 401:
             raise
         # Access token rejected on the first request (nothing ingested yet) — refresh + retry once.
         fresh = _refresh_trakt_token(session, settings, body.profile_id)
-        return _ingest_from(session, body.profile_id, _trakt_source(settings, fresh))
+        return _ingest_from(
+            session,
+            body.profile_id,
+            _trakt_source(settings, fresh),
+            source_name="trakt",
+            since=since,
+        )
 
 
 @router.post("/sources/trakt/connect/start", response_model=TraktConnectStartResponse)
@@ -200,7 +235,8 @@ def sync_plex(
     _require_tmdb(get_settings())
     token = _resolve_token(session, body.profile_id, "plex", body.token)
     source = PlexSourceProvider(base_url=body.base_url, token=token, account_id=body.account_id)
-    return _ingest_from(session, body.profile_id, source)
+    since = _since_for(session, body.profile_id, "plex", full=body.full)
+    return _ingest_from(session, body.profile_id, source, source_name="plex", since=since)
 
 
 @router.post("/sources/jellyfin/sync", response_model=IngestSummary)
@@ -212,4 +248,5 @@ def sync_jellyfin(
     _require_tmdb(get_settings())
     token = _resolve_token(session, body.profile_id, "jellyfin", body.api_key)
     source = JellyfinSourceProvider(base_url=body.base_url, api_key=token, user_id=body.user_id)
-    return _ingest_from(session, body.profile_id, source)
+    since = _since_for(session, body.profile_id, "jellyfin", full=body.full)
+    return _ingest_from(session, body.profile_id, source, source_name="jellyfin", since=since)

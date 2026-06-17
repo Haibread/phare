@@ -39,6 +39,9 @@ A compact snapshot of what's built and what's next. Update as features land.
   No-op when unconfigured (open dev posture); SPA shows a login gate only when required.
 - **More sources** — Plex + Jellyfin source providers (own history only),
   `POST /sources/{plex,jellyfin}/sync`, reusing stored per-profile tokens.
+- **Incremental sync** — a per-(profile, source) high-water mark (`sync_state`) feeds `since` to
+  each provider so a re-sync only pulls events after the last run; `full: true` forces a complete
+  re-pull. Re-ingest stays idempotent either way; this just saves API quota.
 - **Trakt OAuth device flow + token refresh** — `POST /sources/trakt/connect/{start,poll}`: the
   user authorizes a short code at trakt.tv, the backend polls and stores the access **and refresh**
   tokens (encrypted), so syncing no longer needs a pasted token. When a sync hits a 401 the backend
