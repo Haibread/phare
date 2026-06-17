@@ -6,10 +6,11 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from phare.api import health, history, profiles, sync, taste
+from phare.api import auth, catalog, chat, health, history, profiles, recommend, sync, taste
+from phare.core.auth import require_auth
 from phare.core.config import get_settings
 from phare.core.logging import configure_logging
 from phare.core.telemetry import setup_telemetry
@@ -45,11 +46,19 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    # Open endpoints: health + auth must be reachable without a token.
     app.include_router(health.router)
-    app.include_router(profiles.router)
-    app.include_router(history.router)
-    app.include_router(sync.router)
-    app.include_router(taste.router)
+    app.include_router(auth.router)
+
+    # Data endpoints: gated by require_auth, which is a no-op unless AUTH_PASSWORD is set.
+    guarded = [Depends(require_auth)]
+    app.include_router(profiles.router, dependencies=guarded)
+    app.include_router(history.router, dependencies=guarded)
+    app.include_router(sync.router, dependencies=guarded)
+    app.include_router(taste.router, dependencies=guarded)
+    app.include_router(catalog.router, dependencies=guarded)
+    app.include_router(recommend.router, dependencies=guarded)
+    app.include_router(chat.router, dependencies=guarded)
 
     setup_telemetry(app, get_engine(), settings)
     logger.info("app.ready", extra={"environment": settings.environment})

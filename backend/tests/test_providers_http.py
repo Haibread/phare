@@ -7,6 +7,8 @@ import json
 import httpx
 
 from phare.db.models import TitleKind
+from phare.providers.jellyfin import JellyfinSourceProvider, parse_jellyfin_item
+from phare.providers.plex import PlexSourceProvider, parse_plex_item
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
 
@@ -57,6 +59,23 @@ def test_tmdb_find_by_imdb() -> None:
     assert match.kind is TitleKind.movie
 
 
+def test_tmdb_popular_resolves_each_result() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/movie/popular":
+            assert request.url.params.get("page") == "2"
+            return httpx.Response(200, json={"results": [{"id": 438631}]})
+        if request.url.path == "/movie/438631":
+            return httpx.Response(200, json=_MOVIE)
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    provider = TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler))
+    metas = provider.popular(TitleKind.movie, page=2)
+
+    assert len(metas) == 1
+    assert metas[0].title == "Dune"  # fully resolved, not the thin popular record
+    assert metas[0].keywords == ["desert"]
+
+
 def test_trakt_pull_paginates_history() -> None:
     pages = {
         "1": [
@@ -96,3 +115,94 @@ def test_trakt_pull_paginates_history() -> None:
     assert events[0].tmdb_id == 438631
     assert events[1].season_number == 1
     assert events[1].episode_number == 2
+
+
+# --- Plex ------------------------------------------------------------------
+
+_PLEX_HISTORY = {
+    "MediaContainer": {
+        "Metadata": [
+            {
+                "type": "movie",
+                "historyKey": "/status/sessions/history/1",
+                "viewedAt": 1700000000,
+                "Guid": [{"id": "tmdb://438631"}, {"id": "imdb://tt1160419"}],
+            },
+            {
+                "type": "episode",
+                "historyKey": "/status/sessions/history/2",
+                "viewedAt": 1700100000,
+                "parentIndex": 1,
+                "index": 2,
+                "grandparentGuids": [{"id": "tmdb://95396"}],
+            },
+        ]
+    }
+}
+
+
+def test_plex_pull_maps_movie_and_episode() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/status/sessions/history/all"
+        assert request.url.params.get("accountID") == "7"
+        return httpx.Response(200, json=_PLEX_HISTORY)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://plex.test")
+    provider = PlexSourceProvider(
+        base_url="https://plex.test", token="t", account_id="7", client=client
+    )
+
+    events = list(provider.pull())
+    assert len(events) == 2
+    assert events[0].tmdb_id == 438631
+    assert events[0].imdb_id == "tt1160419"
+    assert events[1].tmdb_id == 95396
+    assert (events[1].season_number, events[1].episode_number) == (1, 2)
+
+
+def test_plex_parse_skips_unsupported_type() -> None:
+    assert parse_plex_item({"type": "track", "ratingKey": "9"}) is None
+
+
+# --- Jellyfin --------------------------------------------------------------
+
+_JELLYFIN_ITEMS = {
+    "Items": [
+        {
+            "Type": "Movie",
+            "Id": "m1",
+            "ProviderIds": {"Tmdb": "438631", "Imdb": "tt1160419"},
+            "UserData": {"LastPlayedDate": "2024-11-02T20:00:00.000Z"},
+        },
+        {
+            "Type": "Episode",
+            "Id": "e1",
+            "ParentIndexNumber": 1,
+            "IndexNumber": 2,
+            "SeriesProviderIds": {"Tmdb": "95396"},
+            "UserData": {"LastPlayedDate": "2025-01-11T19:00:00.000Z"},
+        },
+    ]
+}
+
+
+def test_jellyfin_pull_maps_movie_and_episode() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/Users/u1/Items"
+        assert request.url.params.get("Filters") == "IsPlayed"
+        return httpx.Response(200, json=_JELLYFIN_ITEMS)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://jf.test")
+    provider = JellyfinSourceProvider(
+        base_url="https://jf.test", api_key="k", user_id="u1", client=client
+    )
+
+    events = list(provider.pull())
+    assert len(events) == 2
+    assert events[0].tmdb_id == 438631
+    assert events[1].tmdb_id == 95396
+    assert (events[1].season_number, events[1].episode_number) == (1, 2)
+
+
+def test_jellyfin_parse_skips_unsupported_type() -> None:
+    assert parse_jellyfin_item({"Type": "Audio", "Id": "x"}) is None

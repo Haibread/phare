@@ -23,6 +23,19 @@ class HealthResponse(ApiModel):
     version: str
 
 
+class LoginRequest(ApiModel):
+    password: str = Field(min_length=1)
+
+
+class TokenResponse(ApiModel):
+    token: str
+
+
+class MeResponse(ApiModel):
+    auth_required: bool
+    authenticated: bool
+
+
 class CreateProfileRequest(ApiModel):
     display_name: str = Field(min_length=1, max_length=100)
 
@@ -59,6 +72,72 @@ class TasteResponse(ApiModel):
 
 class UpdateTasteRequest(ApiModel):
     user_overrides: dict[str, Any]
+
+
+class CatalogSummary(ApiModel):
+    created: int
+
+
+class EmbedSummary(ApiModel):
+    embedded: int
+
+
+class RecommendationItem(ApiModel):
+    title_id: uuid.UUID
+    title: str
+    kind: str
+    year: int | None = None
+    genres: list[str]
+    score: float
+    is_swing: bool
+    confidence: float | None = None
+    explanation: str | None = None
+    components: dict[str, float]
+
+
+class RecommendationRow(ApiModel):
+    key: str
+    title: str
+    items: list[RecommendationItem]
+
+
+class RecommendationsResponse(ApiModel):
+    rows: list[RecommendationRow]
+
+
+class RecommendationLogItem(ApiModel):
+    id: uuid.UUID
+    title_id: uuid.UUID
+    row_key: str
+    rank: int
+    score: float | None = None
+    is_swing: bool
+    source: str
+    shown_at: datetime
+
+
+class RecommendationLogPage(ApiModel):
+    items: list[RecommendationLogItem]
+    page: int
+    per_page: int
+    total: int
+
+
+class ChatRequest(ApiModel):
+    message: str = Field(min_length=1, max_length=500)
+
+
+class ChatIntentResponse(ApiModel):
+    max_runtime: int | None = None
+    include_genres: list[str]
+    exclude_genres: list[str]
+    mood: str | None = None
+
+
+class ChatReplyResponse(ApiModel):
+    reply_text: str
+    intent: ChatIntentResponse
+    items: list[RecommendationItem]
 
 
 class HistoryItemResponse(ApiModel):
