@@ -1,8 +1,4 @@
-"""Interim Trakt sync endpoint.
-
-Accepts a Trakt access token directly and runs the ingestion pipeline. This is a stop-gap
-until the OAuth connect flow + per-profile token storage land (depends on the auth model).
-"""
+"""Source sync + connect endpoints (Trakt OAuth device flow, Plex, Jellyfin)."""
 
 from __future__ import annotations
 
@@ -13,8 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from phare.api.schemas import ApiModel, IngestSummary
-from phare.core.config import get_settings
+from phare.api.schemas import (
+    ApiModel,
+    IngestSummary,
+    TraktConnectPollRequest,
+    TraktConnectStartResponse,
+    TraktConnectStatusResponse,
+)
+from phare.core.config import Settings, get_settings
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
 from phare.db.models import Profile
@@ -23,9 +25,24 @@ from phare.providers.jellyfin import JellyfinSourceProvider
 from phare.providers.plex import PlexSourceProvider
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
+from phare.providers.trakt_oauth import PollStatus, TraktOAuth
 from phare.providers.types import SourceProvider
 
 router = APIRouter(tags=["Sync"])
+
+
+def _trakt_oauth(settings: Settings) -> TraktOAuth:
+    """Build the Trakt OAuth client, or 400 if the app credentials aren't configured."""
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="TRAKT_CLIENT_ID and TRAKT_CLIENT_SECRET must be set to connect Trakt",
+        )
+    return TraktOAuth(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+        base_url=settings.trakt_base_url,
+    )
 
 
 def _require_tmdb(settings: object) -> str:
@@ -103,6 +120,37 @@ def sync_trakt(
         base_url=settings.trakt_base_url,
     )
     return _ingest_from(session, body.profile_id, source)
+
+
+@router.post("/sources/trakt/connect/start", response_model=TraktConnectStartResponse)
+def trakt_connect_start(
+    session: Annotated[Session, Depends(get_session)],
+) -> TraktConnectStartResponse:
+    """Begin the Trakt OAuth device flow: returns the user code + verification URL to display."""
+    code = _trakt_oauth(get_settings()).request_device_code()
+    return TraktConnectStartResponse(
+        device_code=code.device_code,
+        user_code=code.user_code,
+        verification_url=code.verification_url,
+        interval=code.interval,
+        expires_in=code.expires_in,
+    )
+
+
+@router.post("/sources/trakt/connect/poll", response_model=TraktConnectStatusResponse)
+def trakt_connect_poll(
+    body: TraktConnectPollRequest,
+    session: Annotated[Session, Depends(get_session)],
+) -> TraktConnectStatusResponse:
+    """Poll once for authorization. On success, store the access token for this profile."""
+    settings = get_settings()
+    if session.get(Profile, body.profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    result = _trakt_oauth(settings).poll_token(body.device_code)
+    if result.status is PollStatus.connected and result.access_token is not None:
+        store_source_token(session, settings, body.profile_id, "trakt", result.access_token)
+        session.commit()
+    return TraktConnectStatusResponse(status=result.status.value)
 
 
 @router.post("/sources/plex/sync", response_model=IngestSummary)

@@ -39,6 +39,10 @@ A compact snapshot of what's built and what's next. Update as features land.
   No-op when unconfigured (open dev posture); SPA shows a login gate only when required.
 - **More sources** — Plex + Jellyfin source providers (own history only),
   `POST /sources/{plex,jellyfin}/sync`, reusing stored per-profile tokens.
+- **Trakt OAuth device flow** — `POST /sources/trakt/connect/{start,poll}`: the user authorizes a
+  short code at trakt.tv, the backend polls and stores the access token (encrypted), so syncing no
+  longer needs a pasted token. UI connect button + polling. (Covered by MockTransport + component
+  tests; a live E2E would need a Trakt sandbox.)
 - **Evaluation (M4)** — `eval/` persona guardrail suite + anti-degeneracy metrics (popularity bias,
   diversity, novelty, coverage, holdout recall); `phare evaluate` CLI + a dedicated CI job; optional
   LLM-judge (skipped without a key).
@@ -63,9 +67,8 @@ compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embeddi
 
 ## Next features (in rough order)
 
-1. **Real Trakt OAuth connect flow** — replace the interim paste-token endpoint (token storage +
-   `/me` identity now exist to build on).
-2. **Dynamic LLM-generated rows** — agent picks the day's rows from taste + mood + calendar.
+1. **Dynamic LLM-generated rows** — agent picks the day's rows from taste + mood + calendar.
+2. **Trakt token refresh** — store + use the refresh token to renew expired access tokens.
 3. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
    product decision; see `docs/design.md` deferred list).
 
