@@ -19,7 +19,7 @@ from phare.db.models import (
     TitleKind,
     WatchEvent,
 )
-from phare.eval.conversion import conversion_stats
+from phare.eval.conversion import ConversionStats, conversion_stats, format_conversion
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 
 _NOW = datetime(2026, 6, 1, tzinfo=UTC)
@@ -151,6 +151,36 @@ def test_conversion_is_per_profile(db_session: Session) -> None:
     _log(db_session, a, t)
     _watch(db_session, b, t, occurred_at=_SHOWN + timedelta(days=1))  # B watched, not A
     assert _stats(db_session, a).converted == 0
+
+
+def test_format_conversion_lines() -> None:
+    stats = ConversionStats(
+        shown=8,
+        converted=2,
+        rate=0.25,
+        swing_shown=3,
+        swing_converted=0,
+        swing_rate=0.0,
+        top_k=10,
+        within_days=14,
+    )
+    lines = format_conversion(stats, "all profiles")
+    assert lines[0] == "Conversion (all profiles, top-10, 14d): 25.0% (2/8 matured impressions)"
+    assert "swings" in lines[1]
+
+
+def test_format_conversion_handles_no_data() -> None:
+    stats = ConversionStats(
+        shown=0,
+        converted=0,
+        rate=None,
+        swing_shown=0,
+        swing_converted=0,
+        swing_rate=None,
+        top_k=10,
+        within_days=14,
+    )
+    assert "n/a" in format_conversion(stats, "profile x")[0]
 
 
 # --- API --------------------------------------------------------------------
