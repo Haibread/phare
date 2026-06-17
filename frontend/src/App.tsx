@@ -296,6 +296,7 @@ export default function App(): React.JSX.Element {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [taste, setTaste] = useState<Taste | null>(null);
   const [rows, setRows] = useState<RecommendationRow[]>([]);
+  const [dynamicRows, setDynamicRows] = useState<RecommendationRow[]>([]);
   const [conversion, setConversion] = useState<Conversion | null>(null);
   const [chatLog, setChatLog] = useState<ChatTurn[]>([]);
   const [newName, setNewName] = useState("");
@@ -373,6 +374,7 @@ export default function App(): React.JSX.Element {
       return;
     }
     setRows([]);
+    setDynamicRows([]);
     setConversion(null);
     setChatLog([]);
     refreshHistory(selectedId).catch((error: unknown) =>
@@ -481,6 +483,16 @@ export default function App(): React.JSX.Element {
       setConversion(await api.conversion(selectedId));
       const total = response.rows.reduce((sum, row) => sum + row.items.length, 0);
       return `Loaded ${total} recommendations across ${response.rows.length} rows.`;
+    });
+
+  const onLoadDynamic = () =>
+    run(async () => {
+      if (selectedId === null) {
+        return "Select or create a profile first.";
+      }
+      const response = await api.dynamicRecommendations(selectedId);
+      setDynamicRows(response.rows);
+      return `Today's picks: ${response.rows.length} themed rows.`;
     });
 
   const onSendChat = (message: string) =>
@@ -606,6 +618,26 @@ export default function App(): React.JSX.Element {
           busy={busy}
           onRefresh={onRefreshRecs}
         />
+      </section>
+
+      <section>
+        <h2>Today's picks</h2>
+        <p className="muted">Themed rows chosen from your taste and the calendar.</p>
+        <div data-testid="dynamic-rows">
+          <div className="row">
+            <button
+              type="button"
+              data-testid="load-dynamic"
+              onClick={onLoadDynamic}
+              disabled={busy || selectedId === null}
+            >
+              Load today's picks
+            </button>
+          </div>
+          {dynamicRows.map((row) => (
+            <RecRow key={row.key} row={row} />
+          ))}
+        </div>
       </section>
 
       <section>

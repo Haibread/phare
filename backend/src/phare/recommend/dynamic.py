@@ -1,0 +1,154 @@
+"""Dynamic, LLM-picked rows — the cheap differentiator (docs/design.md).
+
+The LLM only *steers*: it names the day's themes ("late-October horror you'd tolerate") from the
+taste profile + the calendar. The engine still *ranks* each theme through the same retrieval +
+re-ranker. Without an LLM, a deterministic calendar+taste fallback picks the themes, so the
+feature works offline.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import uuid
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
+
+from phare.providers.types import LLMProvider
+from phare.recommend.log import log_rows
+from phare.recommend.schema import Candidate, Row
+
+if TYPE_CHECKING:
+    from phare.recommend.service import RecommendationService
+
+logger = logging.getLogger(__name__)
+
+
+class Theme(BaseModel):
+    """One dynamic row: a label plus the genre lens the engine fills it through."""
+
+    key: str
+    title: str
+    include_genres: list[str] = []
+    swing_slots: int = 1
+
+
+# Seasonal lens by month (Northern-hemisphere calendar; a reasonable default for v1).
+_SEASONAL: dict[int, tuple[str, list[str]]] = {
+    2: ("February romance", ["Romance"]),
+    6: ("Summer blockbusters", ["Action", "Adventure"]),
+    7: ("Summer blockbusters", ["Action", "Adventure"]),
+    8: ("Summer blockbusters", ["Action", "Adventure"]),
+    10: ("Spooky season", ["Horror"]),
+    12: ("Holiday viewing", ["Family", "Fantasy"]),
+}
+
+
+def _slug(text: str) -> str:
+    return "dyn:" + (re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "row")
+
+
+def _top_affinity_genre(taste: Mapping[str, Any]) -> str | None:
+    affinities = taste.get("affinities") or {}
+    positive = {k: float(v) for k, v in affinities.items() if float(v) > 0}
+    return max(positive, key=positive.get) if positive else None  # type: ignore[arg-type]
+
+
+def _fallback_themes(taste: Mapping[str, Any], now: datetime) -> list[Theme]:
+    themes: list[Theme] = []
+    if seasonal := _SEASONAL.get(now.month):
+        title, genres = seasonal
+        themes.append(Theme(key=_slug(title), title=title, include_genres=genres))
+    if (genre := _top_affinity_genre(taste)) is not None:
+        themes.append(
+            Theme(key=_slug(f"more {genre}"), title=f"More {genre} for you", include_genres=[genre])
+        )
+    # Always reserve a discovery row — swing-heavy, no genre lens.
+    themes.append(Theme(key="dyn:something-different", title="Something different", swing_slots=3))
+    # Dedup by key, keep at most three.
+    seen: set[str] = set()
+    unique = [t for t in themes if not (t.key in seen or seen.add(t.key))]
+    return unique[:3]
+
+
+_LLM_PROMPT = """Propose up to 3 themed movie/TV recommendation rows for today ({date}).
+Consider the season and the viewer's taste. Output ONLY a JSON array of objects with keys:
+- title: a short row label (e.g. "Late-October horror you'd tolerate")
+- genres: array of TMDB genre names to draw from (may be empty for a wildcard discovery row)
+
+Viewer taste: {summary}
+Avoid: {avoid}
+"""
+
+
+def propose_themes(taste: Mapping[str, Any], now: datetime, llm: LLMProvider | None) -> list[Theme]:
+    """LLM-picked themes when available, else the deterministic calendar+taste fallback."""
+    if llm is None:
+        return _fallback_themes(taste, now)
+    prompt = _LLM_PROMPT.format(
+        date=now.date().isoformat(),
+        summary=taste.get("summary") or "(unknown)",
+        avoid=", ".join(taste.get("hard_avoids") or []) or "(nothing specific)",
+    )
+    try:
+        raw = llm.complete(prompt).strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1].removeprefix("json").strip()
+        parsed = json.loads(raw)
+        themes = [
+            Theme(
+                key=_slug(str(item["title"])),
+                title=str(item["title"]),
+                include_genres=[str(g) for g in item.get("genres", [])],
+            )
+            for item in parsed
+            if item.get("title")
+        ]
+        return themes[:3] if themes else _fallback_themes(taste, now)
+    except Exception:  # noqa: BLE001 - never let a flaky LLM kill the row set
+        logger.warning("recommend.dynamic_llm_failed; using fallback themes")
+        return _fallback_themes(taste, now)
+
+
+def _genre_filter(genres: Sequence[str]):
+    """Keep candidates matching any theme genre; fall back to all if that would empty the pool."""
+    if not genres:
+        return None
+    wanted = {g.lower() for g in genres}
+
+    def apply(candidates: list[Candidate]) -> list[Candidate]:
+        matched = [c for c in candidates if wanted & {g.lower() for g in c.genres}]
+        return matched or candidates
+
+    return apply
+
+
+def dynamic_rows(
+    service: RecommendationService,
+    profile_id: uuid.UUID,
+    *,
+    llm: LLMProvider | None = None,
+    now: datetime | None = None,
+) -> list[Row]:
+    """Build today's themed rows. Each theme is filled through the same engine."""
+    service.ensure_embeddings()
+    taste = service.load_taste(profile_id)
+    themes = propose_themes(taste, now or datetime.now(UTC), llm)
+
+    rows: list[Row] = []
+    for theme in themes:
+        items = service.recommend(
+            profile_id,
+            taste=taste,
+            candidate_filter=_genre_filter(theme.include_genres),
+            swing_slots=theme.swing_slots,
+        )
+        if items:
+            rows.append(Row(key=theme.key, title=theme.title, items=items))
+    log_rows(service.session, profile_id, rows)
+    logger.info("recommend.dynamic", extra={"profile_id": str(profile_id), "rows": len(rows)})
+    return rows

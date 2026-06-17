@@ -197,6 +197,8 @@ export const api = {
   seedCatalog: () => request("/catalog/sample", catalogSummarySchema, { method: "POST" }),
   recommendations: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations`, recommendationsResponseSchema),
+  dynamicRecommendations: (profileId: string) =>
+    request(`/profiles/${profileId}/recommendations/dynamic`, recommendationsResponseSchema),
   conversion: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations/conversion`, conversionSchema),
   chat: (profileId: string, message: string) =>
