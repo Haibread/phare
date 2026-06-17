@@ -8,7 +8,8 @@ tested without HTTP.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -136,6 +137,9 @@ class TraktSourceProvider:
         access_token: str,
         base_url: str = "https://api.trakt.tv",
         client: httpx.Client | None = None,
+        *,
+        max_retries: int = 3,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         headers = {
             "Content-Type": "application/json",
@@ -144,13 +148,34 @@ class TraktSourceProvider:
             "Authorization": f"Bearer {access_token}",
         }
         self._client = client or httpx.Client(base_url=base_url, headers=headers, timeout=15.0)
+        self._max_retries = max_retries
+        self._sleep = sleep
+
+    @staticmethod
+    def _retry_after(response: httpx.Response, *, default: float = 1.0, cap: float = 60.0) -> float:
+        """Seconds to wait before retrying a 429, honouring Retry-After (clamped)."""
+        raw = response.headers.get("Retry-After", "")
+        seconds = float(raw) if raw.isdigit() else default
+        return min(max(seconds, 0.0), cap)
+
+    def _get(self, path: str, params: dict[str, str]) -> httpx.Response:
+        """GET with bounded backoff on Trakt's 429 rate limit (honours Retry-After)."""
+        for attempt in range(self._max_retries + 1):
+            response = self._client.get(path, params=params)
+            if response.status_code == 429 and attempt < self._max_retries:
+                wait = self._retry_after(response)
+                logger.warning("trakt.rate_limited", extra={"path": path, "retry_after": wait})
+                self._sleep(wait)
+                continue
+            response.raise_for_status()
+            return response
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     def _paginate(self, path: str, params: dict[str, str]) -> Iterator[dict[str, Any]]:
         page = 1
         while True:
             logger.debug("trakt.request", extra={"path": path, "page": page})
-            response = self._client.get(path, params={**params, "page": page, "limit": 100})
-            response.raise_for_status()
+            response = self._get(path, params={**params, "page": page, "limit": 100})
             items = response.json()
             if not items:
                 break
