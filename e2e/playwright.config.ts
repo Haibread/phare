@@ -11,6 +11,9 @@ export default defineConfig({
   timeout: 30_000,
   forbidOnly: isCI,
   retries: isCI ? 1 : 0,
+  // The specs share one backend + database; run them serially so concurrent requests against the
+  // single dev server can't race (manifested as transient "Failed to fetch").
+  workers: 1,
   reporter: isCI ? "list" : [["list"]],
   use: {
     baseURL: "http://localhost:5173",
