@@ -183,6 +183,22 @@ class SourceToken(Base):
     )
 
 
+class SyncState(Base):
+    """High-water mark for incremental source syncs — when we last pulled (profile, source).
+
+    Lets a re-sync ask the source only for events since this timestamp instead of the whole
+    history. Re-ingesting is idempotent regardless; this is purely an API-quota optimisation.
+    """
+
+    __tablename__ = "sync_state"
+    __table_args__ = (UniqueConstraint("profile_id", "source", name="uq_sync_state"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
+    source: Mapped[str] = mapped_column(String(50))
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RecommendationLog(Base):
     """Every recommendation shown to a profile (a row item or a chat suggestion).
 
