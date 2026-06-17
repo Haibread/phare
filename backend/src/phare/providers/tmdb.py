@@ -51,6 +51,24 @@ class TMDBMetadataProvider:
         data = self._get(f"/tv/{tmdb_id}", append_to_response="keywords,external_ids")
         return self._parse_show(data)
 
+    def popular(self, kind: TitleKind, page: int = 1) -> list[TitleMetadata]:
+        """List popular titles for catalog seeding. Each is fully resolved (genres/keywords).
+
+        The popular list endpoint returns thin records, so we resolve each via ``get_title``
+        to get the same metadata depth (keywords, runtime) the embedder relies on.
+        """
+        path = "/movie/popular" if kind is TitleKind.movie else "/tv/popular"
+        data = self._get(path, page=str(page))
+        out: list[TitleMetadata] = []
+        for result in data.get("results", []):
+            tmdb_id = result.get("id")
+            if tmdb_id is None:
+                continue
+            meta = self.get_title(tmdb_id, kind)
+            if meta is not None:
+                out.append(meta)
+        return out
+
     def find_by_imdb(self, imdb_id: str) -> ExternalMatch | None:
         data = self._get(f"/find/{imdb_id}", external_source="imdb_id")
         if movies := data.get("movie_results"):
