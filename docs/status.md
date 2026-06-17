@@ -42,6 +42,8 @@ A compact snapshot of what's built and what's next. Update as features land.
 - **Incremental sync** — a per-(profile, source) high-water mark (`sync_state`) feeds `since` to
   each provider so a re-sync only pulls events after the last run; `full: true` forces a complete
   re-pull. Re-ingest stays idempotent either way; this just saves API quota.
+- **Trakt rate-limit backoff** — the Trakt provider honours `Retry-After` on a `429` and retries
+  the same page (bounded by `max_retries`), so a sync rides out rate limits instead of erroring.
 - **Trakt OAuth device flow + token refresh** — `POST /sources/trakt/connect/{start,poll}`: the
   user authorizes a short code at trakt.tv, the backend polls and stores the access **and refresh**
   tokens (encrypted), so syncing no longer needs a pasted token. When a sync hits a 401 the backend

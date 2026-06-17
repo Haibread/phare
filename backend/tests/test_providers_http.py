@@ -76,6 +76,56 @@ def test_tmdb_popular_resolves_each_result() -> None:
     assert metas[0].keywords == ["desert"]
 
 
+def test_trakt_retries_on_rate_limit() -> None:
+    calls = {"history": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/sync/history":
+            calls["history"] += 1
+            if calls["history"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "2"})
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 1,
+                        "watched_at": "2024-01-02T20:00:00.000Z",
+                        "type": "movie",
+                        "movie": {"ids": {"trakt": 9, "tmdb": 438631}},
+                    }
+                ],
+                headers={"X-Pagination-Page-Count": "1"},
+            )
+        return httpx.Response(200, json=[])  # empty ratings/watchlist
+
+    slept: list[float] = []
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://trakt.test")
+    provider = TraktSourceProvider(
+        client_id="c", access_token="t", client=client, sleep=slept.append
+    )
+
+    events = list(provider.pull())
+    assert calls["history"] == 2  # backed off then retried the same page
+    assert slept == [2.0]  # honoured Retry-After
+    assert len(events) == 1
+
+
+def test_trakt_gives_up_after_max_retries() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "1"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://trakt.test")
+    provider = TraktSourceProvider(
+        client_id="c", access_token="t", client=client, max_retries=2, sleep=lambda _s: None
+    )
+    try:
+        list(provider.pull())
+    except httpx.HTTPStatusError as exc:
+        assert exc.response.status_code == 429
+    else:  # pragma: no cover
+        raise AssertionError("expected the 429 to surface after retries are exhausted")
+
+
 def test_trakt_pull_paginates_history() -> None:
     pages = {
         "1": [
