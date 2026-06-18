@@ -11,6 +11,11 @@ test("recommendations show honest fit labels and reserve swing picks", async ({ 
   await expect(firstCard).toBeVisible();
   await expect(firstCard.getByTestId("fit")).toBeVisible();
 
+  // A personalized "because you watched X" row renders, anchored on a loved title.
+  const because = page.locator('[data-row-key^="because:"]').first();
+  await expect(because).toBeVisible();
+  await expect(because.locator("h3")).toContainText("Because you watched");
+
   // At least one swing pick is reserved and flagged as a deliberate stretch.
   await expect(page.getByTestId("swing-badge").first()).toBeVisible();
 
