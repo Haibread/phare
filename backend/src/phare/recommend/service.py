@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.db.models import TasteProfile
+from phare.db.models import TasteProfile, TitleEmbedding
 from phare.embeddings.service import EmbeddingService
 from phare.providers.types import LLMProvider
 from phare.recommend import rows as row_builders
@@ -109,10 +109,52 @@ class RecommendationService:
         items = self.recommend(profile_id)
         return Row(key="you_might_like", title="You might like", items=items)
 
+    def _title_vector(self, title_id: uuid.UUID) -> list[float] | None:
+        embedding = self.session.scalar(
+            select(TitleEmbedding.embedding).where(
+                TitleEmbedding.title_id == title_id,
+                TitleEmbedding.model_version == self.embed_model_version,
+            )
+        )
+        return [float(x) for x in embedding] if embedding is not None else None
+
+    def because_you_watched_rows(self, profile_id: uuid.UUID, *, max_rows: int = 3) -> list[Row]:
+        """One row per loved title: catalog picks nearest to *that title's* embedding. Similarity-
+        led (no swing slots) so the row reads honestly as "because you watched X"."""
+        taste = self._load_taste(profile_id)
+        avoids = list(taste.get("hard_avoids") or [])
+        rows: list[Row] = []
+        for seed in row_builders.loved_seed_titles(self.session, profile_id, limit=max_rows):
+            vector = self._title_vector(seed.id)
+            if vector is None:
+                continue
+            candidates = generate_candidates(
+                self.session,
+                profile_id,
+                vector,
+                self.embed_model_version,
+                limit=self.row_size * 3 + 6,
+                hard_avoids=avoids,
+            )
+            items = explain(
+                rerank(candidates, taste, k=self.row_size, swing_slots=0), taste, self.chat_llm
+            )
+            if items:
+                rows.append(
+                    Row(
+                        key=f"because:{seed.id}",
+                        title=f"Because you watched {seed.title}",
+                        items=items,
+                    )
+                )
+        return rows
+
     def rows(self, profile_id: uuid.UUID) -> list[Row]:
         """The home-screen strip set. Empty rows are kept out so the UI stays clean."""
         self.ensure_embeddings()
         candidate_rows = [
+            # Most-personalized first — these render right under the hero top pick.
+            *self.because_you_watched_rows(profile_id),
             row_builders.continue_watching_row(self.session, profile_id, limit=self.row_size),
             self.you_might_like(profile_id),
             row_builders.watch_again_row(self.session, profile_id, limit=self.row_size),

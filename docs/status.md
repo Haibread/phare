@@ -68,7 +68,8 @@ A compact snapshot of what's built and what's next. Update as features land.
   mobile-first. First-run onboarding (one "Connect your library" CTA + a sample-data escape hatch,
   grouped source sheet on Radix Dialog). **Browse**: hero pick + taste-driven rows with real TMDB
   poster art (text fallback), honest worded confidence + a coarse 3-segment bar, reserved swing
-  picks. **Profile**: the taste profile is generated automatically on ingest and is editable
+  picks, and personalized **"because you watched ⟨X⟩"** rows (nearest-neighbours to a few loved
+  titles, shown right under the hero). **Profile**: the taste profile is generated automatically on ingest and is editable
   (drawn-to / avoiding chips → sticky overrides), plus sources + history. **Chat**: greeting,
   tappable starters + follow-up chips, poster suggestions.
 - **Seerr action provider** — request hand-off + library availability: `SeerrProvider` (request +
