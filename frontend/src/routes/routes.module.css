@@ -1,0 +1,181 @@
+.page {
+  padding: var(--sp-4) var(--sp-4) calc(var(--sp-6) + 3.5rem);
+  max-width: var(--maxw);
+  margin: 0 auto;
+}
+
+@media (min-width: 720px) {
+  .page {
+    padding-bottom: var(--sp-6);
+  }
+}
+
+.pageTitle {
+  font-size: 1.3rem;
+  margin-bottom: var(--sp-4);
+}
+
+/* Hero ------------------------------------------------------------------- */
+
+.hero {
+  display: flex;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.heroPoster {
+  flex: 0 0 96px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.heroBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.heroKicker {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+.heroTitle {
+  font-size: 1.25rem;
+}
+
+.askChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  align-self: flex-start;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.85rem;
+  margin-bottom: var(--sp-5);
+}
+
+/* Chat ------------------------------------------------------------------- */
+
+.chatLog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.bubble {
+  max-width: 85%;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  font-size: 0.95rem;
+}
+
+.bubbleUser {
+  align-self: flex-end;
+  background: var(--accent-soft);
+}
+
+.bubbleStrip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 96px;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  margin-top: var(--sp-3);
+}
+
+.composer {
+  display: flex;
+  gap: var(--sp-2);
+  position: sticky;
+  bottom: calc(3.5rem + var(--sp-2));
+  background: var(--bg);
+  padding-top: var(--sp-2);
+}
+
+@media (min-width: 720px) {
+  .composer {
+    bottom: var(--sp-2);
+  }
+}
+
+/* Profile ---------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-3);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.chipLike {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: transparent;
+}
+
+.chipAvoid {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: transparent;
+}
+
+.meterTrack {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.meterFill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.sourceLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.histTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.histTable th,
+.histTable td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}

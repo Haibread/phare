@@ -1,0 +1,15 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-3) var(--sp-4);
+}
+
+@media (min-width: 720px) {
+  .header {
+    justify-content: flex-start;
+    max-width: var(--maxw);
+    margin: 0 auto;
+    width: 100%;
+  }
+}

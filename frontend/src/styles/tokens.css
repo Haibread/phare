@@ -1,0 +1,77 @@
+/* Design tokens. Single source of truth for color, type, spacing, radius. Light + dark.
+ * Identity is a placeholder "beacon" palette (warm gold on warm paper / night) — to be locked
+ * before the final PR. Everything downstream references these vars, never raw hex. */
+
+:root {
+  color-scheme: light dark;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-pill: 999px;
+
+  --maxw: 960px;
+
+  /* light theme */
+  --bg: #f7f5f1;
+  --surface: #ffffff;
+  --surface-2: #f1eee8;
+  --border: rgba(28, 25, 20, 0.12);
+  --border-strong: rgba(28, 25, 20, 0.22);
+  --text: #1c1a16;
+  --text-muted: #6a665d;
+  --text-faint: #94908a;
+
+  /* beacon accent (lighthouse) */
+  --accent: #c07d12;
+  --accent-soft: #f7ecd6;
+  --on-accent: #ffffff;
+
+  --success: #2f7d57;
+  --success-soft: #e3f3ea;
+  --warning: #9a6212;
+  --warning-soft: #f8ecd6;
+  --danger: #b23b3b;
+  --danger-soft: #fae9e9;
+  --info: #2f5fa0;
+  --info-soft: #e6eefa;
+
+  --shadow: 0 1px 2px rgba(20, 18, 14, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131210;
+    --surface: #1c1a17;
+    --surface-2: #24221e;
+    --border: rgba(240, 236, 228, 0.12);
+    --border-strong: rgba(240, 236, 228, 0.22);
+    --text: #f0ece4;
+    --text-muted: #a8a399;
+    --text-faint: #76726a;
+
+    --accent: #e0a23b;
+    --accent-soft: #3a2f1a;
+    --on-accent: #1c1a17;
+
+    --success: #54c39c;
+    --success-soft: #16352c;
+    --warning: #e0a23b;
+    --warning-soft: #3a2f1a;
+    --danger: #e07a7a;
+    --danger-soft: #3a1f1f;
+    --info: #6fa3e0;
+    --info-soft: #1a2a3f;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+}
