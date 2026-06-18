@@ -129,6 +129,13 @@ const meSchema = z.object({ authRequired: z.boolean(), authenticated: z.boolean(
 export type Me = z.infer<typeof meSchema>;
 const tokenSchema = z.object({ token: z.string() });
 
+export const connectedSourceSchema = z.object({
+  source: z.string(),
+  kind: z.string(),
+  lastSyncedAt: z.string().nullable(),
+});
+export type ConnectedSource = z.infer<typeof connectedSourceSchema>;
+
 // Seerr library availability per title: "available" | "queued" | "requestable" | "unknown".
 const availabilitySchema = z.object({
   configured: z.boolean(),
@@ -194,6 +201,8 @@ export const api = {
       // Omit the token when empty so the backend falls back to a stored (OAuth-connected) one.
       body: JSON.stringify(accessToken ? { profileId, accessToken } : { profileId }),
     }),
+  listSources: (profileId: string) =>
+    request(`/profiles/${profileId}/sources`, z.array(connectedSourceSchema)),
   syncPlex: (profileId: string, baseUrl: string, token: string) =>
     request("/sources/plex/sync", ingestSummarySchema, {
       method: "POST",
