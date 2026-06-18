@@ -77,6 +77,9 @@ A compact snapshot of what's built and what's next. Update as features land.
   resolved server-side) and a `sources/seerr/connect` endpoint (creds encrypted in `source_token`,
   env fallback). Browse cards show **Request / Queued / Available** when a Seerr is connected;
   picker gains a "requests & availability" group.
+- **Catalog search** — a header search icon opens a search surface. `POST /profiles/{id}/catalog/
+  search` matches the local catalog and, when TMDB is configured, pulls live matches in first
+  (upserting them so they're requestable); results reuse the poster card + Seerr request action.
 
 ## Run it
 

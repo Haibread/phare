@@ -69,6 +69,42 @@ class TMDBMetadataProvider:
                 out.append(meta)
         return out
 
+    def search(self, query: str, *, limit: int = 8) -> list[TitleMetadata]:
+        """Search movies + TV by title. Thin parse (no genres/runtime) for snappy on-demand
+        search; full metadata is resolved later if the title gets recommended."""
+        out: list[TitleMetadata] = []
+        for kind, path in ((TitleKind.movie, "/search/movie"), (TitleKind.show, "/search/tv")):
+            data = self._get(path, query=query)
+            for result in data.get("results", [])[:limit]:
+                meta = self._parse_search(result, kind)
+                if meta is not None:
+                    out.append(meta)
+        out.sort(key=lambda m: m.popularity or 0.0, reverse=True)
+        return out[:limit]
+
+    @staticmethod
+    def _parse_search(result: dict[str, Any], kind: TitleKind) -> TitleMetadata | None:
+        tmdb_id = result.get("id")
+        if tmdb_id is None:
+            return None
+        if kind is TitleKind.movie:
+            title = result.get("title") or result.get("original_title") or ""
+            year = _year(result.get("release_date"))
+        else:
+            title = result.get("name") or result.get("original_name") or ""
+            year = _year(result.get("first_air_date"))
+        if not title:
+            return None
+        return TitleMetadata(
+            kind=kind,
+            tmdb_id=tmdb_id,
+            title=title,
+            year=year,
+            overview=result.get("overview"),
+            poster_path=result.get("poster_path"),
+            popularity=result.get("popularity"),
+        )
+
     def find_by_imdb(self, imdb_id: str) -> ExternalMatch | None:
         data = self._get(f"/find/{imdb_id}", external_source="imdb_id")
         if movies := data.get("movie_results"):

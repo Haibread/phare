@@ -1,13 +1,29 @@
 .header {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4);
+}
+
+.searchLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.searchLink svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.searchLink[aria-current="page"] {
+  color: var(--accent);
 }
 
 @media (min-width: 720px) {
   .header {
-    justify-content: flex-start;
     max-width: var(--maxw);
     margin: 0 auto;
     width: 100%;

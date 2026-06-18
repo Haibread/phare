@@ -58,6 +58,16 @@ export function useDynamicRows(profileId: string | null) {
   });
 }
 
+export function useSearch(profileId: string, query: string) {
+  const q = query.trim();
+  return useQuery({
+    queryKey: ["search", profileId, q],
+    queryFn: () => api.searchCatalog(profileId, q),
+    enabled: q.length >= 2,
+    staleTime: 60_000,
+  });
+}
+
 export function useConnectedSources(profileId: string | null) {
   return useQuery({
     queryKey: keys.sources(profileId ?? ""),

@@ -1,0 +1,69 @@
+import { useEffect, useMemo, useState } from "react";
+import { useProfileId } from "../app/ProfileContext";
+import { AvailabilityProvider } from "../components/Availability";
+import { PosterCard } from "../components/PosterCard";
+import { Loading } from "../components/states";
+import { useAvailability, useRequestTitle, useSearch } from "../lib/queries";
+import styles from "./routes.module.css";
+
+export function Search(): React.JSX.Element {
+  const profileId = useProfileId();
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(query), 350);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const search = useSearch(profileId, debounced);
+  const results = search.data?.results ?? [];
+  const titleIds = useMemo(() => results.map((r) => r.titleId), [results]);
+  const availability = useAvailability(profileId, titleIds);
+  const request = useRequestTitle(profileId);
+
+  const availabilityCtx = {
+    configured: availability.data?.configured ?? false,
+    results: availability.data?.results ?? {},
+    requestingId: request.isPending ? (request.variables ?? null) : null,
+    onRequest: (id: string) => request.mutate(id),
+  };
+
+  const ready = debounced.trim().length >= 2;
+
+  return (
+    <div className={styles.page} data-testid="search">
+      <h1 className={styles.pageTitle}>Search</h1>
+      <input
+        type="search"
+        className="field"
+        data-testid="search-input"
+        placeholder="Search movies & shows…"
+        value={query}
+        // biome-ignore lint/a11y/noAutofocus: search is the whole point of this screen.
+        autoFocus
+        onChange={(e) => setQuery(e.target.value)}
+      />
+
+      {!ready ? (
+        <p className="muted" style={{ marginTop: "var(--sp-4)" }}>
+          Type to find a title — search your library and, if TMDB is connected, anything to request.
+        </p>
+      ) : search.isPending ? (
+        <Loading label="Searching…" />
+      ) : results.length === 0 ? (
+        <p className="muted" data-testid="search-empty" style={{ marginTop: "var(--sp-4)" }}>
+          No matches for "{debounced.trim()}".
+        </p>
+      ) : (
+        <AvailabilityProvider value={availabilityCtx}>
+          <div className={styles.searchGrid} data-testid="search-results">
+            {results.map((item) => (
+              <PosterCard key={item.titleId} item={item} showFit={false} />
+            ))}
+          </div>
+        </AvailabilityProvider>
+      )}
+    </div>
+  );
+}

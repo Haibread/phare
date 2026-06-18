@@ -9,6 +9,7 @@ import { ColdStart } from "../onboarding/ColdStart";
 import { Browse } from "../routes/Browse";
 import { Chat } from "../routes/Chat";
 import { Profile } from "../routes/Profile";
+import { Search } from "../routes/Search";
 import { AppShell } from "./AppShell";
 
 export function App(): React.JSX.Element {
@@ -70,6 +71,7 @@ function Bootstrapped(): React.JSX.Element {
     <Routes>
       <Route element={<AppShell profileId={profileId} />}>
         <Route index element={<Browse />} />
+        <Route path="search" element={<Search />} />
         <Route path="chat" element={<Chat />} />
         <Route path="profile" element={<Profile />} />
       </Route>

@@ -240,6 +240,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  searchCatalog: (profileId: string, q: string) =>
+    request(
+      `/profiles/${profileId}/catalog/search`,
+      z.object({ results: z.array(recommendationItemSchema) }),
+      { method: "POST", body: JSON.stringify({ q }) },
+    ),
   availability: (profileId: string, titleIds: string[]) =>
     request(`/profiles/${profileId}/availability`, availabilitySchema, {
       method: "POST",
