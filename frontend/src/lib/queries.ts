@@ -92,14 +92,6 @@ export function useSeedCatalog() {
   return useMutation({ mutationFn: () => api.seedCatalog() });
 }
 
-export function useGenerateTaste(profileId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.generateTaste(profileId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.taste(profileId) }),
-  });
-}
-
 export function useSyncTrakt(profileId: string) {
   const qc = useQueryClient();
   return useMutation({

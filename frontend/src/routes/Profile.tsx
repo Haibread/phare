@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { HistoryItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { ErrorState, Loading } from "../components/states";
-import { keys, useConversion, useGenerateTaste, useHistory, useTaste } from "../lib/queries";
+import { keys, useConversion, useHistory, useTaste } from "../lib/queries";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import styles from "./routes.module.css";
 
@@ -24,7 +24,6 @@ export function Profile(): React.JSX.Element {
   const taste = useTaste(profileId);
   const history = useHistory(profileId);
   const conversion = useConversion(profileId);
-  const generate = useGenerateTaste(profileId);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const likes = stringList(taste.data?.structured.likes);
@@ -39,15 +38,9 @@ export function Profile(): React.JSX.Element {
       <section className={styles.card} data-testid="taste-card">
         <div className={styles.cardHead}>
           <h2 style={{ fontSize: "1.05rem" }}>Your taste</h2>
-          <button
-            type="button"
-            className="btn"
-            data-testid="generate-taste"
-            onClick={() => generate.mutate()}
-            disabled={generate.isPending}
-          >
-            {taste.data?.summary ? "Regenerate" : "Generate"}
-          </button>
+          <span className="faint" style={{ fontSize: "0.75rem" }}>
+            updates automatically
+          </span>
         </div>
 
         {taste.isPending ? (
@@ -95,7 +88,10 @@ export function Profile(): React.JSX.Element {
             )}
           </>
         ) : (
-          <p className="muted">No taste profile yet. Generate one (requires an LLM key).</p>
+          <p className="muted" data-testid="taste-empty">
+            Your taste profile builds automatically from your watch history, once an LLM is
+            configured.
+          </p>
         )}
       </section>
 
