@@ -101,10 +101,21 @@ class LLMProvider(Protocol):
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
+class MediaAvailability(enum.StrEnum):
+    """How a title sits in the user's library, via a request/availability provider (Seerr)."""
+
+    available = "available"  # in the library, ready to watch
+    queued = "queued"  # requested / processing, not yet available
+    requestable = "requestable"  # not in the library; can be requested
+    unknown = "unknown"  # provider couldn't determine (or no tmdb id)
+
+
 @runtime_checkable
 class ActionProvider(Protocol):
-    """Acquire/watch hand-off (Radarr/Sonarr/Jellyseerr/Plex). Optional, used from M6."""
+    """Acquire/watch hand-off (Seerr). Optional, used from M6."""
 
     name: str
+
+    def availability(self, tmdb_id: int, kind: TitleKind) -> MediaAvailability: ...
 
     def request_title(self, tmdb_id: int, kind: TitleKind) -> bool: ...
