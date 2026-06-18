@@ -92,6 +92,15 @@ export function useSeedCatalog() {
   return useMutation({ mutationFn: () => api.seedCatalog() });
 }
 
+export function useUpdateTaste(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userOverrides: Record<string, unknown>) =>
+      api.updateTaste(profileId, userOverrides),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.taste(profileId) }),
+  });
+}
+
 export function useSyncTrakt(profileId: string) {
   const qc = useQueryClient();
   return useMutation({

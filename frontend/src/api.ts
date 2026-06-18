@@ -205,6 +205,11 @@ export const api = {
   getTaste: (profileId: string) => request(`/profiles/${profileId}/taste`, tasteSchema),
   generateTaste: (profileId: string) =>
     request(`/profiles/${profileId}/taste/generate`, tasteSchema, { method: "POST" }),
+  updateTaste: (profileId: string, userOverrides: Record<string, unknown>) =>
+    request(`/profiles/${profileId}/taste`, tasteSchema, {
+      method: "PUT",
+      body: JSON.stringify({ userOverrides }),
+    }),
   seedCatalog: () => request("/catalog/sample", catalogSummarySchema, { method: "POST" }),
   recommendations: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations`, recommendationsResponseSchema),

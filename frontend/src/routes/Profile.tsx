@@ -2,8 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { HistoryItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
+import { EditableChips } from "../components/EditableChips";
 import { ErrorState, Loading } from "../components/states";
-import { keys, useConversion, useHistory, useTaste } from "../lib/queries";
+import { keys, useConversion, useHistory, useTaste, useUpdateTaste } from "../lib/queries";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import styles from "./routes.module.css";
 
@@ -24,11 +25,18 @@ export function Profile(): React.JSX.Element {
   const taste = useTaste(profileId);
   const history = useHistory(profileId);
   const conversion = useConversion(profileId);
+  const updateTaste = useUpdateTaste(profileId);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const likes = stringList(taste.data?.structured.likes);
   const avoids = stringList(taste.data?.structured.hard_avoids);
   const conv = conversion.data;
+
+  // Edits persist as taste overrides (overrides win per-key and survive auto-regeneration).
+  function setOverride(key: "likes" | "hard_avoids", list: string[]) {
+    const current = (taste.data?.userOverrides ?? {}) as Record<string, unknown>;
+    updateTaste.mutate({ ...current, [key]: list });
+  }
 
   return (
     <div className={styles.page} data-testid="profile">
@@ -50,34 +58,34 @@ export function Profile(): React.JSX.Element {
             <p className="muted" data-testid="taste-summary">
               {taste.data.summary}
             </p>
-            {likes.length > 0 && (
-              <>
-                <div className="faint" style={{ fontSize: "0.75rem", marginTop: "var(--sp-3)" }}>
-                  Drawn to
-                </div>
-                <div className={styles.chips}>
-                  {likes.map((g) => (
-                    <span key={g} className={`chip ${styles.chipLike}`}>
-                      {g}
-                    </span>
-                  ))}
-                </div>
-              </>
-            )}
-            {avoids.length > 0 && (
-              <>
-                <div className="faint" style={{ fontSize: "0.75rem" }}>
-                  Avoiding
-                </div>
-                <div className={styles.chips}>
-                  {avoids.map((g) => (
-                    <span key={g} className={`chip ${styles.chipAvoid}`}>
-                      {g}
-                    </span>
-                  ))}
-                </div>
-              </>
-            )}
+            <div style={{ marginTop: "var(--sp-3)" }}>
+              <EditableChips
+                label="Drawn to"
+                tone="like"
+                items={likes}
+                busy={updateTaste.isPending}
+                onAdd={(v) => setOverride("likes", [...likes, v])}
+                onRemove={(v) =>
+                  setOverride(
+                    "likes",
+                    likes.filter((x) => x !== v),
+                  )
+                }
+              />
+            </div>
+            <EditableChips
+              label="Avoiding"
+              tone="avoid"
+              items={avoids}
+              busy={updateTaste.isPending}
+              onAdd={(v) => setOverride("hard_avoids", [...avoids, v])}
+              onRemove={(v) =>
+                setOverride(
+                  "hard_avoids",
+                  avoids.filter((x) => x !== v),
+                )
+              }
+            />
             {taste.data.confidence !== null && (
               <div className={styles.meterTrack} title={`confidence ${taste.data.confidence}`}>
                 <div
