@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from phare.api.app import create_app
 from phare.catalog.sample import seed_sample_catalog
-from phare.catalog.service import import_from_tmdb, upsert_titles
-from phare.db.models import Title, TitleKind
+from phare.catalog.service import import_from_tmdb, search_titles, upsert_titles
+from phare.db.base import get_session
+from phare.db.models import Profile, Title, TitleKind
 from phare.providers.types import TitleMetadata
 
 
@@ -64,3 +67,63 @@ def test_import_from_tmdb_pulls_each_kind_and_page(db_session: Session) -> None:
     assert created == 4  # 2 kinds x 2 pages
     assert (TitleKind.movie, 1) in source.calls
     assert (TitleKind.show, 2) in source.calls
+
+
+class _FakeSearchSource:
+    """Returns canned search matches (the ``CatalogSearchSource`` protocol)."""
+
+    def search(self, query: str, *, limit: int = 8) -> list[TitleMetadata]:
+        return [
+            TitleMetadata(
+                kind=TitleKind.movie,
+                tmdb_id=555001,
+                title="Searched Movie",
+                year=2020,
+                popularity=5.0,
+                poster_path="/s.jpg",
+            )
+        ]
+
+
+def test_search_titles_finds_local_match(db_session: Session) -> None:
+    seed_sample_catalog(db_session)
+    target = db_session.scalars(select(Title)).first()
+    assert target is not None
+    results = search_titles(db_session, target.title)
+    assert target.id in {t.id for t in results}
+
+
+def test_search_titles_upserts_live_matches(db_session: Session) -> None:
+    results = search_titles(db_session, "searched", _FakeSearchSource())
+    assert any(t.tmdb_id == 555001 for t in results)
+    # The live match was persisted so it becomes recommendable + requestable.
+    assert db_session.scalar(select(Title).where(Title.tmdb_id == 555001)) is not None
+
+
+def test_search_titles_empty_query_returns_nothing(db_session: Session) -> None:
+    seed_sample_catalog(db_session)
+    assert search_titles(db_session, "   ") == []
+
+
+def _client(session: Session) -> TestClient:
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    return TestClient(app)
+
+
+def test_search_endpoint_returns_recommendation_items(db_session: Session) -> None:
+    seed_sample_catalog(db_session)
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    target = db_session.scalars(select(Title)).first()
+    assert target is not None
+
+    body = (
+        _client(db_session)
+        .post(f"/profiles/{profile.id}/catalog/search", json={"q": target.title})
+        .json()
+    )
+    ids = {item["titleId"] for item in body["results"]}
+    assert str(target.id) in ids
+    assert "posterUrl" in body["results"][0]  # reuses the RecommendationItem DTO

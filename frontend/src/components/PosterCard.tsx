@@ -5,7 +5,13 @@ import { TitleAction } from "./Availability";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 import styles from "./components.module.css";
 
-export function PosterCard({ item }: { item: RecommendationItem }): React.JSX.Element {
+export function PosterCard({
+  item,
+  showFit = true,
+}: {
+  item: RecommendationItem;
+  showFit?: boolean;
+}): React.JSX.Element {
   const [imgFailed, setImgFailed] = useState(false);
   const showPoster = item.posterUrl !== null && !imgFailed;
   return (
@@ -37,7 +43,7 @@ export function PosterCard({ item }: { item: RecommendationItem }): React.JSX.El
         {item.year ?? "—"}
         {item.genres.length > 0 && ` · ${item.genres[0]}`}
       </div>
-      <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />
+      {showFit && <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />}
       <TitleAction titleId={item.titleId} />
     </article>
   );

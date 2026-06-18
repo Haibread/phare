@@ -48,6 +48,48 @@ def test_tmdb_get_movie() -> None:
     assert meta.poster_path == "/dune.jpg"
 
 
+def test_tmdb_search_movies_and_shows() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search/movie":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": 1,
+                            "title": "Blade Runner 2049",
+                            "release_date": "2017-10-04",
+                            "poster_path": "/br.jpg",
+                            "popularity": 50.0,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/search/tv":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": 2,
+                            "name": "Severance",
+                            "first_air_date": "2022-02-18",
+                            "popularity": 80.0,
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    provider = TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler))
+    results = provider.search("x")
+
+    assert {m.title for m in results} == {"Blade Runner 2049", "Severance"}
+    assert results[0].title == "Severance"  # sorted by popularity desc
+    assert next(m for m in results if m.tmdb_id == 1).poster_path == "/br.jpg"
+    assert next(m for m in results if m.tmdb_id == 1).year == 2017
+
+
 def test_tmdb_find_by_imdb() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/find/tt1160419"
