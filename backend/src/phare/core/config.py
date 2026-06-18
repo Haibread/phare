@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     trakt_client_id: str | None = None
     trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"
+    # Seerr request hand-off (optional). Per-profile creds set via the UI take precedence; these
+    # env defaults are a convenience for single-instance deployments.
+    seerr_base_url: str | None = None
+    seerr_api_key: str | None = None
 
     # LLM + embeddings (OpenAI-compatible). Embedding dim is fixed by the schema; switching to
     # an embedding model of a different dimension requires a migration + re-embed.

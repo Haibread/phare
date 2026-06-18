@@ -9,7 +9,18 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from phare.api import auth, catalog, chat, health, history, profiles, recommend, sync, taste
+from phare.api import (
+    actions,
+    auth,
+    catalog,
+    chat,
+    health,
+    history,
+    profiles,
+    recommend,
+    sync,
+    taste,
+)
 from phare.core.auth import require_auth
 from phare.core.config import get_settings
 from phare.core.logging import configure_logging
@@ -59,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog.router, dependencies=guarded)
     app.include_router(recommend.router, dependencies=guarded)
     app.include_router(chat.router, dependencies=guarded)
+    app.include_router(actions.router, dependencies=guarded)
 
     setup_telemetry(app, get_engine(), settings)
     logger.info("app.ready", extra={"environment": settings.environment})
