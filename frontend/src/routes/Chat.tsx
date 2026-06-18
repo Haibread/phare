@@ -2,16 +2,30 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { type ChatReply, type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
+import { posterTint } from "../lib/poster";
 import styles from "./routes.module.css";
 
 type Turn = { role: "user" | "agent"; text: string; items?: RecommendationItem[] };
 
-function tint(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) % 360;
-  }
-  return `hsl(${hash} 38% 32%)`;
+const STARTERS = ["something funny and short", "a slow-burn sci-fi", "a comfort rewatch"];
+const FOLLOWUPS = ["something weirder", "even shorter", "lighter", "why these?"];
+
+function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
+  const [failed, setFailed] = useState(false);
+  const show = item.posterUrl !== null && !failed;
+  return (
+    <div data-testid="chat-item">
+      <div
+        className={styles.chatPoster}
+        style={show ? undefined : { background: posterTint(item.titleId) }}
+      >
+        {show && (
+          <img src={item.posterUrl ?? ""} alt="" loading="lazy" onError={() => setFailed(true)} />
+        )}
+      </div>
+      <div style={{ fontSize: "0.75rem", fontWeight: 500 }}>{item.title}</div>
+    </div>
+  );
 }
 
 export function Chat(): React.JSX.Element {
@@ -32,15 +46,23 @@ export function Chat(): React.JSX.Element {
     }
     setLog((l) => [...l, { role: "user", text: trimmed }]);
     setMessage("");
-    chat.mutate(trimmed);
+    chat.mutate(trimmed === "why these?" ? "why did you pick these?" : trimmed);
   }
+
+  const suggestions = log.length === 0 ? STARTERS : FOLLOWUPS;
 
   return (
     <div className={styles.page} data-testid="chat">
       <h1 className={styles.pageTitle}>Chat</h1>
-      <p className="muted">Tell the agent your mood — "tired, something funny under 90 minutes".</p>
 
       <div className={styles.chatLog}>
+        {log.length === 0 && (
+          <div className={styles.bubble} data-testid="chat-greeting">
+            <p style={{ margin: 0 }}>
+              Tell me your mood and I'll find something — "tired, something funny under 90 minutes".
+            </p>
+          </div>
+        )}
         {log.map((turn, i) => (
           <div
             // Chat turns are append-only; index is a stable key here.
@@ -52,17 +74,7 @@ export function Chat(): React.JSX.Element {
             {turn.items && turn.items.length > 0 && (
               <div className={styles.bubbleStrip}>
                 {turn.items.map((item) => (
-                  <div key={item.titleId} data-testid="chat-item">
-                    <div
-                      style={{
-                        aspectRatio: "2 / 3",
-                        borderRadius: "var(--radius-sm)",
-                        background: tint(item.titleId),
-                        marginBottom: "0.25rem",
-                      }}
-                    />
-                    <div style={{ fontSize: "0.75rem", fontWeight: 500 }}>{item.title}</div>
-                  </div>
+                  <ChatPoster key={item.titleId} item={item} />
                 ))}
               </div>
             )}
@@ -74,6 +86,22 @@ export function Chat(): React.JSX.Element {
           </div>
         )}
       </div>
+
+      {!chat.isPending && (
+        <div className={styles.followups}>
+          {suggestions.map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={styles.followup}
+              data-testid="chat-suggestion"
+              onClick={() => send(p)}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className={styles.composer}>
         <input

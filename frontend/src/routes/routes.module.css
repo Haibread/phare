@@ -95,6 +95,40 @@
   margin-top: var(--sp-3);
 }
 
+.chatPoster {
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+  border: 1px solid var(--border);
+}
+
+.chatPoster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.followup {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--info);
+  font-size: 0.82rem;
+}
+
+.followup:hover {
+  background: var(--surface-2);
+}
+
 .composer {
   display: flex;
   gap: var(--sp-2);
