@@ -4,16 +4,9 @@ import { useProfileId } from "../app/ProfileContext";
 import { ConfidenceMeter } from "../components/ConfidenceMeter";
 import { RecRow } from "../components/RecRow";
 import { ErrorState, Loading } from "../components/states";
+import { posterTint } from "../lib/poster";
 import { useDynamicRows, useRecommendations } from "../lib/queries";
 import styles from "./routes.module.css";
-
-function tint(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) % 360;
-  }
-  return `hsl(${hash} 38% 32%)`;
-}
 
 function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
   return (
@@ -27,7 +20,7 @@ function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }
-            : { background: tint(item.titleId) }
+            : { background: posterTint(item.titleId) }
         }
       />
       <div className={styles.heroBody}>
