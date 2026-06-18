@@ -155,5 +155,6 @@ def _to_rec(
         score=round(score, 4),
         is_swing=is_swing,
         confidence=_confidence(candidate, taste, is_swing=is_swing),
+        poster_path=candidate.poster_path,
         components=components,
     )

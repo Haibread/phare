@@ -42,6 +42,9 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
         if existing is not None:
             if meta.popularity is not None:
                 existing.popularity = meta.popularity
+            # Backfill a poster when we didn't have one; it doesn't affect embeddings.
+            if existing.poster_path is None and meta.poster_path is not None:
+                existing.poster_path = meta.poster_path
             continue
         session.add(
             Title(
@@ -52,6 +55,7 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
                 year=meta.year,
                 runtime_minutes=meta.runtime_minutes,
                 overview=meta.overview,
+                poster_path=meta.poster_path,
                 genres=meta.genres,
                 keywords=meta.keywords,
                 popularity=meta.popularity,

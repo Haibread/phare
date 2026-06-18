@@ -21,6 +21,7 @@ _MOVIE = {
     "genres": [{"id": 1, "name": "Science Fiction"}],
     "popularity": 123.4,
     "imdb_id": "tt1160419",
+    "poster_path": "/dune.jpg",
     "keywords": {"keywords": [{"id": 1, "name": "desert"}]},
 }
 
@@ -44,6 +45,7 @@ def test_tmdb_get_movie() -> None:
     assert meta.genres == ["Science Fiction"]
     assert meta.keywords == ["desert"]
     assert meta.imdb_id == "tt1160419"
+    assert meta.poster_path == "/dune.jpg"
 
 
 def test_tmdb_find_by_imdb() -> None:

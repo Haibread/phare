@@ -21,6 +21,7 @@ class Candidate(BaseModel):
     runtime_minutes: int | None
     popularity: float | None
     overview: str | None
+    poster_path: str | None = None
     similarity: float  # cosine similarity to the taste centroid, in [-1, 1]
 
 
@@ -36,6 +37,7 @@ class Recommendation(BaseModel):
     is_swing: bool = False
     confidence: float | None = None
     explanation: str | None = None
+    poster_path: str | None = None
     # Transparent score breakdown — the engine is never a black box (principle 2).
     components: dict[str, float] = {}
 

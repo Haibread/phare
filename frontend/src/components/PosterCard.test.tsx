@@ -15,6 +15,7 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
     isSwing: false,
     confidence: 0.8,
     explanation: "A cerebral sci-fi that fits your taste.",
+    posterUrl: null,
     components: { score: 0.9 },
     ...overrides,
   };
@@ -32,6 +33,18 @@ describe("PosterCard", () => {
     render(<PosterCard item={recItem({ isSwing: true })} />);
     expect(screen.getByTestId("swing-badge")).toBeInTheDocument();
     expect(screen.getByText("A stretch")).toBeInTheDocument();
+  });
+
+  it("renders real poster art when a posterUrl is present", () => {
+    // The poster is decorative (alt=""), so query by tag rather than role.
+    const { container } = render(<PosterCard item={recItem({ posterUrl: "https://img/x.jpg" })} />);
+    expect(container.querySelector("img")).toHaveAttribute("src", "https://img/x.jpg");
+  });
+
+  it("falls back to the text placeholder without a posterUrl", () => {
+    const { container } = render(<PosterCard item={recItem({ title: "Moon", posterUrl: null })} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getAllByText("Moon").length).toBeGreaterThanOrEqual(1);
   });
 });
 

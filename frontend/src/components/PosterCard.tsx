@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { RecommendationItem } from "../api";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 import styles from "./components.module.css";
@@ -13,15 +14,29 @@ function tint(seed: string): string {
 }
 
 export function PosterCard({ item }: { item: RecommendationItem }): React.JSX.Element {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showPoster = item.posterUrl !== null && !imgFailed;
   return (
     <article className={styles.card} data-testid="rec-card">
-      <div className={styles.poster} style={{ background: tint(item.titleId) }}>
+      <div
+        className={styles.poster}
+        style={showPoster ? undefined : { background: tint(item.titleId) }}
+      >
         {item.isSwing && (
           <span className={styles.swingBadge} data-testid="swing-badge">
             swing
           </span>
         )}
-        <span className={styles.posterFallback}>{item.title}</span>
+        {showPoster ? (
+          <img
+            src={item.posterUrl ?? ""}
+            alt=""
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          <span className={styles.posterFallback}>{item.title}</span>
+        )}
       </div>
       <div className={styles.cardTitle} title={item.explanation ?? undefined}>
         {item.title}

@@ -120,6 +120,7 @@ class IngestionService:
             year=meta.year,
             runtime_minutes=meta.runtime_minutes,
             overview=meta.overview,
+            poster_path=meta.poster_path,
             genres=meta.genres,
             keywords=meta.keywords,
             popularity=meta.popularity,

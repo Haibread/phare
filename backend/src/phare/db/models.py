@@ -68,6 +68,7 @@ class Title(Base):
     year: Mapped[int | None] = mapped_column(Integer)
     runtime_minutes: Mapped[int | None] = mapped_column(Integer)
     overview: Mapped[str | None] = mapped_column(Text)
+    poster_path: Mapped[str | None] = mapped_column(String(255))
     genres: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     keywords: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     popularity: Mapped[float | None] = mapped_column(Float)
