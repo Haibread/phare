@@ -70,7 +70,12 @@ A compact snapshot of what's built and what's next. Update as features land.
   poster art (text fallback), honest worded confidence + a coarse 3-segment bar, reserved swing
   picks. **Profile**: the taste profile is generated automatically on ingest and is editable
   (drawn-to / avoiding chips → sticky overrides), plus sources + history. **Chat**: greeting,
-  tappable starters + follow-up chips, poster suggestions. (Seerr request action still deferred.)
+  tappable starters + follow-up chips, poster suggestions.
+- **Seerr action provider** — request hand-off + library availability: `SeerrProvider` (request +
+  `mediaInfo` status), `POST /profiles/{id}/{availability,requests}` (by internal titleId; TMDB id
+  resolved server-side) and a `sources/seerr/connect` endpoint (creds encrypted in `source_token`,
+  env fallback). Browse cards show **Request / Queued / Available** when a Seerr is connected;
+  picker gains a "requests & availability" group.
 
 ## Run it
 
@@ -87,8 +92,8 @@ compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embeddi
 
 ## Next features (in rough order)
 
-1. **Availability / action providers** — Radarr/Sonarr/Jellyseerr "request" hand-off (needs a
-   product decision; see `docs/design.md` deferred list).
+- Nothing blocking. Candidate follow-ups: direct Radarr/Sonarr (without Seerr), per-card poster
+  art in the chat strip sizing, and a bespoke lighthouse logo to replace the placeholder mark.
 
 ## Known gaps / debt
 

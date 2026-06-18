@@ -129,6 +129,15 @@ const meSchema = z.object({ authRequired: z.boolean(), authenticated: z.boolean(
 export type Me = z.infer<typeof meSchema>;
 const tokenSchema = z.object({ token: z.string() });
 
+// Seerr library availability per title: "available" | "queued" | "requestable" | "unknown".
+const availabilitySchema = z.object({
+  configured: z.boolean(),
+  results: z.record(z.string()),
+});
+export type Availability = z.infer<typeof availabilitySchema>;
+const requestResultSchema = z.object({ ok: z.boolean(), availability: z.string() });
+const connectedSchema = z.object({ connected: z.boolean() });
+
 // Bearer token held in memory only (never localStorage) — secrets stay in the session.
 let authToken: string | null = null;
 export function setAuthToken(token: string | null): void {
@@ -221,5 +230,20 @@ export const api = {
     request(`/profiles/${profileId}/chat`, chatReplySchema, {
       method: "POST",
       body: JSON.stringify({ message }),
+    }),
+  availability: (profileId: string, titleIds: string[]) =>
+    request(`/profiles/${profileId}/availability`, availabilitySchema, {
+      method: "POST",
+      body: JSON.stringify({ titleIds }),
+    }),
+  requestTitle: (profileId: string, titleId: string) =>
+    request(`/profiles/${profileId}/requests`, requestResultSchema, {
+      method: "POST",
+      body: JSON.stringify({ titleId }),
+    }),
+  connectSeerr: (profileId: string, baseUrl: string, apiKey: string) =>
+    request(`/profiles/${profileId}/sources/seerr/connect`, connectedSchema, {
+      method: "POST",
+      body: JSON.stringify({ baseUrl, apiKey }),
     }),
 };

@@ -119,6 +119,37 @@
   color: var(--text-muted);
 }
 
+.availTag {
+  align-self: flex-start;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+}
+
+.availOk {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.availQueued {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.requestBtn {
+  align-self: flex-start;
+  font-size: 0.74rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--accent);
+}
+
+.requestBtn:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
 .swingBadge {
   position: absolute;
   top: var(--sp-2);
