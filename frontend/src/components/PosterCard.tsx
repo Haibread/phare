@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RecommendationItem } from "../api";
 import { posterTint } from "../lib/poster";
+import { TitleAction } from "./Availability";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 import styles from "./components.module.css";
 
@@ -37,6 +38,7 @@ export function PosterCard({ item }: { item: RecommendationItem }): React.JSX.El
         {item.genres.length > 0 && ` · ${item.genres[0]}`}
       </div>
       <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />
+      <TitleAction titleId={item.titleId} />
     </article>
   );
 }

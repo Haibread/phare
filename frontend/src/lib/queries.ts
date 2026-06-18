@@ -12,6 +12,7 @@ export const keys = {
   recommendations: (id: string) => ["recommendations", id] as const,
   dynamic: (id: string) => ["dynamic", id] as const,
   conversion: (id: string) => ["conversion", id] as const,
+  availability: (id: string) => ["availability", id] as const,
 };
 
 export function useMe() {
@@ -90,6 +91,24 @@ export function useLoadSampleData(profileId: string) {
 
 export function useSeedCatalog() {
   return useMutation({ mutationFn: () => api.seedCatalog() });
+}
+
+export function useAvailability(profileId: string, titleIds: string[]) {
+  const idsKey = [...titleIds].sort().join(",");
+  return useQuery({
+    queryKey: [...keys.availability(profileId), idsKey],
+    queryFn: () => api.availability(profileId, titleIds),
+    enabled: titleIds.length > 0,
+    staleTime: 60_000,
+  });
+}
+
+export function useRequestTitle(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (titleId: string) => api.requestTitle(profileId, titleId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.availability(profileId) }),
+  });
 }
 
 export function useUpdateTaste(profileId: string) {

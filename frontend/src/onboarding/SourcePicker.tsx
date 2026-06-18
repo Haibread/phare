@@ -1,16 +1,17 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api";
 import { Sheet } from "../components/Sheet";
+import { keys } from "../lib/queries";
 import styles from "./onboarding.module.css";
 
-type Active = "trakt" | "plex" | "jellyfin" | null;
+type Active = "trakt" | "plex" | "jellyfin" | "seerr" | null;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The grouped connect sheet. Watch-history sources only for now (Seerr's "requests &
- * availability" group lands with the action-provider work). */
+/** The grouped connect sheet: watch-history sources, plus Seerr for requests & availability. */
 export function SourcePicker({
   profileId,
   open,
@@ -22,17 +23,20 @@ export function SourcePicker({
   onOpenChange: (open: boolean) => void;
   onConnected: () => void;
 }): React.JSX.Element {
+  const qc = useQueryClient();
   const [active, setActive] = useState<Active>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trakt, setTrakt] = useState<{ userCode: string; verificationUrl: string } | null>(null);
 
-  // Plex / Jellyfin form fields.
+  // Plex / Jellyfin / Seerr form fields.
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
   const [userId, setUserId] = useState("");
 
   function finish() {
+    // Connecting any source can change library availability.
+    qc.invalidateQueries({ queryKey: keys.availability(profileId) });
     onConnected();
     onOpenChange(false);
   }
@@ -194,6 +198,46 @@ export function SourcePicker({
             onClick={() => submit(() => api.syncJellyfin(profileId, baseUrl, userId, token))}
           >
             Connect Jellyfin
+          </button>
+        </div>
+      )}
+
+      <div className={styles.group}>Requests &amp; availability</div>
+
+      <button
+        type="button"
+        className={styles.source}
+        data-testid="source-seerr"
+        onClick={() => select("seerr")}
+        disabled={busy}
+      >
+        <div className={styles.sourceBody}>
+          <div className={styles.sourceName}>Seerr</div>
+          <div className={styles.sourceHint}>Request picks straight to your library</div>
+        </div>
+      </button>
+      {active === "seerr" && (
+        <div className={styles.form}>
+          <input
+            className="field"
+            placeholder="Server URL (https://…)"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+          <input
+            className="field"
+            placeholder="API key"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-primary"
+            data-testid="connect-seerr"
+            disabled={busy || baseUrl === "" || token === ""}
+            onClick={() => submit(() => api.connectSeerr(profileId, baseUrl, token))}
+          >
+            Connect Seerr
           </button>
         </div>
       )}
