@@ -42,8 +42,10 @@ cd backend && uv run phare migrate && uv run phare serve        # API on :8000
 cd frontend && npm install && npm run dev                       # SPA on :5173
 ```
 
-Then create a profile, **Load sample data** + **Load sample catalog**, and hit **Load
-recommendations** — or ask the chat agent for something.
+On first run you'll land on a cold-start screen: **Connect your library** (Trakt, Plex, or
+Jellyfin) or **Explore with sample data** to try it offline. Either way you drop into the tabbed
+shell — **Browse** (taste-driven rows), **Chat** (tell the agent a mood), and **Profile** (your
+editable taste, sources, and history).
 
 ## Test it
 

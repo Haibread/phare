@@ -62,12 +62,15 @@ A compact snapshot of what's built and what's next. Update as features land.
 - **Tests/CI** — backend pytest (provider HTTP via MockTransport, real-Postgres engine/rows/auth/
   eval), frontend Vitest, **Playwright E2E** (onboarding + recommendations + chat journeys),
   **GitHub Actions** (backend / evaluation / frontend / e2e jobs).
-- **UI rebuild (in progress)** — fresh React SPA shell replacing the single-page scaffold:
-  bottom-tab nav (Browse · Chat · Profile, → top bar on desktop), first-run onboarding (one
-  "Connect your library" CTA + a sample-data escape hatch, grouped source sheet on Radix Dialog),
-  `react-router` + `react-query` data layer, CSS-Modules design tokens (light/dark), worded
-  confidence + a coarse 3-segment bar, mobile-first. Real TMDB posters and the Seerr request
-  action land in following PRs.
+- **UI (rebuilt SPA)** — a tabbed shell replacing the single-page scaffold: bottom-tab nav
+  (Browse · Chat · Profile, → top bar on desktop) on `react-router` + `react-query` with explicit
+  loading/error states, CSS-Modules design tokens (light/dark), placeholder lighthouse identity,
+  mobile-first. First-run onboarding (one "Connect your library" CTA + a sample-data escape hatch,
+  grouped source sheet on Radix Dialog). **Browse**: hero pick + taste-driven rows with real TMDB
+  poster art (text fallback), honest worded confidence + a coarse 3-segment bar, reserved swing
+  picks. **Profile**: the taste profile is generated automatically on ingest and is editable
+  (drawn-to / avoiding chips → sticky overrides), plus sources + history. **Chat**: greeting,
+  tappable starters + follow-up chips, poster suggestions. (Seerr request action still deferred.)
 
 ## Run it
 
