@@ -9,6 +9,7 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.api.schemas import (
@@ -22,7 +23,7 @@ from phare.core.config import Settings, get_settings
 from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
-from phare.db.models import Profile
+from phare.db.models import Profile, SourceToken
 from phare.ingest.service import IngestionService
 from phare.providers.jellyfin import JellyfinSourceProvider
 from phare.providers.plex import PlexSourceProvider
@@ -33,6 +34,15 @@ from phare.providers.types import SourceProvider
 from phare.taste.service import maybe_refresh_taste, optional_llm_provider
 
 router = APIRouter(tags=["Sync"])
+
+# Internal token rows that aren't user-facing "connected sources".
+_INTERNAL_SOURCES = {"trakt_refresh"}
+
+
+class ConnectedSource(ApiModel):
+    source: str
+    kind: str  # "history" | "requests"
+    last_synced_at: datetime | None = None
 
 
 def _trakt_oauth(settings: Settings) -> TraktOAuth:
@@ -254,3 +264,24 @@ def sync_jellyfin(
     source = JellyfinSourceProvider(base_url=body.base_url, api_key=token, user_id=body.user_id)
     since = _since_for(session, body.profile_id, "jellyfin", full=body.full)
     return _ingest_from(session, body.profile_id, source, source_name="jellyfin", since=since)
+
+
+@router.get("/profiles/{profile_id}/sources", response_model=list[ConnectedSource])
+def list_connected_sources(
+    profile_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_session)],
+) -> list[ConnectedSource]:
+    """Which external services this profile has connected, and when each last synced."""
+    if session.get(Profile, profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    rows = session.scalars(
+        select(SourceToken).where(SourceToken.profile_id == profile_id).order_by(SourceToken.source)
+    ).all()
+    out: list[ConnectedSource] = []
+    for row in rows:
+        if row.source in _INTERNAL_SOURCES:
+            continue
+        kind = "requests" if row.source == "seerr" else "history"
+        last = None if kind == "requests" else get_last_synced(session, profile_id, row.source)
+        out.append(ConnectedSource(source=row.source, kind=kind, last_synced_at=last))
+    return out

@@ -4,9 +4,24 @@ import type { HistoryItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
 import { ErrorState, Loading } from "../components/states";
-import { keys, useConversion, useHistory, useTaste, useUpdateTaste } from "../lib/queries";
+import {
+  keys,
+  useConnectedSources,
+  useConversion,
+  useHistory,
+  useTaste,
+  useUpdateTaste,
+} from "../lib/queries";
+import { relativeTime } from "../lib/time";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import styles from "./routes.module.css";
+
+const SOURCE_LABELS: Record<string, string> = {
+  trakt: "Trakt",
+  plex: "Plex",
+  jellyfin: "Jellyfin",
+  seerr: "Seerr",
+};
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -25,6 +40,7 @@ export function Profile(): React.JSX.Element {
   const taste = useTaste(profileId);
   const history = useHistory(profileId);
   const conversion = useConversion(profileId);
+  const sources = useConnectedSources(profileId);
   const updateTaste = useUpdateTaste(profileId);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -116,9 +132,24 @@ export function Profile(): React.JSX.Element {
             Add
           </button>
         </div>
-        <p className="muted" style={{ fontSize: "0.88rem" }}>
-          Sync Trakt, Plex, or Jellyfin to keep your taste fresh.
-        </p>
+        {sources.isPending ? (
+          <Loading label="Loading sources…" />
+        ) : sources.data && sources.data.length > 0 ? (
+          <div data-testid="connected-sources">
+            {sources.data.map((s) => (
+              <div className={styles.sourceLine} key={s.source} data-testid="connected-source">
+                <span>{SOURCE_LABELS[s.source] ?? s.source}</span>
+                <span className="faint" style={{ marginLeft: "auto", fontSize: "0.8rem" }}>
+                  {s.lastSyncedAt ? `synced ${relativeTime(s.lastSyncedAt)}` : "connected"}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: "0.88rem" }} data-testid="no-sources">
+            No sources connected yet — add one to keep your taste fresh.
+          </p>
+        )}
         {conv && (
           <p className="faint" data-testid="conversion" style={{ fontSize: "0.82rem" }}>
             {conv.rate === null

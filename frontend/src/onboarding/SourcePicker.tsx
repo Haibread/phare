@@ -35,7 +35,8 @@ export function SourcePicker({
   const [userId, setUserId] = useState("");
 
   function finish() {
-    // Connecting any source can change library availability.
+    // Connecting any source can change the source list and library availability.
+    qc.invalidateQueries({ queryKey: keys.sources(profileId) });
     qc.invalidateQueries({ queryKey: keys.availability(profileId) });
     onConnected();
     onOpenChange(false);

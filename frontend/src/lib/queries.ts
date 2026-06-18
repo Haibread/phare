@@ -13,6 +13,7 @@ export const keys = {
   dynamic: (id: string) => ["dynamic", id] as const,
   conversion: (id: string) => ["conversion", id] as const,
   availability: (id: string) => ["availability", id] as const,
+  sources: (id: string) => ["sources", id] as const,
 };
 
 export function useMe() {
@@ -53,6 +54,14 @@ export function useDynamicRows(profileId: string | null) {
   return useQuery({
     queryKey: keys.dynamic(profileId ?? ""),
     queryFn: () => api.dynamicRecommendations(profileId as string),
+    enabled: profileId !== null,
+  });
+}
+
+export function useConnectedSources(profileId: string | null) {
+  return useQuery({
+    queryKey: keys.sources(profileId ?? ""),
+    queryFn: () => api.listSources(profileId as string),
     enabled: profileId !== null,
   });
 }
