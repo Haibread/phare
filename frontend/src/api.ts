@@ -184,6 +184,16 @@ export const api = {
       // Omit the token when empty so the backend falls back to a stored (OAuth-connected) one.
       body: JSON.stringify(accessToken ? { profileId, accessToken } : { profileId }),
     }),
+  syncPlex: (profileId: string, baseUrl: string, token: string) =>
+    request("/sources/plex/sync", ingestSummarySchema, {
+      method: "POST",
+      body: JSON.stringify({ profileId, baseUrl, token }),
+    }),
+  syncJellyfin: (profileId: string, baseUrl: string, userId: string, apiKey: string) =>
+    request("/sources/jellyfin/sync", ingestSummarySchema, {
+      method: "POST",
+      body: JSON.stringify({ profileId, baseUrl, userId, apiKey }),
+    }),
   traktConnectStart: () =>
     request("/sources/trakt/connect/start", traktConnectStartSchema, { method: "POST" }),
   traktConnectPoll: (profileId: string, deviceCode: string) =>

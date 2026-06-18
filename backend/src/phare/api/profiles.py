@@ -19,6 +19,7 @@ from phare.core.config import get_settings
 from phare.db.base import get_session
 from phare.db.models import Profile
 from phare.ingest.sample import seed_sample_data
+from phare.taste.service import maybe_refresh_taste, optional_llm_provider
 
 router = APIRouter(tags=["Profiles"])
 
@@ -76,6 +77,8 @@ def load_sample_data(
     if session.get(Profile, profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     result = seed_sample_data(session, profile_id)
+    if result.created or result.updated:
+        maybe_refresh_taste(session, profile_id, optional_llm_provider())
     session.commit()
     return IngestSummary(
         created=result.created,

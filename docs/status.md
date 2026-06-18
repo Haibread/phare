@@ -60,8 +60,14 @@ A compact snapshot of what's built and what's next. Update as features land.
 - **Frontend container** — multi-stage nginx (non-root) image + compose `frontend` service, so
   `docker compose up` runs db + backend (self-migrating) + SPA.
 - **Tests/CI** — backend pytest (provider HTTP via MockTransport, real-Postgres engine/rows/auth/
-  eval), frontend Vitest, **Playwright E2E** (history + recommendations + chat journeys),
+  eval), frontend Vitest, **Playwright E2E** (onboarding + recommendations + chat journeys),
   **GitHub Actions** (backend / evaluation / frontend / e2e jobs).
+- **UI rebuild (in progress)** — fresh React SPA shell replacing the single-page scaffold:
+  bottom-tab nav (Browse · Chat · Profile, → top bar on desktop), first-run onboarding (one
+  "Connect your library" CTA + a sample-data escape hatch, grouped source sheet on Radix Dialog),
+  `react-router` + `react-query` data layer, CSS-Modules design tokens (light/dark), worded
+  confidence + a coarse 3-segment bar, mobile-first. Real TMDB posters and the Seerr request
+  action land in following PRs.
 
 ## Run it
 

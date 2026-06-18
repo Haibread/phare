@@ -15,7 +15,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from phare.core.config import get_settings
 from phare.db.models import TasteProfile, Title, WatchEvent
+from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
 from phare.taste.schema import TasteProfileData
 
@@ -106,3 +108,34 @@ class TasteService:
         # user_overrides intentionally left untouched — hand edits survive regeneration.
         self.session.flush()
         return taste
+
+
+def optional_llm_provider() -> LLMProvider | None:
+    """The configured LLM provider, or ``None`` when no key is set (offline mode)."""
+    settings = get_settings()
+    if not settings.llm_api_key:
+        return None
+    return OpenAILLMProvider(
+        api_key=settings.llm_api_key,
+        chat_model=settings.llm_chat_model,
+        embedding_model=settings.llm_embedding_model,
+        base_url=settings.llm_base_url,
+    )
+
+
+def maybe_refresh_taste(session: Session, profile_id: uuid.UUID, llm: LLMProvider | None) -> bool:
+    """Best-effort: regenerate a profile's taste from its history after its events change.
+
+    Taste is a derived artifact (the agent's long-term memory), so it refreshes itself on ingest
+    rather than waiting for a button. No-ops when no LLM is configured (the deterministic engine
+    still personalises via the embedding centroid), and never lets a taste failure break ingestion.
+    Returns ``True`` when a profile was (re)generated. The caller owns the commit.
+    """
+    if llm is None:
+        return False
+    try:
+        TasteService(session, llm, get_settings().llm_chat_model).generate(profile_id)
+        return True
+    except Exception:  # noqa: BLE001 — taste is best-effort; ingestion must not fail on it
+        logger.warning("taste.auto_refresh_failed", extra={"profile_id": str(profile_id)})
+        return False

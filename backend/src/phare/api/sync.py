@@ -30,6 +30,7 @@ from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
 from phare.providers.trakt_oauth import PollStatus, TraktOAuth
 from phare.providers.types import SourceProvider
+from phare.taste.service import maybe_refresh_taste, optional_llm_provider
 
 router = APIRouter(tags=["Sync"])
 
@@ -73,6 +74,9 @@ def _ingest_from(
     metadata = TMDBMetadataProvider(api_key=settings.tmdb_api_key, base_url=settings.tmdb_base_url)
     result = IngestionService(session, metadata).ingest(profile_id, source.pull(since))
     set_last_synced(session, profile_id, source_name, started_at)
+    # Taste is derived from history; refresh it automatically when the sync changed anything.
+    if result.created or result.updated:
+        maybe_refresh_taste(session, profile_id, optional_llm_provider())
     session.commit()
     return IngestSummary(
         created=result.created,
