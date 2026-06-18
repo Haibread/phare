@@ -25,6 +25,7 @@ def _rec(
         score=round(score, 4),
         confidence=confidence,
         explanation=explanation,
+        poster_path=title.poster_path,
     )
 
 

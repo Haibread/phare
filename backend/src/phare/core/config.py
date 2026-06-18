@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     # External providers (optional; ingestion needs these to run against live accounts).
     tmdb_api_key: str | None = None
     tmdb_base_url: str = "https://api.themoviedb.org/3"
+    # Base for poster image URLs; a TMDB poster_path is appended (e.g. ".../w342/abc.jpg").
+    tmdb_image_base_url: str = "https://image.tmdb.org/t/p/w342"
     trakt_client_id: str | None = None
     trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"

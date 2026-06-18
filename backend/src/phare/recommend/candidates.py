@@ -75,6 +75,7 @@ def generate_candidates(
                 runtime_minutes=title.runtime_minutes,
                 popularity=title.popularity,
                 overview=title.overview,
+                poster_path=title.poster_path,
                 similarity=1.0 - float(dist),
             )
         )

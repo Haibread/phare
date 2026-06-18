@@ -47,6 +47,13 @@ def build_recommender(
     )
 
 
+def _poster_url(poster_path: str | None) -> str | None:
+    """Compose a full poster URL from a TMDB ``poster_path``; the frontend stays dumb."""
+    if not poster_path:
+        return None
+    return f"{get_settings().tmdb_image_base_url}{poster_path}"
+
+
 def to_item(rec: Recommendation) -> RecommendationItem:
     return RecommendationItem(
         title_id=rec.title_id,
@@ -58,6 +65,7 @@ def to_item(rec: Recommendation) -> RecommendationItem:
         is_swing=rec.is_swing,
         confidence=rec.confidence,
         explanation=rec.explanation,
+        poster_url=_poster_url(rec.poster_path),
         components=rec.components,
     )
 

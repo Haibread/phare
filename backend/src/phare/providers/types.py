@@ -59,6 +59,7 @@ class TitleMetadata(_Frozen):
     year: int | None = None
     runtime_minutes: int | None = None
     overview: str | None = None
+    poster_path: str | None = None
     genres: list[str] = []
     keywords: list[str] = []
     popularity: float | None = None

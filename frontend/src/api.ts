@@ -70,6 +70,7 @@ export const recommendationItemSchema = z.object({
   isSwing: z.boolean(),
   confidence: z.number().nullable(),
   explanation: z.string().nullable(),
+  posterUrl: z.string().nullable(),
   components: z.record(z.number()),
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;

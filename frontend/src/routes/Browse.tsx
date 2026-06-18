@@ -18,7 +18,18 @@ function tint(seed: string): string {
 function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
   return (
     <section className={styles.hero} data-testid="hero">
-      <div className={styles.heroPoster} style={{ background: tint(item.titleId) }} />
+      <div
+        className={styles.heroPoster}
+        style={
+          item.posterUrl
+            ? {
+                backgroundImage: `url(${item.posterUrl})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }
+            : { background: tint(item.titleId) }
+        }
+      />
       <div className={styles.heroBody}>
         <span className={styles.heroKicker}>Top pick tonight</span>
         <h2 className={styles.heroTitle}>

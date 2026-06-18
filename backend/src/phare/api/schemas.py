@@ -92,6 +92,7 @@ class RecommendationItem(ApiModel):
     is_swing: bool
     confidence: float | None = None
     explanation: str | None = None
+    poster_url: str | None = None
     components: dict[str, float]
 
 
