@@ -31,6 +31,10 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
 | `TRAKT_CLIENT_SECRET` | _(unset)_ | Also required for the Trakt OAuth device-connect flow. |
 | `SEERR_BASE_URL` / `SEERR_API_KEY` | _(unset)_ | Instance-wide Seerr fallback; per-profile creds set in the UI take precedence. |
+| **Taste extraction** (cost controls for the auto-refresh) | | |
+| `TASTE_MAX_EVENTS` | `150` | Most recent events fed into a taste extraction. Bounds prompt (input-token) size; recency-weighted, so the tail rarely changes the profile. |
+| `TASTE_REFRESH_MIN_EVENTS` | `8` | New events since the last generation that force an automatic taste refresh. See [Taste auto-refresh gate](#taste-auto-refresh-gate). |
+| `TASTE_REFRESH_MIN_INTERVAL_SECONDS` | `21600` (6 h) | Once the profile is older than this **and** something changed, a smaller trickle of events gets folded in. |
 | **Recommendation tuning** (safe defaults, rarely changed) | | |
 | `RECOMMEND_ROW_SIZE` | `12` | Items per row. |
 | `RECOMMEND_SWING_SLOTS` | `2` | Reserved high-novelty "swing" picks per slate. |
@@ -95,6 +99,37 @@ Self-hosted sources (Plex/Jellyfin/Seerr) get the retry but **no cache**: they'r
 a fresh call. LLM responses aren't cached either — prompts vary, and title embeddings are already
 persisted in Postgres.
 
+### Taste auto-refresh gate
+
+Taste is a derived artifact that re-extracts itself from history (a workhorse LLM call) after a
+profile's events change — on sync, on a chat write, on undo. A full re-extraction for every
+one-episode incremental sync is wasteful, so the **automatic** refresh is gated
+([`taste/service.py`](../backend/src/phare/taste/service.py)): it runs only when
+
+- the profile has never been generated (the first extraction always runs), **or**
+- at least `TASTE_REFRESH_MIN_EVENTS` new events have landed since the last generation, **or**
+- the profile is older than `TASTE_REFRESH_MIN_INTERVAL_SECONDS` *and* at least one event changed
+  (so a slow trickle still gets folded in eventually) — but it never re-runs when nothing changed.
+
+The explicit **`POST /profiles/{id}/taste/generate`** (the "regenerate" button) bypasses the gate
+entirely — it always runs. The gate only governs the silent, best-effort refresh.
+
+### Off-topic chat is declined for free
+
+The chat planner returns an empty tool plan for an off-topic message (general questions, coding,
+chit-chat, prompt-injection probing). When it does, the turn is answered with a deterministic
+steer-back template — **no agent-model call** ([`agent/service.py`](../backend/src/phare/agent/service.py)).
+So the expensive tier is spent only on turns that actually recommend or confirm an action, and the
+prompt-injection-probe path costs nothing on the big model.
+
+### Output length is capped per call
+
+Every LLM call sends a `max_tokens` bound sized to its job — a one-sentence explanation, tool-plan
+JSON, taste JSON, a 1–3 sentence reply ([`providers/llm.py`](../backend/src/phare/providers/llm.py)).
+The outputs are short by construction, so this trims tokens you'd otherwise pay for and then
+discard (the explanation spoiler-check already drops anything that overruns), and it caps the blast
+radius of a misbehaving model.
+
 ### Row explanations — lazy by default
 
 The home screen shows ~50 items across rows, but a card's "why this fits you" reason is only ever
@@ -106,8 +141,12 @@ to explain cards nobody opens**:
 - **The LLM reason is generated lazily, per title.** When a detail sheet opens, the frontend calls
   `GET /profiles/{id}/titles/{titleId}/explanation`, which generates one workhorse-model reason
   ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)), spoiler-checks it, and
-  **caches** it (keyed by `(title, taste summary)`) so re-opening is free. Offline, it returns the
-  template. The sheet shows the template immediately and swaps in the richer reason when it arrives.
+  **caches** it (keyed by `(title, taste summary)`) so re-opening is free. The cache is two-tier: an
+  in-process layer over a durable `title_explanation` Postgres row, so an accepted reason **survives
+  restarts and replicas** — it's generated once per taste version, not re-spent every time the
+  process recycles. It self-invalidates when taste changes (new fingerprint → new row). Offline, it
+  returns the template. The sheet shows the template immediately and swaps in the richer reason when
+  it arrives.
 - **Chat** is unaffected: it always templates its picks (the agent's reply already frames them).
 
 Prefer the old behaviour (eagerly explain the top cards on every home render, concurrently, cached)?

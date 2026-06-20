@@ -94,21 +94,26 @@ class SourceProvider(Protocol):
 
 @runtime_checkable
 class LLMProvider(Protocol):
-    """Chat completion + embeddings (OpenAI-compatible). Used from M2 onward."""
+    """Chat completion + embeddings (OpenAI-compatible). Used from M2 onward.
 
-    def complete(self, prompt: str) -> str: ...
+    ``max_tokens`` caps the response length. Every call site bounds it (the outputs are short —
+    one-sentence blurbs, tool-plan JSON, a 1-3 sentence reply), so a model can't ramble on the
+    clock; ``None`` leaves it to the provider default.
+    """
+
+    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str: ...
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
-def stream_text(llm: LLMProvider, prompt: str) -> Iterator[str]:
+def stream_text(llm: LLMProvider, prompt: str, *, max_tokens: int | None = None) -> Iterator[str]:
     """Yield reply chunks from a provider that implements ``stream``; otherwise one ``complete``
     call as a single chunk. Lets streaming callers degrade gracefully on providers without it."""
     streamer = getattr(llm, "stream", None)
     if callable(streamer):
-        yield from streamer(prompt)
+        yield from streamer(prompt, max_tokens=max_tokens)
     else:
-        yield llm.complete(prompt)
+        yield llm.complete(prompt, max_tokens=max_tokens)
 
 
 class MediaAvailability(enum.StrEnum):

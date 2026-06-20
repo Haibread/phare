@@ -199,6 +199,27 @@ class TitleEmbedding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TitleExplanation(Base):
+    """A cached "why this fits you" reason for a (title, taste version) pair.
+
+    The lazy explanation endpoint generates one workhorse-model sentence per card the user opens.
+    Keying it by the title and the taste *fingerprint* (a hash of the taste summary) lets it
+    persist across restarts and replicas — so a reason is generated once per taste version, not
+    re-spent every time the process recycles. Self-invalidates when taste changes (new fingerprint
+    → new row); stale rows are harmless and just age out of relevance. See ``recommend/explain.py``.
+    """
+
+    __tablename__ = "title_explanation"
+
+    title_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("title.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The taste fingerprint: sha256(summary)[:16], so a fixed-width 16-char hex string.
+    taste_fingerprint: Mapped[str] = mapped_column(String(16), primary_key=True)
+    explanation: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SourceToken(Base):
     """A per-profile access token for an external source (Trakt/Plex/Jellyfin), encrypted.
 

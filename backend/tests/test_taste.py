@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,8 +12,9 @@ from sqlalchemy.orm import Session
 
 from phare.api.app import create_app
 from phare.api.taste import get_llm_provider
+from phare.core.config import get_settings
 from phare.db.base import get_session
-from phare.db.models import Profile, TasteProfile
+from phare.db.models import EventType, Profile, TasteProfile, Title, WatchEvent
 from phare.ingest.sample import seed_sample_data
 from phare.providers.fakes import FakeLLMProvider
 from phare.taste.service import (
@@ -140,7 +142,7 @@ def test_maybe_refresh_taste_swallows_llm_failure(db_session: Session) -> None:
     profile_id = _profile_with_history(db_session)
 
     class _Boom:
-        def complete(self, prompt: str) -> str:
+        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
             raise RuntimeError("llm down")
 
         def embed(self, texts: list[str]) -> list[list[float]]:
@@ -149,6 +151,66 @@ def test_maybe_refresh_taste_swallows_llm_failure(db_session: Session) -> None:
     # A taste failure must never break ingestion.
     assert maybe_refresh_taste(db_session, profile_id, _Boom()) is False
     assert _stored_taste(db_session, profile_id) is None
+
+
+def _add_events(session: Session, profile_id: uuid.UUID, count: int) -> None:
+    """Append ``count`` fresh watch events so the auto-refresh gate sees drift.
+
+    ``ingested_at`` is stamped explicitly because Postgres freezes ``now()`` at transaction start,
+    and the whole test runs in one transaction — so the server default would land *before* the
+    taste's ``generated_at`` and the gate wouldn't see these as new.
+    """
+    title = session.scalar(select(Title))
+    assert title is not None
+    now = datetime.now(UTC)
+    for i in range(count):
+        session.add(
+            WatchEvent(
+                profile_id=profile_id,
+                title_id=title.id,
+                type=EventType.watched,
+                source="test",
+                external_ref=f"gate-{uuid.uuid4()}-{i}",
+                ingested_at=now,
+            )
+        )
+    session.flush()
+
+
+def test_auto_refresh_skips_when_nothing_changed(db_session: Session) -> None:
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion=CANNED)
+    # First call generates (no profile yet); the immediate second call has zero new events → skip.
+    assert maybe_refresh_taste(db_session, profile_id, llm) is True
+    generated_at = _stored_taste(db_session, profile_id).generated_at
+    assert maybe_refresh_taste(db_session, profile_id, llm) is False
+    assert len(llm.prompts) == 1  # the gate spared a second full extraction
+    assert _stored_taste(db_session, profile_id).generated_at == generated_at
+
+
+def test_auto_refresh_runs_after_enough_new_events(db_session: Session) -> None:
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion=CANNED)
+    assert maybe_refresh_taste(db_session, profile_id, llm) is True
+    _add_events(db_session, profile_id, get_settings().taste_refresh_min_events)
+    # Enough drift since the last generation → worth a re-read.
+    assert maybe_refresh_taste(db_session, profile_id, llm) is True
+    assert len(llm.prompts) == 2
+
+
+def test_auto_refresh_folds_in_trickle_once_stale(db_session: Session) -> None:
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion=CANNED)
+    assert maybe_refresh_taste(db_session, profile_id, llm) is True
+    # A single new event isn't enough on its own...
+    _add_events(db_session, profile_id, 1)
+    assert maybe_refresh_taste(db_session, profile_id, llm) is False
+    # ...but once the profile is older than the interval, the trickle gets folded in.
+    taste = _stored_taste(db_session, profile_id)
+    interval = get_settings().taste_refresh_min_interval_seconds
+    taste.generated_at = datetime.now(UTC) - timedelta(seconds=interval + 60)
+    db_session.flush()
+    assert maybe_refresh_taste(db_session, profile_id, llm) is True
 
 
 def test_optional_llm_provider_none_without_key() -> None:

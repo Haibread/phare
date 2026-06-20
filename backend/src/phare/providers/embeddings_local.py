@@ -29,7 +29,9 @@ class LocalHashEmbeddingProvider:
     def __init__(self, dim: int = 1536) -> None:
         self.dim = dim
 
-    def complete(self, prompt: str) -> str:  # pragma: no cover - not a chat model
+    def complete(  # pragma: no cover - not a chat model
+        self, prompt: str, *, max_tokens: int | None = None
+    ) -> str:
         raise NotImplementedError("LocalHashEmbeddingProvider does not do chat completion")
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:

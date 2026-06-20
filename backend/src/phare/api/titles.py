@@ -24,7 +24,11 @@ from phare.api.schemas import TitleDetail
 from phare.db.base import get_session
 from phare.db.models import TasteProfile, Title, TitleKind
 from phare.providers.types import LLMProvider
-from phare.recommend.explain import _EXPLANATION_CACHE, stream_lazy_reason
+from phare.recommend.explain import (
+    _EXPLANATION_CACHE,
+    PersistentReasonCache,
+    stream_lazy_reason,
+)
 from phare.recommend.schema import Recommendation
 from phare.taste.service import effective_profile
 
@@ -89,8 +93,12 @@ def stream_title_explanation(
         score=0.0,
     )
 
+    # Two-tier cache: in-process L1 over a Postgres L2, so an accepted reason survives restarts
+    # instead of being re-generated (a workhorse call) after every recycle.
+    cache = PersistentReasonCache(session, _EXPLANATION_CACHE)
+
     def events() -> Iterator[str]:
-        for chunk in stream_lazy_reason(rec, taste, chat_llm, _EXPLANATION_CACHE):
+        for chunk in stream_lazy_reason(rec, taste, chat_llm, cache):
             yield _sse("delta", {"text": chunk})
         yield _sse("done", {})
 

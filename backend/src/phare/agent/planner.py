@@ -24,6 +24,10 @@ from phare.providers.types import LLMProvider
 
 logger = logging.getLogger(__name__)
 
+# The plan is a small JSON object (a few tool calls); cap the response so the workhorse can't
+# over-generate on the planning step.
+_PLAN_MAX_TOKENS = 300
+
 _SYSTEM = """You are the planner for a movie & TV recommendation assistant. You ONLY handle movies,
 TV, and the user's own taste / watch history — nothing else. Decide which TOOLS to run for the
 user's message. You never pick titles yourself — tools do retrieval and ranking.
@@ -85,18 +89,27 @@ def plan(
     *,
     now: datetime,
 ) -> AgentPlan:
-    """Ask the LLM for a tool plan. On any failure, fall back to a single recommend (read-only)."""
+    """Ask the LLM for a tool plan.
+
+    An *explicit* empty plan (``{"calls": []}``) is the planner declining an off-topic message —
+    it's returned as-is so the service can answer with a templated steer-back instead of spending
+    the agent model on a decline. A malformed response (no ``calls`` key, or a parse error) is
+    treated as "the model didn't follow the contract" and falls back to a single recommend so a
+    normal request never silently does nothing.
+    """
     context = _context_block(session, profile_id, now)
     prompt = f"{_SYSTEM}\nContext:\n{context}\n\nUser message: {message}\n"
     try:
-        raw = _strip_fence(llm.complete(prompt))
+        raw = _strip_fence(llm.complete(prompt, max_tokens=_PLAN_MAX_TOKENS))
         parsed = json.loads(raw)
+        if not isinstance(parsed, dict) or "calls" not in parsed:
+            return AgentPlan(calls=[ToolCall(tool="recommend")])
         calls = [
             ToolCall(tool=str(c["tool"]), args=dict(c.get("args", {})))
-            for c in parsed.get("calls", [])
+            for c in parsed["calls"]
             if c.get("tool")
         ]
-        return AgentPlan(calls=calls or [ToolCall(tool="recommend")])
+        return AgentPlan(calls=calls)  # may be empty → off-topic decline, handled by the service
     except Exception:  # noqa: BLE001 - a flaky planner must not break the chat turn
         logger.warning("agent.plan_failed; defaulting to recommend")
         return AgentPlan(calls=[ToolCall(tool="recommend")])

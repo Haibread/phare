@@ -116,7 +116,7 @@ def propose_themes(taste: Mapping[str, Any], now: datetime, llm: LLMProvider | N
         avoid=", ".join(taste.get("hard_avoids") or []) or "(nothing specific)",
     )
     try:
-        raw = llm.complete(prompt).strip()
+        raw = llm.complete(prompt, max_tokens=250).strip()
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1].removeprefix("json").strip()
         parsed = json.loads(raw)
