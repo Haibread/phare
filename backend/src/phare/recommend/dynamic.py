@@ -20,7 +20,9 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from phare.db.models import ROW_KEY_MAX_LEN
+from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
+from phare.recommend.explain import _taste_fingerprint
 from phare.recommend.log import log_rows
 from phare.recommend.schema import Candidate, Row
 
@@ -28,6 +30,11 @@ if TYPE_CHECKING:
     from phare.recommend.service import RecommendationService
 
 logger = logging.getLogger(__name__)
+
+# "Today's picks" should be stable for the day, not re-proposed (an LLM call) on every home render.
+# Caching themes per (taste, day) removes the recurring theme call AND stabilises the per-theme
+# title sets so the explanation cache can warm. Re-keys when taste changes or the day rolls over.
+_THEME_CACHE: TTLCache = TTLCache(ttl=86_400, maxsize=512)
 
 
 class Theme(BaseModel):
@@ -151,8 +158,17 @@ def dynamic_rows(
     """Build today's themed rows. Each theme is filled through the same engine."""
     service.ensure_embeddings()
     taste = service.load_taste(profile_id)
-    themes = propose_themes(taste, now or datetime.now(UTC), llm)
+    when = now or datetime.now(UTC)
+    # Stable for the day per taste — see _THEME_CACHE. Stamps the recurring LLM theme call out.
+    theme_key = (_taste_fingerprint(taste), when.date().isoformat())
+    themes = _THEME_CACHE.get_or_set(theme_key, lambda: propose_themes(taste, when, llm))
 
+    # One bounded explainer pooled across the themed rows — same discipline as the static home
+    # rows. Without it each theme's recommend() would build its own *unbounded* explainer and fan
+    # out a per-item LLM explanation call for every card (slow + costly on a cold cache).
+    explainer = service._explainer(
+        with_llm=service.chat_llm is not None, budget=service.explanation_budget
+    )
     rows: list[Row] = []
     for theme in themes:
         items = service.recommend(
@@ -160,6 +176,7 @@ def dynamic_rows(
             taste=taste,
             candidate_filter=_genre_filter(theme.include_genres),
             swing_slots=theme.swing_slots,
+            explainer=explainer,
         )
         if items:
             rows.append(Row(key=theme.key, title=theme.title, items=items))
