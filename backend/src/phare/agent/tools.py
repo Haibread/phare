@@ -55,7 +55,6 @@ class ToolContext:
     recommender: RecommendationService
     now: datetime
     metadata: CatalogSearchSource | None  # TMDB provider for live title resolution
-    llm: object | None  # chat LLM; presence enables writes + taste refresh
 
 
 @dataclass
@@ -292,8 +291,10 @@ def execute_plan(ctx: ToolContext, plan: AgentPlan) -> ExecutionResult:
             handler(ctx, call.args, result)
         except Exception:  # noqa: BLE001 - one bad tool call must not sink the whole turn
             logger.warning("agent.tool_failed", extra={"tool": call.tool})
-    if result.taste_dirty and ctx.llm is not None:
-        maybe_refresh_taste(ctx.session, ctx.profile_id, ctx.llm)  # type: ignore[arg-type]
+    if result.taste_dirty:
+        # Taste extraction is mechanical JSON — use the recommender's (workhorse) model, not the
+        # bigger agent model. No-ops when offline. The caller owns the commit.
+        maybe_refresh_taste(ctx.session, ctx.profile_id, ctx.recommender.chat_llm)
     return result
 
 

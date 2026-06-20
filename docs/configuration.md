@@ -19,7 +19,8 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | **LLM + embeddings** | | |
 | `LLM_API_KEY` | _(unset)_ | OpenAI-compatible key. **Unset = fully offline fallback** (see below). |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | Point at any OpenAI-compatible endpoint (Ollama, LM Studio, etc.). |
-| `LLM_CHAT_MODEL` | `gpt-4o-mini` | Chat/completion model (taste extraction, explanations, chat agent, dynamic rows). |
+| `LLM_CHAT_MODEL` | `gpt-4o-mini` | Workhorse chat/completion model: taste extraction, explanations, dynamic rows. |
+| `LLM_AGENT_MODEL` | _(falls back to `LLM_CHAT_MODEL`)_ | Optional stronger model for the **conversational chat agent** (planner + natural-language reply). Lets chat use a bigger model while the high-volume mechanical work stays cheap. |
 | `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Doubles as the embedding-space version tag. |
 | `LLM_EMBEDDING_DIM` | `1536` | Vector dimension. Fixed by the DB schema — changing it needs a migration + full re-embed. |
 | **Metadata + sources** (live syncs/imports only; not needed for the sample-data path) | | |
@@ -82,3 +83,27 @@ the active one. So you can run offline first, then add a key later.
    `embeddings.deferred` when more remain.
 3. If you change `LLM_EMBEDDING_DIM` (different-dimension model), that needs a schema migration in
    addition to the re-embed.
+
+### Choosing models (split by job)
+
+Phare asks the LLM to do two very different things, and you can point them at different models:
+
+- **Workhorse** (`LLM_CHAT_MODEL`) — high-volume, mechanical: per-item explanations, taste-extraction
+  JSON, dynamic-row naming. Wants a fast, cheap model with reliable JSON. Bigger is *not* better here,
+  and pure-reasoning models are worse (they wrap output in thinking traces).
+- **Conversational agent** (`LLM_AGENT_MODEL`) — the chat planner and the natural-language reply.
+  Tone, nuance, and not mis-hearing you matter, so a stronger *instruct* model earns its keep.
+
+Example (Scaleway Generative APIs):
+
+```bash
+LLM_BASE_URL=https://api.scaleway.ai/v1
+LLM_CHAT_MODEL=qwen/qwen3.6-35b-a3b:bf16            # cheap, fast, agentic — the workhorse
+LLM_AGENT_MODEL=qwen/qwen3-235b-a22b-instruct-2507  # bigger instruct model for chat
+LLM_EMBEDDING_MODEL=qwen/qwen3-embedding-8b          # Matryoshka → set dim to match the schema
+LLM_EMBEDDING_DIM=1536
+```
+
+`qwen3-embedding-8b` supports configurable (Matryoshka) dimensions, so it can serve the schema's
+1536 without a migration — provided the provider sends a `dimensions` request (see the embeddings
+provider). `bge-multilingual-gemma2` is excellent too but fixed at 3584 dims (needs a migration).
