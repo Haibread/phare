@@ -40,14 +40,13 @@ def _recommender(session: Session) -> RecommendationService:
     )
 
 
-def _ctx(session: Session, profile_id: uuid.UUID, *, llm: object | None = None) -> ToolContext:
+def _ctx(session: Session, profile_id: uuid.UUID) -> ToolContext:
     return ToolContext(
         session=session,
         profile_id=profile_id,
         recommender=_recommender(session),
         now=_NOW,
         metadata=None,  # local title resolution (ilike) — no TMDB in tests
-        llm=llm,
     )
 
 
@@ -62,11 +61,9 @@ def _seed(session: Session) -> uuid.UUID:
     return profile.id
 
 
-def _run(
-    session: Session, profile_id: uuid.UUID, tool: str, args: dict, *, llm: object | None = None
-):
+def _run(session: Session, profile_id: uuid.UUID, tool: str, args: dict):
     plan = AgentPlan(calls=[ToolCall(tool=tool, args=args)])
-    return execute_plan(_ctx(session, profile_id, llm=llm), plan)
+    return execute_plan(_ctx(session, profile_id), plan)
 
 
 # --- planner -----------------------------------------------------------------
@@ -199,6 +196,30 @@ def test_memory_notes_feed_taste_extraction_prompt(db_session: Session) -> None:
     assert any("watching with my kid" in p for p in llm.prompts)
 
 
+# --- composer: natural-language reply with a template fallback ---------------
+
+
+def test_compose_reply_uses_model_text_and_falls_back() -> None:
+    from phare.agent.schema import AgentAction
+    from phare.agent.service import _compose_reply_llm
+    from phare.agent.tools import ExecutionResult
+
+    result = ExecutionResult(actions=[AgentAction(kind="logged_signal", summary="logged Dune")])
+
+    ok = _compose_reply_llm(FakeLLMProvider(completion="Lovely — noted!"), "msg", result)
+    assert ok == "Lovely — noted!"
+
+    class _Boom:
+        def complete(self, prompt: str) -> str:
+            raise RuntimeError("down")
+
+        def embed(self, texts: object) -> object:  # pragma: no cover
+            raise NotImplementedError
+
+    fell_back = _compose_reply_llm(_Boom(), "msg", result)
+    assert "logged Dune" in fell_back  # deterministic template
+
+
 # --- service turn (planner → tools → reply) ----------------------------------
 
 
@@ -213,6 +234,8 @@ class _RoutingLLM:
         self.prompts.append(prompt)
         if "planner" in prompt.lower():
             return self.plan_json
+        if "chat assistant" in prompt.lower():  # the composer prompt
+            return "Nice — noted that for you."
         return (
             '{"summary":"x","likes":[],"dislikes":[],"hard_avoids":[],"affinities":{},'
             '"comfort_axis":null,"discovery_tolerance":0.5,"confidence":0.5}'
@@ -230,7 +253,8 @@ def test_service_tool_turn_logs_signal_and_confirms(db_session: Session) -> None
     reply = service.respond(profile_id, "I already saw Dune and loved it", now=_NOW)
 
     assert reply.actions and reply.actions[0].kind == "logged_signal"
-    assert "Dune" in reply.reply_text
+    assert "Dune" in reply.actions[0].summary  # the write is recorded deterministically
+    assert reply.reply_text  # the agent model wrote a natural reply
     assert any(
         e.source == "chat"
         for e in db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id))

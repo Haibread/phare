@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
     llm_chat_model: str = "gpt-4o-mini"
+    # The conversational chat agent (planner + natural-language reply) can use a stronger model
+    # than the high-volume mechanical work (explanations, taste). Falls back to llm_chat_model.
+    llm_agent_model: str | None = None
     llm_embedding_model: str = "text-embedding-3-small"
     llm_embedding_dim: int = 1536
 
@@ -78,6 +81,11 @@ class Settings(BaseSettings):
     auth_password: str | None = None
     secret_key: str | None = None
     auth_token_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+
+    @property
+    def agent_chat_model(self) -> str:
+        """Conversational chat-agent model — the bigger one when set, else the chat model."""
+        return self.llm_agent_model or self.llm_chat_model
 
     @property
     def auth_enabled(self) -> bool:

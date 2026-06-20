@@ -46,13 +46,27 @@ def get_embedder() -> Embedder:
 
 
 def get_optional_chat_llm() -> LLMProvider | None:
-    """Chat-completion provider for explanations / intent / replies, or ``None`` if unconfigured."""
+    """Workhorse chat-completion provider (explanations / taste / intent), or ``None`` if no key."""
     settings = get_settings()
     if not settings.llm_api_key:
         return None
     return OpenAILLMProvider(
         api_key=settings.llm_api_key,
         chat_model=settings.llm_chat_model,
+        embedding_model=settings.llm_embedding_model,
+        base_url=settings.llm_base_url,
+    )
+
+
+def get_optional_agent_llm() -> LLMProvider | None:
+    """Conversational chat-agent provider (planner + natural-language reply). May be a bigger model
+    than the workhorse (``LLM_AGENT_MODEL``); falls back to the chat model. ``None`` if no key."""
+    settings = get_settings()
+    if not settings.llm_api_key:
+        return None
+    return OpenAILLMProvider(
+        api_key=settings.llm_api_key,
+        chat_model=settings.agent_chat_model,
         embedding_model=settings.llm_embedding_model,
         base_url=settings.llm_base_url,
     )

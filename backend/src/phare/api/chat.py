@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 from phare.agent import commitments as commitments_store
 from phare.agent.service import ChatService
 from phare.agent.tools import undo_action
-from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
+from phare.api.deps import (
+    Embedder,
+    get_embedder,
+    get_optional_agent_llm,
+    get_optional_chat_llm,
+)
 from phare.api.recommend import build_recommender, require_profile, to_item
 from phare.api.schemas import (
     AgentActionResponse,
@@ -37,10 +42,12 @@ def chat(
     session: Annotated[Session, Depends(get_session)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+    agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
 ) -> ChatReplyResponse:
     require_profile(session, profile_id)
+    # Explanations (high volume) use the workhorse model; the conversational agent uses agent_llm.
     recommender = build_recommender(session, embedder, chat_llm)
-    reply = ChatService(recommender, chat_llm).respond(profile_id, body.message)
+    reply = ChatService(recommender, agent_llm).respond(profile_id, body.message)
     session.commit()
     return ChatReplyResponse(
         reply_text=reply.reply_text,

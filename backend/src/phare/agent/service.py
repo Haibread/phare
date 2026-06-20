@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from phare.agent import planner
 from phare.agent.intent import parse_intent
 from phare.agent.schema import ChatIntent, ChatReply
-from phare.agent.tools import ToolContext, execute_plan
+from phare.agent.tools import ExecutionResult, ToolContext, execute_plan
 from phare.core.config import get_settings
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider
@@ -100,7 +100,6 @@ class ChatService:
             recommender=self.recommender,
             now=now,
             metadata=metadata,
-            llm=self.chat_llm,
         )
         agent_plan = planner.plan(session, profile_id, message, self.chat_llm, now=now)
         result = execute_plan(ctx, agent_plan)
@@ -116,15 +115,15 @@ class ChatService:
             },
         )
         return ChatReply(
-            reply_text=_compose_reply(result),
+            reply_text=_compose_reply_llm(self.chat_llm, message, result),
             intent=result.intent,
             items=result.items,
             actions=result.actions,
         )
 
 
-def _compose_reply(result) -> str:  # type: ignore[no-untyped-def]
-    """Deterministic reply from what the tools did — confirmations, misses, then picks."""
+def _compose_reply_template(result: ExecutionResult) -> str:
+    """Deterministic reply — the offline path, and the fallback if the LLM composer fails."""
     bits: list[str] = []
     if result.actions:
         bits.append("Got it — " + "; ".join(a.summary for a in result.actions) + ".")
@@ -135,3 +134,33 @@ def _compose_reply(result) -> str:  # type: ignore[no-untyped-def]
     elif not result.actions and not result.notes:
         bits.append("I couldn't find a good match — try loosening the constraints a little.")
     return " ".join(bits) if bits else "Done."
+
+
+_COMPOSE_SYSTEM = """You are a warm, concise movie/TV chat assistant. Write a natural reply (1-3
+sentences) to the user's message, reflecting what just happened.
+
+- Actions taken on their behalf (confirm them naturally, don't list robotically): {actions}
+- Things that didn't work (mention briefly if any): {notes}
+- Titles being suggested — refer to them by name, NEVER describe plot: {titles}
+
+Be friendly and brief. Never spoil plot. Only mention titles from the list. If there are
+suggestions, lightly invite them in. Output ONLY the reply text, no preamble.
+"""
+
+
+def _compose_reply_llm(agent_llm: LLMProvider, message: str, result: ExecutionResult) -> str:
+    """Natural-language reply from the agent model, grounded in what the tools actually did."""
+    prompt = (
+        _COMPOSE_SYSTEM.format(
+            actions="; ".join(a.summary for a in result.actions) or "(none)",
+            notes="; ".join(result.notes) or "(none)",
+            titles=", ".join(i.title for i in result.items) or "(none)",
+        )
+        + f"\nUser message: {message}\n"
+    )
+    try:
+        text = agent_llm.complete(prompt).strip()
+        return text or _compose_reply_template(result)
+    except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
+        logger.warning("agent.compose_failed; using template reply")
+        return _compose_reply_template(result)
