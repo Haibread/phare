@@ -7,14 +7,32 @@ inputs (overview, genres, keywords) and the global popularity signal.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
 from phare.db.models import TitleKind
+from phare.providers.http import DEFAULT_MAX_RETRIES, TTLCache, request_with_retry
 from phare.providers.types import ExternalMatch, TitleMetadata
 
 logger = logging.getLogger(__name__)
+
+# TMDB metadata changes slowly, so idempotent reads are cached process-wide (shared across the
+# per-request provider instances) to cut repeat third-party traffic — e.g. the chat agent resolving
+# the same title on consecutive turns. The TTL is operator-tunable via TMDB_CACHE_TTL_SECONDS.
+DEFAULT_CACHE_TTL_SECONDS = 3600
+_shared_cache: TTLCache | None = None
+
+
+def _get_shared_cache(ttl: float) -> TTLCache:
+    """Process-wide TMDB read cache, created once. The first construction's TTL wins; since it
+    comes from a single settings value that's the same every time, that's fine."""
+    global _shared_cache
+    if _shared_cache is None:
+        _shared_cache = TTLCache(ttl=ttl, maxsize=4096)
+    return _shared_cache
 
 
 def _year(date_str: str | None) -> int | None:
@@ -33,16 +51,37 @@ class TMDBMetadataProvider:
         api_key: str,
         base_url: str = "https://api.themoviedb.org/3",
         client: httpx.Client | None = None,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl: float = DEFAULT_CACHE_TTL_SECONDS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._api_key = api_key
         self._client = client or httpx.Client(base_url=base_url, timeout=10.0)
+        # Tests inject an isolated cache; production shares one across request-scoped instances.
+        self._cache = cache if cache is not None else _get_shared_cache(cache_ttl)
+        self._max_retries = max_retries
+        self._sleep = sleep
 
-    def _get(self, path: str, **params: str) -> dict[str, Any]:
-        params["api_key"] = self._api_key
+    def _fetch(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         logger.debug("tmdb.request", extra={"path": path})
-        response = self._client.get(path, params=params)
+        response = request_with_retry(
+            self._client,
+            "GET",
+            path,
+            name="tmdb",
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            params={**params, "api_key": self._api_key},
+        )
         response.raise_for_status()
         return response.json()
+
+    def _get(self, path: str, **params: str) -> dict[str, Any]:
+        # Cache key excludes the api_key so it stays stable; reads are idempotent.
+        key = (path, tuple(sorted(params.items())))
+        return self._cache.get_or_set(key, lambda: self._fetch(path, params))
 
     def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata | None:
         if kind is TitleKind.movie:

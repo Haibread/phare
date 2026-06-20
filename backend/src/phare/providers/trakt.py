@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from phare.db.models import EventType
+from phare.providers.http import request_with_retry
 from phare.providers.types import RawEvent, RawMediaType
 
 logger = logging.getLogger(__name__)
@@ -151,25 +152,19 @@ class TraktSourceProvider:
         self._max_retries = max_retries
         self._sleep = sleep
 
-    @staticmethod
-    def _retry_after(response: httpx.Response, *, default: float = 1.0, cap: float = 60.0) -> float:
-        """Seconds to wait before retrying a 429, honouring Retry-After (clamped)."""
-        raw = response.headers.get("Retry-After", "")
-        seconds = float(raw) if raw.isdigit() else default
-        return min(max(seconds, 0.0), cap)
-
     def _get(self, path: str, params: dict[str, str]) -> httpx.Response:
         """GET with bounded backoff on Trakt's 429 rate limit (honours Retry-After)."""
-        for attempt in range(self._max_retries + 1):
-            response = self._client.get(path, params=params)
-            if response.status_code == 429 and attempt < self._max_retries:
-                wait = self._retry_after(response)
-                logger.warning("trakt.rate_limited", extra={"path": path, "retry_after": wait})
-                self._sleep(wait)
-                continue
-            response.raise_for_status()
-            return response
-        raise RuntimeError("unreachable")  # pragma: no cover
+        response = request_with_retry(
+            self._client,
+            "GET",
+            path,
+            name="trakt",
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            params=params,
+        )
+        response.raise_for_status()
+        return response
 
     def _paginate(self, path: str, params: dict[str, str]) -> Iterator[dict[str, Any]]:
         page = 1

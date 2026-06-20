@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     tmdb_base_url: str = "https://api.themoviedb.org/3"
     # Base for poster image URLs; a TMDB poster_path is appended (e.g. ".../w342/abc.jpg").
     tmdb_image_base_url: str = "https://image.tmdb.org/t/p/w342"
+    # In-process TTL (seconds) for cached TMDB metadata/search reads. 0 disables caching.
+    tmdb_cache_ttl_seconds: int = 3600
     trakt_client_id: str | None = None
     trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"
