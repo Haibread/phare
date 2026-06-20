@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,11 +18,19 @@ from phare.db.models import ROW_KEY_MAX_LEN, Profile, RecommendationLog
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
+from phare.providers.http import TTLCache
 from phare.recommend.dynamic import _slug, dynamic_rows, propose_themes
 from phare.recommend.service import RecommendationService
 
 _OCTOBER = datetime(2026, 10, 15, tzinfo=UTC)
 _MARCH = datetime(2026, 3, 15, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_theme_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Themes are cached process-wide per (taste, day); seeded profiles share an empty-taste
+    # fingerprint, so give each test an isolated cache to avoid cross-test bleed.
+    monkeypatch.setattr("phare.recommend.dynamic._THEME_CACHE", TTLCache(ttl=300))
 
 
 def test_fallback_uses_season_taste_and_discovery() -> None:
@@ -100,6 +109,28 @@ def test_dynamic_rows_built_and_genre_scoped(db_session: Session) -> None:
     assert spooky is not None
     # The spooky row is genre-scoped to horror candidates (catalog has horror titles).
     assert all("Horror" in item.genres for item in spooky.items)
+
+
+def test_dynamic_rows_explanation_calls_are_bounded(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Like the static home rows, the themed rows must pool one bounded explanation budget rather
+    # than fan out a per-item LLM call per card across every theme.
+    monkeypatch.setattr("phare.recommend.service._EXPLANATION_CACHE", TTLCache(ttl=300))
+    profile_id = _seeded(db_session)
+    llm = FakeLLMProvider(completion="A great fit for your taste.")
+    service = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=llm,
+        explanation_budget=3,
+    )
+
+    rows = dynamic_rows(service, profile_id, llm=None, now=_OCTOBER)  # deterministic themes
+
+    assert sum(len(r.items) for r in rows) > 3  # many cards across themed rows...
+    assert len(llm.prompts) <= 3  # ...but the LLM is called at most `budget` times, not per card
 
 
 def test_dynamic_rows_long_llm_theme_logs_fitting_key(db_session: Session) -> None:
