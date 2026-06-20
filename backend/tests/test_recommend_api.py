@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from phare.api.app import create_app
-from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
+from phare.api.deps import (
+    Embedder,
+    get_embedder,
+    get_optional_agent_llm,
+    get_optional_chat_llm,
+)
 from phare.db.base import get_session
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
+from phare.providers.fakes import FakeLLMProvider
 
 
 def _client(session: Session) -> TestClient:
@@ -19,6 +27,21 @@ def _client(session: Session) -> TestClient:
     )
     app.dependency_overrides[get_optional_chat_llm] = lambda: None
     return TestClient(app)
+
+
+def _sse_events(text: str) -> list[dict]:
+    """Parse an SSE body into a list of {event, data} dicts."""
+    events: list[dict] = []
+    for block in text.strip().split("\n\n"):
+        event: dict = {}
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event["event"] = line[len("event:") :].strip()
+            elif line.startswith("data:"):
+                event["data"] = json.loads(line[len("data:") :].strip())
+        if event:
+            events.append(event)
+    return events
 
 
 def _profile_with_data(client: TestClient) -> str:
@@ -63,6 +86,52 @@ def test_chat_journey(db_session: Session) -> None:
     assert body["intent"]["includeGenres"] == ["Comedy"]
     assert body["intent"]["maxRuntime"] == 100  # "short" -> 100-minute ceiling
     assert "replyText" in body
+
+
+def test_chat_stream_offline_emits_meta_then_reply(db_session: Session) -> None:
+    client = _client(db_session)  # offline (no LLM): deterministic reply, still streamed as SSE
+    profile_id = _profile_with_data(client)
+
+    response = client.post(
+        f"/profiles/{profile_id}/chat/stream", json={"message": "something funny and short"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    events = _sse_events(response.text)
+    assert events[0]["event"] == "meta"
+    assert events[-1]["event"] == "done"
+    assert events[0]["data"]["intent"]["includeGenres"] == ["Comedy"]
+    reply = "".join(e["data"]["text"] for e in events if e["event"] == "delta")
+    assert reply  # a (deterministic) reply was streamed
+
+
+def test_chat_stream_with_llm_streams_chunks(db_session: Session) -> None:
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: db_session
+    app.dependency_overrides[get_embedder] = lambda: Embedder(
+        provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+    )
+    # Workhorse plans a recommend; the agent model streams the natural reply word-by-word.
+    app.dependency_overrides[get_optional_chat_llm] = lambda: FakeLLMProvider(
+        completion='{"calls":[{"tool":"recommend","args":{}}]}'
+    )
+    app.dependency_overrides[get_optional_agent_llm] = lambda: FakeLLMProvider(
+        completion="A few ideas you might enjoy tonight!"
+    )
+    client = TestClient(app)
+    profile_id = _profile_with_data(client)
+
+    response = client.post(
+        f"/profiles/{profile_id}/chat/stream", json={"message": "something to watch"}
+    )
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+
+    deltas = [e for e in events if e["event"] == "delta"]
+    assert len(deltas) > 1  # streamed in multiple chunks, not one blob
+    assert "".join(d["data"]["text"] for d in deltas) == "A few ideas you might enjoy tonight!"
+    assert events[0]["data"]["items"]  # picks surfaced in the meta event
 
 
 def test_catalog_sample_idempotent_over_http(db_session: Session) -> None:

@@ -11,20 +11,40 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from phare.agent import planner
 from phare.agent.intent import parse_intent
-from phare.agent.schema import ChatIntent, ChatReply
+from phare.agent.schema import AgentAction, ChatIntent, ChatReply
 from phare.agent.tools import ExecutionResult, ToolContext, execute_plan
 from phare.core.config import get_settings
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider
 from phare.recommend.log import log_chat
-from phare.recommend.schema import Candidate
+from phare.recommend.schema import Candidate, Recommendation
 from phare.recommend.service import RecommendationService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreparedTurn:
+    """The result of running a chat turn's tools — everything except the natural-language reply.
+
+    Splitting this out lets the streaming endpoint persist the writes and surface the picks/actions
+    immediately, then stream the reply text on top. ``reply_text`` is set on the deterministic
+    (offline) path; otherwise ``compose_prompt`` is streamed through the agent model.
+    """
+
+    items: list[Recommendation]
+    actions: list[AgentAction]
+    intent: ChatIntent
+    notes: list[str] = field(default_factory=list)
+    reply_text: str | None = None
+    compose_prompt: str | None = None
+    result: ExecutionResult | None = None
 
 
 def intent_filter(intent: ChatIntent):
@@ -70,12 +90,33 @@ class ChatService:
     def respond(
         self, profile_id: uuid.UUID, message: str, *, now: datetime | None = None
     ) -> ChatReply:
+        """Full (non-streaming) turn: run the tools, then compose the reply in one blocking call."""
+        prepared = self.prepare(profile_id, message, now=now)
+        if prepared.reply_text is not None:
+            text = prepared.reply_text
+        else:
+            text = _compose_with_fallback(self.chat_llm, prepared.compose_prompt, prepared.result)
+        return ChatReply(
+            reply_text=text,
+            intent=prepared.intent,
+            items=prepared.items,
+            actions=prepared.actions,
+        )
+
+    def prepare(
+        self, profile_id: uuid.UUID, message: str, *, now: datetime | None = None
+    ) -> PreparedTurn:
+        """Run the turn's tools/recommendation (the DB-touching work) without composing the reply.
+
+        The caller persists the writes, then either reads ``reply_text`` (offline) or streams
+        ``compose_prompt`` through the agent model.
+        """
         self.recommender.ensure_embeddings()
         if self.chat_llm is None:
-            return self._respond_offline(profile_id, message)
-        return self._respond_with_tools(profile_id, message, now or datetime.now(UTC))
+            return self._prepare_offline(profile_id, message)
+        return self._prepare_with_tools(profile_id, message, now or datetime.now(UTC))
 
-    def _respond_offline(self, profile_id: uuid.UUID, message: str) -> ChatReply:
+    def _prepare_offline(self, profile_id: uuid.UUID, message: str) -> PreparedTurn:
         intent = parse_intent(message, None)  # keyword parser; no writes without the LLM
         items = self.recommender.recommend(
             profile_id,
@@ -84,9 +125,13 @@ class ChatService:
             swing_slots=1,
         )
         log_chat(self.recommender.session, profile_id, items)
-        return ChatReply(reply_text=_reply_text(intent, len(items)), intent=intent, items=items)
+        return PreparedTurn(
+            items=items, actions=[], intent=intent, reply_text=_reply_text(intent, len(items))
+        )
 
-    def _respond_with_tools(self, profile_id: uuid.UUID, message: str, now: datetime) -> ChatReply:
+    def _prepare_with_tools(
+        self, profile_id: uuid.UUID, message: str, now: datetime
+    ) -> PreparedTurn:
         session = self.recommender.session
         settings = get_settings()
         metadata = (
@@ -122,11 +167,13 @@ class ChatService:
                 "item_count": len(result.items),
             },
         )
-        return ChatReply(
-            reply_text=_compose_reply_llm(self.chat_llm, message, result),
-            intent=result.intent,
+        return PreparedTurn(
             items=result.items,
             actions=result.actions,
+            intent=result.intent,
+            notes=result.notes,
+            compose_prompt=build_compose_prompt(message, result),
+            result=result,
         )
 
 
@@ -159,9 +206,9 @@ list above. Output ONLY the reply text, no preamble.
 """
 
 
-def _compose_reply_llm(agent_llm: LLMProvider, message: str, result: ExecutionResult) -> str:
-    """Natural-language reply from the agent model, grounded in what the tools actually did."""
-    prompt = (
+def build_compose_prompt(message: str, result: ExecutionResult) -> str:
+    """The grounded composer prompt — what the agent model turns into a natural reply."""
+    return (
         _COMPOSE_SYSTEM.format(
             actions="; ".join(a.summary for a in result.actions) or "(none)",
             notes="; ".join(result.notes) or "(none)",
@@ -169,9 +216,55 @@ def _compose_reply_llm(agent_llm: LLMProvider, message: str, result: ExecutionRe
         )
         + f"\nUser message: {message}\n"
     )
+
+
+def _compose_with_fallback(
+    agent_llm: LLMProvider | None, prompt: str | None, result: ExecutionResult | None
+) -> str:
+    """Blocking compose with a template fallback (the non-streaming path)."""
+    if agent_llm is None or prompt is None:
+        return _compose_reply_template(result) if result is not None else "Done."
     try:
         text = agent_llm.complete(prompt).strip()
         return text or _compose_reply_template(result)
     except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
         logger.warning("agent.compose_failed; using template reply")
         return _compose_reply_template(result)
+
+
+def _compose_reply_llm(agent_llm: LLMProvider, message: str, result: ExecutionResult) -> str:
+    """Natural-language reply from the agent model, grounded in what the tools actually did."""
+    return _compose_with_fallback(agent_llm, build_compose_prompt(message, result), result)
+
+
+def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Iterator[str]:
+    """Stream the reply text chunk-by-chunk, falling back to the deterministic template.
+
+    Uses the provider's ``stream`` when present, else one ``complete`` call. A streaming error or
+    an empty stream degrades to the template so a flaky composer never leaves an empty bubble.
+    """
+    if prepared.reply_text is not None:  # offline / deterministic path
+        yield prepared.reply_text
+        return
+    if agent_llm is None or prepared.compose_prompt is None:
+        yield _compose_reply_template(prepared.result) if prepared.result else "Done."
+        return
+    try:
+        produced = False
+        for chunk in _stream_text(agent_llm, prepared.compose_prompt):
+            produced = True
+            yield chunk
+        if not produced:
+            yield _compose_reply_template(prepared.result)
+    except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
+        logger.warning("agent.stream_failed; using template reply")
+        yield _compose_reply_template(prepared.result)
+
+
+def _stream_text(llm: LLMProvider, prompt: str) -> Iterator[str]:
+    """Stream from a provider that supports it; otherwise one full completion as a single chunk."""
+    streamer = getattr(llm, "stream", None)
+    if callable(streamer):
+        yield from streamer(prompt)
+    else:
+        yield llm.complete(prompt)

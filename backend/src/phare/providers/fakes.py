@@ -73,6 +73,12 @@ class FakeLLMProvider:
         self.prompts.append(prompt)
         return self.completion
 
+    def stream(self, prompt: str) -> Iterable[str]:
+        """Yield the canned completion word-by-word, to exercise streaming assembly in tests."""
+        self.prompts.append(prompt)
+        for i, word in enumerate(self.completion.split(" ")):
+            yield word if i == 0 else f" {word}"
+
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         self.embed_calls += 1
         return [self._vector(text) for text in texts]

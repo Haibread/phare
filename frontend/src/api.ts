@@ -108,6 +108,20 @@ export const chatReplySchema = z.object({
 });
 export type ChatReply = z.infer<typeof chatReplySchema>;
 
+// The first SSE event of a streamed turn: the picks + writes, before the reply text streams in.
+export const chatStreamMetaSchema = z.object({
+  intent: chatIntentSchema,
+  items: z.array(recommendationItemSchema),
+  actions: z.array(agentActionSchema),
+});
+export type ChatStreamMeta = z.infer<typeof chatStreamMetaSchema>;
+
+export interface ChatStreamHandlers {
+  onMeta?: (meta: ChatStreamMeta) => void;
+  onDelta?: (text: string) => void;
+  onDone?: () => void;
+}
+
 const chatOpeningSchema = z.object({ greeting: z.string().nullable() });
 const undoResultSchema = z.object({ undone: z.boolean() });
 
@@ -218,6 +232,64 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   return schema.parse(await response.json());
 }
 
+/** Stream a chat turn over Server-Sent Events: the picks/writes arrive in one `meta` event, then
+ * the reply text streams in as `delta` events. Resolves when the stream closes (`done`). */
+async function chatStream(
+  profileId: string,
+  message: string,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authToken !== null) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+  const response = await fetch(`${API_BASE}/profiles/${profileId}/chat/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message }),
+    signal: signal ?? null,
+  });
+  if (!response.ok || response.body === null) {
+    throw new Error(response.statusText || "chat stream failed");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      let event = "message";
+      let data = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) {
+          event = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          data += line.slice(5).trim();
+        }
+      }
+      if (data !== "") {
+        const parsed: unknown = JSON.parse(data);
+        if (event === "meta") {
+          handlers.onMeta?.(chatStreamMetaSchema.parse(parsed));
+        } else if (event === "delta") {
+          handlers.onDelta?.(String((parsed as { text: string }).text));
+        } else if (event === "done") {
+          handlers.onDone?.();
+        }
+      }
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export const api = {
   me: () => request("/me", meSchema),
   login: (password: string) =>
@@ -280,6 +352,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  chatStream: chatStream,
   chatOpening: (profileId: string) =>
     request(`/profiles/${profileId}/chat/opening`, chatOpeningSchema),
   undoChatAction: (profileId: string, token: string) =>

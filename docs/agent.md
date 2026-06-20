@@ -41,6 +41,18 @@ The agent registers what you tell it immediately and surfaces each write as an *
 `POST /chat/undo` reverses any action (delete the event/commitment/note, or revert a taste
 override) and re-derives taste.
 
+### Delivery: streaming + persistent history
+
+`POST /chat/stream` runs the same turn as `POST /chat` but returns **Server-Sent Events** so the UI
+never sits on a blank "Thinking…" for the whole turn: a `meta` event carries the picks + undoable
+write-chips as soon as the tools finish, then `delta` events stream the reply text token-by-token,
+then `done`. Writes are committed *before* streaming begins, so the stream itself is read-only;
+`POST /chat` stays for non-streaming callers (and is what the tests assert against). Providers that
+implement `stream` are used token-by-token; others fall back to one blocking `complete`, and a
+streaming error degrades to the deterministic template — a flaky composer never leaves an empty
+bubble. The web client keeps the conversation in app state (mirrored to `sessionStorage`), so it
+survives tab switches and reloads, with a **New chat** button to clear it.
+
 ## Memory — two tiers, one valve
 
 Long-term memory is **structured and inspectable**, not a hidden store (principle 2). It has two

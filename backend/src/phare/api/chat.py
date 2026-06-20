@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from phare.agent import commitments as commitments_store
-from phare.agent.service import ChatService
+from phare.agent.service import ChatService, stream_compose
 from phare.agent.tools import undo_action
 from phare.api.deps import (
     Embedder,
@@ -63,6 +66,52 @@ def chat(
             for a in reply.actions
         ],
     )
+
+
+def _sse(event: str, data: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/profiles/{profile_id}/chat/stream")
+def chat_stream(
+    profile_id: uuid.UUID,
+    body: ChatRequest,
+    session: Annotated[Session, Depends(get_session)],
+    embedder: Annotated[Embedder, Depends(get_embedder)],
+    chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+    agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
+) -> StreamingResponse:
+    """Same turn as ``/chat`` but Server-Sent Events: a ``meta`` event with the picks + writes
+    (so the UI can show them immediately), then ``delta`` events streaming the reply text, then
+    ``done``. Writes are committed before streaming begins — the stream itself is read-only."""
+    require_profile(session, profile_id)
+    recommender = build_recommender(session, embedder, chat_llm)
+    prepared = ChatService(recommender, agent_llm).prepare(profile_id, body.message)
+    session.commit()  # persist signals/commitments/memory + logs before the (read-only) stream
+
+    meta = {
+        "intent": ChatIntentResponse(
+            max_runtime=prepared.intent.max_runtime,
+            include_genres=prepared.intent.include_genres,
+            exclude_genres=prepared.intent.exclude_genres,
+            mood=prepared.intent.mood,
+        ).model_dump(by_alias=True, mode="json"),
+        "items": [to_item(item).model_dump(by_alias=True, mode="json") for item in prepared.items],
+        "actions": [
+            AgentActionResponse(kind=a.kind, summary=a.summary, undo_token=a.undo_token).model_dump(
+                by_alias=True, mode="json"
+            )
+            for a in prepared.actions
+        ],
+    }
+
+    def events() -> Iterator[str]:
+        yield _sse("meta", meta)
+        for chunk in stream_compose(prepared, agent_llm):
+            yield _sse("delta", {"text": chunk})
+        yield _sse("done", {})
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 @router.post("/profiles/{profile_id}/chat/undo", response_model=UndoResponse)
