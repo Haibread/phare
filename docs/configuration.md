@@ -27,6 +27,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | **Metadata + sources** (live syncs/imports only; not needed for the sample-data path) | | |
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + popular-catalog import + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
+| `TMDB_CACHE_TTL_SECONDS` | `3600` | In-process TTL for cached TMDB metadata/search reads (see [Rate limits & caching](#rate-limits--caching)). `0` disables the cache. |
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
 | `TRAKT_CLIENT_SECRET` | _(unset)_ | Also required for the Trakt OAuth device-connect flow. |
 | `SEERR_BASE_URL` / `SEERR_API_KEY` | _(unset)_ | Instance-wide Seerr fallback; per-profile creds set in the UI take precedence. |
@@ -72,6 +73,26 @@ the active one. So you can run offline first, then add a key later.
   (`overview`), and the LLM's one-sentence output is additionally screened (`recommend/explain.py`):
   anything overly long or naming a plot reveal is dropped in favour of the deterministic,
   metadata-only template. It's a cheap heuristic backstop, not a guarantee.
+
+## Rate limits & caching
+
+Every outbound provider call (TMDB, the LLM/embedding endpoint, Seerr, Trakt, Plex, Jellyfin) is
+wrapped in a **bounded 429 retry** ([`providers/http.py`](../backend/src/phare/providers/http.py)):
+on a rate-limit response it honours the `Retry-After` header (clamped to 60s) and retries up to a
+few times before surfacing the error. The Trakt OAuth *device flow* is the deliberate exception —
+there a 429 means "poll slower", a normal state it handles directly, not an error.
+
+**TMDB reads are also cached.** TMDB is the one third-party metadata API serving idempotent reads
+(title lookups, search, `find_by_imdb`), so results are held in a small process-wide TTL+LRU cache
+shared across requests. This is what stops the chat agent re-hitting TMDB every time it resolves the
+same title across turns, and it softens the popular-import fan-out. Tune freshness with
+`TMDB_CACHE_TTL_SECONDS` (default 1 hour; `0` disables it). The cache is in-process only — it resets
+on restart and isn't shared between replicas, which is fine for a single-user self-hosted instance.
+
+Self-hosted sources (Plex/Jellyfin/Seerr) get the retry but **no cache**: they're your own servers
+(they won't rate-limit their owner) and their state is mutable, so a stale read would be worse than
+a fresh call. LLM responses aren't cached either — prompts vary, and title embeddings are already
+persisted in Postgres.
 
 ### Switching on a real model
 

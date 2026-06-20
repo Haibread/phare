@@ -82,7 +82,11 @@ def _ingest_from(
     settings = get_settings()
     # Stamp the watermark from *before* the pull so mid-sync events aren't skipped next time.
     started_at = datetime.now(UTC)
-    metadata = TMDBMetadataProvider(api_key=settings.tmdb_api_key, base_url=settings.tmdb_base_url)
+    metadata = TMDBMetadataProvider(
+        api_key=settings.tmdb_api_key,
+        base_url=settings.tmdb_base_url,
+        cache_ttl=settings.tmdb_cache_ttl_seconds,
+    )
     result = IngestionService(session, metadata).ingest(profile_id, source.pull(since))
     set_last_synced(session, profile_id, source_name, started_at)
     # Taste is derived from history; refresh it automatically when the sync changed anything.

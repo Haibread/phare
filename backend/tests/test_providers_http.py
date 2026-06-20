@@ -7,9 +7,11 @@ import json
 import httpx
 
 from phare.db.models import TitleKind
+from phare.providers.http import TTLCache, request_with_retry, retry_after_seconds
 from phare.providers.jellyfin import JellyfinSourceProvider, parse_jellyfin_item
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.plex import PlexSourceProvider, parse_plex_item
+from phare.providers.seerr import SeerrProvider
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
 
@@ -29,6 +31,13 @@ _MOVIE = {
 
 def _tmdb_client(handler: object) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler), base_url="https://tmdb.test")
+
+
+def _tmdb(handler: object, **kwargs: object) -> TMDBMetadataProvider:
+    # ttl=0 keeps these tests isolated from the process-wide cache so every call hits the handler;
+    # the cache itself is exercised explicitly in test_tmdb_caches_reads.
+    kwargs.setdefault("cache", TTLCache(ttl=0))
+    return TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler), **kwargs)  # type: ignore[arg-type]
 
 
 def _llm_client(captured: dict) -> httpx.Client:
@@ -58,7 +67,7 @@ def test_tmdb_get_movie() -> None:
         assert request.url.path == "/movie/438631"
         return httpx.Response(200, json=_MOVIE)
 
-    provider = TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler))
+    provider = _tmdb(handler)
     meta = provider.get_title(438631, TitleKind.movie)
 
     assert meta is not None
@@ -104,7 +113,7 @@ def test_tmdb_search_movies_and_shows() -> None:
             )
         return httpx.Response(404)
 
-    provider = TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler))
+    provider = _tmdb(handler)
     results = provider.search("x")
 
     assert {m.title for m in results} == {"Blade Runner 2049", "Severance"}
@@ -118,7 +127,7 @@ def test_tmdb_find_by_imdb() -> None:
         assert request.url.path == "/find/tt1160419"
         return httpx.Response(200, json={"movie_results": [{"id": 438631}], "tv_results": []})
 
-    provider = TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler))
+    provider = _tmdb(handler)
     match = provider.find_by_imdb("tt1160419")
 
     assert match is not None
@@ -135,12 +144,82 @@ def test_tmdb_popular_resolves_each_result() -> None:
             return httpx.Response(200, json=_MOVIE)
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    provider = TMDBMetadataProvider(api_key="k", client=_tmdb_client(handler))
+    provider = _tmdb(handler)
     metas = provider.popular(TitleKind.movie, page=2)
 
     assert len(metas) == 1
     assert metas[0].title == "Dune"  # fully resolved, not the thin popular record
     assert metas[0].keywords == ["desert"]
+
+
+def test_tmdb_caches_reads() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json=_MOVIE)
+
+    provider = _tmdb(handler, cache=TTLCache(ttl=300))
+    first = provider.get_title(438631, TitleKind.movie)
+    second = provider.get_title(438631, TitleKind.movie)
+
+    assert calls["n"] == 1  # the second identical read is served from cache, not TMDB
+    assert first is not None and second is not None and first.title == second.title == "Dune"
+
+
+def test_tmdb_retries_on_rate_limit() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "3"})
+        return httpx.Response(200, json=_MOVIE)
+
+    slept: list[float] = []
+    provider = _tmdb(handler, sleep=slept.append)
+    meta = provider.get_title(438631, TitleKind.movie)
+
+    assert calls["n"] == 2  # backed off then retried
+    assert slept == [3.0]  # honoured Retry-After
+    assert meta is not None and meta.title == "Dune"
+
+
+def test_llm_retries_on_rate_limit() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+
+    slept: list[float] = []
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://llm.test")
+    provider = OpenAILLMProvider("k", "chat", "embed", client=client, sleep=slept.append)
+
+    assert provider.complete("ping") == "pong"
+    assert calls["n"] == 2
+    assert slept == [1.0]
+
+
+def test_seerr_retries_on_rate_limit() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, json={"mediaInfo": {"status": 5}})
+
+    slept: list[float] = []
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://seerr.test")
+    provider = SeerrProvider("https://seerr.test", "k", client=client, sleep=slept.append)
+
+    avail = provider.availability(438631, TitleKind.movie)
+    assert calls["n"] == 2
+    assert slept == [1.0]
+    assert avail.value == "available"
 
 
 def test_trakt_retries_on_rate_limit() -> None:
@@ -323,3 +402,65 @@ def test_jellyfin_pull_maps_movie_and_episode() -> None:
 
 def test_jellyfin_parse_skips_unsupported_type() -> None:
     assert parse_jellyfin_item({"Type": "Audio", "Id": "x"}) is None
+
+
+# --- shared http helpers ----------------------------------------------------
+
+
+def test_ttl_cache_serves_then_expires() -> None:
+    clock = {"t": 0.0}
+    cache = TTLCache(ttl=10, clock=lambda: clock["t"])
+    calls = {"n": 0}
+
+    def factory() -> str:
+        calls["n"] += 1
+        return f"v{calls['n']}"
+
+    assert cache.get_or_set("k", factory) == "v1"
+    assert cache.get_or_set("k", factory) == "v1"  # cached
+    clock["t"] = 11.0  # past the TTL
+    assert cache.get_or_set("k", factory) == "v2"  # recomputed
+    assert calls["n"] == 2
+
+
+def test_ttl_cache_disabled_when_ttl_non_positive() -> None:
+    cache = TTLCache(ttl=0)
+    calls = {"n": 0}
+
+    def factory() -> int:
+        calls["n"] += 1
+        return calls["n"]
+
+    assert cache.get_or_set("k", factory) == 1
+    assert cache.get_or_set("k", factory) == 2  # never cached
+    assert calls["n"] == 2
+
+
+def test_ttl_cache_evicts_lru() -> None:
+    cache = TTLCache(ttl=100, maxsize=2)
+    cache.get_or_set("a", lambda: "a")
+    cache.get_or_set("b", lambda: "b")
+    cache.get_or_set("a", lambda: "ignored")  # touch a → most-recently-used
+    cache.get_or_set("c", lambda: "c")  # evicts b (the LRU)
+
+    # Check the survivor first: fetching the evicted "b" would itself evict another entry.
+    assert cache.get_or_set("a", lambda: "ignored") == "a"  # a survived (was touched)
+    assert cache.get_or_set("b", lambda: "b2") == "b2"  # b was evicted, recomputed
+
+
+def test_retry_after_seconds_parses_and_clamps() -> None:
+    assert retry_after_seconds(httpx.Response(429, headers={"Retry-After": "5"})) == 5.0
+    assert retry_after_seconds(httpx.Response(429)) == 1.0  # default when header absent
+    assert retry_after_seconds(httpx.Response(429, headers={"Retry-After": "junk"})) == 1.0
+    assert retry_after_seconds(httpx.Response(429, headers={"Retry-After": "999"})) == 60.0  # cap
+
+
+def test_request_with_retry_returns_last_response_without_raising() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "0"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://x.test")
+    response = request_with_retry(
+        client, "GET", "/", name="x", max_retries=2, sleep=lambda _s: None
+    )
+    assert response.status_code == 429  # exhausted retries → caller decides (no implicit raise)

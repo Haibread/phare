@@ -57,7 +57,11 @@ def search_catalog(
         raise HTTPException(status_code=404, detail="Profile not found")
     settings = get_settings()
     tmdb = (
-        TMDBMetadataProvider(api_key=settings.tmdb_api_key, base_url=settings.tmdb_base_url)
+        TMDBMetadataProvider(
+            api_key=settings.tmdb_api_key,
+            base_url=settings.tmdb_base_url,
+            cache_ttl=settings.tmdb_cache_ttl_seconds,
+        )
         if settings.tmdb_api_key
         else None
     )
@@ -85,7 +89,11 @@ def import_catalog(
     settings = get_settings()
     if not settings.tmdb_api_key:
         raise HTTPException(status_code=400, detail="TMDB_API_KEY must be configured to import")
-    metadata = TMDBMetadataProvider(api_key=settings.tmdb_api_key, base_url=settings.tmdb_base_url)
+    metadata = TMDBMetadataProvider(
+        api_key=settings.tmdb_api_key,
+        base_url=settings.tmdb_base_url,
+        cache_ttl=settings.tmdb_cache_ttl_seconds,
+    )
     created = import_from_tmdb(session, metadata, pages=pages)
     session.commit()
     return CatalogSummary(created=created)

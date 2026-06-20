@@ -8,13 +8,15 @@ it unit-tests without HTTP.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Any
 
 import httpx
 
 from phare.db.models import EventType
+from phare.providers.http import DEFAULT_MAX_RETRIES, request_with_retry
 from phare.providers.types import RawEvent, RawMediaType
 
 logger = logging.getLogger(__name__)
@@ -78,8 +80,13 @@ class JellyfinSourceProvider:
         api_key: str,
         user_id: str,
         client: httpx.Client | None = None,
+        *,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._user_id = user_id
+        self._max_retries = max_retries
+        self._sleep = sleep
         self._client = client or httpx.Client(
             base_url=base_url, headers={"X-Emby-Token": api_key}, timeout=15.0
         )
@@ -94,7 +101,15 @@ class JellyfinSourceProvider:
             "SortOrder": "Descending",
         }
         logger.debug("jellyfin.request", extra={"user_id": self._user_id})
-        response = self._client.get(f"/Users/{self._user_id}/Items", params=params)
+        response = request_with_retry(
+            self._client,
+            "GET",
+            f"/Users/{self._user_id}/Items",
+            name="jellyfin",
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            params=params,
+        )
         response.raise_for_status()
         for item in response.json().get("Items", []):
             event = parse_jellyfin_item(item)

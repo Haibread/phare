@@ -90,7 +90,11 @@ class ChatService:
         session = self.recommender.session
         settings = get_settings()
         metadata = (
-            TMDBMetadataProvider(api_key=settings.tmdb_api_key, base_url=settings.tmdb_base_url)
+            TMDBMetadataProvider(
+                api_key=settings.tmdb_api_key,
+                base_url=settings.tmdb_base_url,
+                cache_ttl=settings.tmdb_cache_ttl_seconds,
+            )
             if settings.tmdb_api_key
             else None
         )

@@ -8,13 +8,15 @@ so it unit-tests without HTTP.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from phare.db.models import EventType
+from phare.providers.http import DEFAULT_MAX_RETRIES, request_with_retry
 from phare.providers.types import RawEvent, RawMediaType
 
 logger = logging.getLogger(__name__)
@@ -83,8 +85,13 @@ class PlexSourceProvider:
         token: str,
         account_id: str | None = None,
         client: httpx.Client | None = None,
+        *,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._account_id = account_id
+        self._max_retries = max_retries
+        self._sleep = sleep
         self._client = client or httpx.Client(
             base_url=base_url,
             headers={"X-Plex-Token": token, "Accept": "application/json"},
@@ -96,7 +103,15 @@ class PlexSourceProvider:
         if self._account_id is not None:
             params["accountID"] = self._account_id
         logger.debug("plex.request", extra={"account_id": self._account_id})
-        response = self._client.get("/status/sessions/history/all", params=params)
+        response = request_with_retry(
+            self._client,
+            "GET",
+            "/status/sessions/history/all",
+            name="plex",
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            params=params,
+        )
         response.raise_for_status()
         container = response.json().get("MediaContainer", {})
         for item in container.get("Metadata", []):
