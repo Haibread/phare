@@ -56,9 +56,7 @@ def get_title(
     )
 
 
-@router.get(
-    "/profiles/{profile_id}/titles/{title_id}/explanation", response_model=TitleExplanation
-)
+@router.get("/profiles/{profile_id}/titles/{title_id}/explanation", response_model=TitleExplanation)
 def get_title_explanation(
     profile_id: uuid.UUID,
     title_id: uuid.UUID,
