@@ -106,7 +106,14 @@ explainer ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)) 
   render, not per-row.
 - **Concurrency.** Those bounded calls are fired concurrently (they're blocking HTTP), so a render's
   LLM time is roughly one call, not their sum.
-- **Cache.** Every *outcome* is cached — the LLM blurb on success, the template on a spoiler-guard
+- **Priority.** The budget is spent on the top-ranked items first (rows render most-personalized
+  first), so the visible top picks get the blurb; the cache then propagates it to the same titles
+  in lower rows.
+- **Spoiler guard, salvaged.** The prompt asks for one sentence; a verbose model sometimes runs
+  past the length cap with extra harmless clauses. Rather than discard that (and cache the template
+  forever — which intermittently cost on-taste top picks their blurb), a marker-free over-long reply
+  is trimmed to its first sentence. Only a genuine plot-reveal marker rejects to the template.
+- **Cache.** Every *outcome* is cached — the LLM blurb on success, the template on a marker
   rejection or error — keyed by `(title, swing-ness, taste summary)`. So each title is attempted at
   most once per taste version, the cache warms over the first few renders, and steady-state renders
   are near-instant. Changing taste re-keys the cache, regenerating blurbs. The cache is in-process

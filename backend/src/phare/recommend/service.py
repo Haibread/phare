@@ -93,7 +93,9 @@ class RecommendationService:
 
     def _explainer(self, *, with_llm: bool, budget: int | None = None) -> Explainer:
         """An explainer sharing the process-wide blurb cache. ``budget`` caps uncached LLM calls
-        for this render (None = unbounded, for single-item/ad-hoc calls)."""
+        for this render (None = unbounded, for single-item/ad-hoc calls). The budget is spent on the
+        top-ranked items first (rows render most-personalized first), so the visible top picks get
+        the blurb and the cache propagates it to the same titles in lower rows."""
         return Explainer(
             llm=self.chat_llm if with_llm else None,
             cache=_EXPLANATION_CACHE,
