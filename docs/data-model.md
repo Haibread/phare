@@ -35,6 +35,24 @@ reads it), `occurred_at` (drives recency decay), `source` provenance, and an `ex
 Trakt) collapses to one; keep all provenances. On rating conflict, pick a deterministic winner
 (default most-recent, configurable) — never silently average. Re-syncs must be idempotent.
 
+### Derived signals (rewatch, abandonment)
+
+Sources only ever emit `watched`, `rated`, and `watchlisted` — never `rewatched`, `abandoned`,
+`liked`, or `disliked`. But "the signals others throw away" (see [`design.md`](design.md)) are
+the point, so the engine **synthesizes** them deterministically when building the taste centroid
+(`recommend/taste_vector.py`), by collapsing a title's `watched` events into one signal:
+
+- **Rewatch** — a movie with ≥2 `watched` events becomes one `rewatched` (strongest comfort
+  weight) instead of two stacked `watched` rows.
+- **Abandonment** — a show with ≥2 distinct watched episodes whose last episode is **stale**
+  (older than `_ABANDON_STALE_DAYS`, default 180) **and that was never rated** becomes one
+  `abandoned` (negative weight). It's conservative on purpose: we have no total-episode count, so
+  abandonment can't be proven, and a rating — high *or* low — is an explicit verdict we trust over
+  the heuristic (otherwise a finished, loved show rated 10 looks identical to one you bailed on).
+
+Low ratings already feed negative signal through the `rated` path, so they need no synthesis.
+Ratings and watchlist entries stay per-event; only `watched` events collapse.
+
 ## Taste profile
 
 Per profile: a structured object (likes / dislikes / **hard-avoids** / weighted affinities /

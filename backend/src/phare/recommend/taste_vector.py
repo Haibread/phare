@@ -33,6 +33,10 @@ _EVENT_WEIGHT: dict[EventType, float] = {
 # Half-life for recency decay: a year-old event counts half as much as a fresh one.
 _RECENCY_HALF_LIFE_DAYS = 365.0
 
+# How long after the last episode a started-but-unrated show is treated as abandoned. We have no
+# total-episode count, so "abandoned" can't be proven — this is a deliberately conservative proxy.
+_ABANDON_STALE_DAYS = 180.0
+
 
 def event_weight(event_type: EventType, rating: float | None) -> float:
     """Net contribution of one event. Ratings are signed around the genre-neutral midpoint 6.
@@ -44,6 +48,35 @@ def event_weight(event_type: EventType, rating: float | None) -> float:
             return 0.0
         return (rating - 6.0) / 4.0  # ~[-1.5, +1.0] across a 1-10 scale
     return _EVENT_WEIGHT.get(event_type, 0.0)
+
+
+def collapsed_watch_weight(watched: list[WatchEvent], *, has_rating: bool, now: datetime) -> float:
+    """Derive ONE signal from a title's watch events — the "signals others throw away" (design.md).
+
+    These signals are never emitted by any source, so we synthesize them deterministically:
+
+    - **Rewatch** (movies watched ≥2×) → the strongest comfort signal. Repeat watches otherwise
+      just pile up as separate ``watched`` rows; here they collapse into one ``rewatched`` weight.
+    - **Abandonment** (a show with ≥2 episodes whose last episode is stale and that was *never
+      rated*) → negative signal. Conservative on purpose: a rating — high *or* low — is an explicit
+      verdict we trust over the heuristic, so a rated show is never inferred-abandoned (otherwise a
+      finished, loved show like one rated 10 looks identical to one you bailed on).
+
+    Otherwise it's an ordinary ``watched`` engagement. Recency is applied by the caller using the
+    most-recent watch.
+    """
+    is_episode = any(e.episode_id is not None for e in watched)
+    if is_episode:
+        distinct_episodes = {e.episode_id for e in watched}
+        dates = [e.occurred_at for e in watched if e.occurred_at is not None]
+        last_watch = max(dates, default=None)
+        stale = last_watch is not None and (now - last_watch).days >= _ABANDON_STALE_DAYS
+        if len(distinct_episodes) >= 2 and stale and not has_rating:
+            return _EVENT_WEIGHT[EventType.abandoned]
+        return _EVENT_WEIGHT[EventType.watched]
+    if len(watched) >= 2:
+        return _EVENT_WEIGHT[EventType.rewatched]
+    return _EVENT_WEIGHT[EventType.watched]
 
 
 def recency_factor(occurred_at: datetime | None, now: datetime) -> float:
@@ -84,18 +117,42 @@ def compute_taste_centroid(
     if not rows:
         return None
 
+    # Group events by title so watched events can collapse into one derived rewatch/abandon signal
+    # (a title's embedding is the same across all its events).
+    by_title: dict[uuid.UUID, tuple[list[float], list[WatchEvent]]] = {}
+    for event, embedding in rows:
+        by_title.setdefault(event.title_id, (embedding, []))[1].append(event)
+
+    # Each contribution is (weight, occurred_at) against the title's embedding.
     accumulator: list[float] | None = None
     total_abs_weight = 0.0
-    for event, embedding in rows:
-        rating = float(event.rating) if event.rating is not None else None
-        weight = event_weight(event.type, rating) * recency_factor(event.occurred_at, now)
+
+    def add(weight: float, occurred_at: datetime | None, embedding: list[float]) -> None:
+        nonlocal accumulator, total_abs_weight
+        weight *= recency_factor(occurred_at, now)
         if weight == 0.0:
-            continue
+            return
         if accumulator is None:
             accumulator = [0.0] * len(embedding)
         for i, value in enumerate(embedding):
             accumulator[i] += weight * value
         total_abs_weight += abs(weight)
+
+    for embedding, events in by_title.values():
+        watched = [e for e in events if e.type is EventType.watched]
+        rated = [e for e in events if e.type is EventType.rated]
+        # Watched events collapse into a single rewatch/abandon/engagement signal, dated by the
+        # most recent watch.
+        if watched:
+            last_watch = max((e.occurred_at for e in watched if e.occurred_at), default=None)
+            weight = collapsed_watch_weight(watched, has_rating=bool(rated), now=now)
+            add(weight, last_watch, embedding)
+        # Ratings and everything else (watchlist, …) stay per-event — explicit, distinct signals.
+        for event in events:
+            if event.type is EventType.watched:
+                continue
+            rating = float(event.rating) if event.rating is not None else None
+            add(event_weight(event.type, rating), event.occurred_at, embedding)
 
     if accumulator is None or total_abs_weight == 0.0:
         return None
