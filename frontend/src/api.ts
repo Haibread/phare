@@ -75,6 +75,20 @@ export const recommendationItemSchema = z.object({
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 
+export const titleDetailSchema = z.object({
+  titleId: z.string(),
+  title: z.string(),
+  kind: z.string(),
+  year: z.number().nullable(),
+  runtimeMinutes: z.number().nullable(),
+  genres: z.array(z.string()),
+  overview: z.string().nullable(),
+  posterUrl: z.string().nullable(),
+  tmdbUrl: z.string().nullable(),
+  imdbUrl: z.string().nullable(),
+});
+export type TitleDetail = z.infer<typeof titleDetailSchema>;
+
 export const recommendationRowSchema = z.object({
   key: z.string(),
   title: z.string(),
@@ -347,6 +361,7 @@ export const api = {
     request(`/profiles/${profileId}/recommendations/dynamic`, recommendationsResponseSchema),
   conversion: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations/conversion`, conversionSchema),
+  titleDetail: (titleId: string) => request(`/titles/${titleId}`, titleDetailSchema),
   chat: (profileId: string, message: string) =>
     request(`/profiles/${profileId}/chat`, chatReplySchema, {
       method: "POST",

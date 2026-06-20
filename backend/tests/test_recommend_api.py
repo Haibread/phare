@@ -74,6 +74,22 @@ def test_recommendations_404_for_unknown_profile(db_session: Session) -> None:
     assert client.get(f"/profiles/{missing}/recommendations").status_code == 404
 
 
+def test_title_detail_returns_synopsis_and_links(db_session: Session) -> None:
+    client = _client(db_session)
+    profile_id = _profile_with_data(client)
+    items = client.get(f"/profiles/{profile_id}/recommendations").json()["rows"][0]["items"]
+    title_id = items[0]["titleId"]
+
+    detail = client.get(f"/titles/{title_id}").json()
+    assert detail["titleId"] == title_id
+    assert detail["title"]
+    assert "overview" in detail  # the synopsis field is present (may be null for thin records)
+    assert "genres" in detail and "runtimeMinutes" in detail
+
+    missing = "00000000-0000-0000-0000-000000000000"
+    assert client.get(f"/titles/{missing}").status_code == 404
+
+
 def test_chat_journey(db_session: Session) -> None:
     client = _client(db_session)
     profile_id = _profile_with_data(client)

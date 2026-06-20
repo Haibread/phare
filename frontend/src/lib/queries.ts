@@ -16,7 +16,18 @@ export const keys = {
   sources: (id: string) => ["sources", id] as const,
   commitments: (id: string) => ["commitments", id] as const,
   memory: (id: string) => ["memory", id] as const,
+  titleDetail: (id: string) => ["titleDetail", id] as const,
 };
+
+/** Lazily fetch a title's "more info" (synopsis/runtime/links); only runs while the sheet is open. */
+export function useTitleDetail(titleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.titleDetail(titleId),
+    queryFn: () => api.titleDetail(titleId),
+    enabled,
+    staleTime: 5 * 60_000, // title metadata is stable; don't refetch on every open
+  });
+}
 
 export function useMe() {
   return useQuery({ queryKey: keys.me, queryFn: api.me });

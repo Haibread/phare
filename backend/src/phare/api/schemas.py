@@ -96,6 +96,21 @@ class RecommendationItem(ApiModel):
     components: dict[str, float]
 
 
+class TitleDetail(ApiModel):
+    """Extra metadata for a title's "more info" view — the synopsis/runtime a card doesn't carry."""
+
+    title_id: uuid.UUID
+    title: str
+    kind: str
+    year: int | None = None
+    runtime_minutes: int | None = None
+    genres: list[str]
+    overview: str | None = None
+    poster_url: str | None = None
+    tmdb_url: str | None = None
+    imdb_url: str | None = None
+
+
 class RecommendationRow(ApiModel):
     key: str
     title: str
