@@ -20,7 +20,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `LLM_API_KEY` | _(unset)_ | OpenAI-compatible key. **Unset = fully offline fallback** (see below). |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | Point at any OpenAI-compatible endpoint (Ollama, LM Studio, etc.). |
 | `LLM_CHAT_MODEL` | `gpt-4o-mini` | Workhorse chat/completion model: taste extraction, explanations, dynamic rows. |
-| `LLM_AGENT_MODEL` | _(falls back to `LLM_CHAT_MODEL`)_ | Optional stronger model for the **conversational chat agent** (planner + natural-language reply). Lets chat use a bigger model while the high-volume mechanical work stays cheap. |
+| `LLM_AGENT_MODEL` | _(falls back to `LLM_CHAT_MODEL`)_ | Optional stronger model used for **one thing only**: the chat agent's natural-language reply. Everything else (planning, explanations, taste) stays on `LLM_CHAT_MODEL`, so a chat turn makes at most one big-model call. |
 | `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Doubles as the embedding-space version tag. |
 | `LLM_EMBEDDING_DIM` | `1536` | Vector dimension. Fixed by the DB schema — changing it needs a migration + full re-embed. |
 | `LLM_EMBEDDING_REQUEST_DIMENSIONS` | `false` | Send `LLM_EMBEDDING_DIM` as the `dimensions` request param. Enable for models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed; leave off for models that reject the param. |
@@ -89,11 +89,13 @@ the active one. So you can run offline first, then add a key later.
 
 Phare asks the LLM to do two very different things, and you can point them at different models:
 
-- **Workhorse** (`LLM_CHAT_MODEL`) — high-volume, mechanical: per-item explanations, taste-extraction
-  JSON, dynamic-row naming. Wants a fast, cheap model with reliable JSON. Bigger is *not* better here,
-  and pure-reasoning models are worse (they wrap output in thinking traces).
-- **Conversational agent** (`LLM_AGENT_MODEL`) — the chat planner and the natural-language reply.
-  Tone, nuance, and not mis-hearing you matter, so a stronger *instruct* model earns its keep.
+- **Workhorse** (`LLM_CHAT_MODEL`) — high-volume, mechanical: chat planning (JSON tool selection),
+  per-item explanations, taste-extraction JSON, dynamic-row naming. Wants a fast, cheap model with
+  reliable JSON. Bigger is *not* better here, and pure-reasoning models are worse (they wrap output
+  in thinking traces).
+- **Conversational reply** (`LLM_AGENT_MODEL`) — *only* the chat agent's natural-language reply,
+  where tone and nuance matter, so a stronger *instruct* model earns its keep. It's one call per
+  chat turn; everything else is the workhorse, to keep cost down.
 
 Phare speaks the OpenAI-compatible API, so point it at any provider (hosted or local) by setting
 `LLM_BASE_URL` to that provider's endpoint. Pick a small, fast instruct model for the workhorse and

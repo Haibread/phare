@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from phare.core.config import Settings
+from phare.core.config import Settings, get_settings
+
+
+def test_suite_is_hermetic_no_real_llm() -> None:
+    """The suite must never call a real LLM (cost/determinism). conftest blanks the credentials, so
+    a developer's .env key cannot leak in. If this fails, the hermetic guard was removed."""
+    assert not get_settings().llm_api_key
 
 
 @pytest.mark.parametrize(

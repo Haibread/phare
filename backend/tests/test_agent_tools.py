@@ -196,6 +196,55 @@ def test_memory_notes_feed_taste_extraction_prompt(db_session: Session) -> None:
     assert any("watching with my kid" in p for p in llm.prompts)
 
 
+# --- cost discipline + scope -------------------------------------------------
+
+
+def test_chat_recommend_turn_is_cost_bounded(db_session: Session) -> None:
+    # A recommend turn must hit the big agent model once (the reply) and the workhorse once (the
+    # plan) — never a per-item explanation call (those are templated in chat).
+    profile_id = _seed(db_session)
+    dune = db_session.scalar(select(Title).where(Title.title == "Dune"))
+    assert dune is not None
+    db_session.add(
+        WatchEvent(
+            profile_id=profile_id,
+            title_id=dune.id,
+            type=EventType.watched,
+            source="t",
+            external_ref="seed",
+            occurred_at=_NOW,
+        )
+    )
+    db_session.flush()
+
+    workhorse = FakeLLMProvider(completion='{"calls":[{"tool":"recommend","args":{}}]}')
+    agent = FakeLLMProvider(completion="A few ideas you might enjoy!")
+    recommender = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=workhorse,
+    )
+
+    reply = ChatService(recommender, agent).respond(profile_id, "something to watch", now=_NOW)
+
+    assert reply.items  # got picks (Dune excluded as watched)
+    assert len(agent.prompts) == 1  # the big agent model is used only for the reply
+    assert len(workhorse.prompts) == 1  # planner only — per-item explanations are templated
+
+
+def test_agent_prompts_are_scoped_to_movies_and_tv() -> None:
+    from phare.agent.planner import _SYSTEM
+    from phare.agent.service import _COMPOSE_SYSTEM
+
+    for prompt in (_SYSTEM, _COMPOSE_SYSTEM):
+        low = prompt.lower()
+        assert "movie" in low and "tv" in low
+        assert "only" in low  # scoped to the domain
+    assert "empty calls" in _SYSTEM.lower()  # planner declines off-topic by doing nothing
+    assert "decline" in _COMPOSE_SYSTEM.lower()  # composer politely declines off-topic
+
+
 # --- composer: natural-language reply with a template fallback ---------------
 
 

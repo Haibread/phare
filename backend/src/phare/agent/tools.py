@@ -112,6 +112,7 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         extra_hard_avoids=intent.exclude_genres,
         candidate_filter=intent_filter(intent),
         swing_slots=1,
+        explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
     )
 
 
