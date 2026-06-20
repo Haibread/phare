@@ -159,12 +159,36 @@
   padding: 0 0 0 0.3rem;
 }
 
+/* A chat pick is a button (opens the detail sheet); reset button chrome. */
+.chatItem {
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chatItem:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 .chatPoster {
   aspect-ratio: 2 / 3;
   border-radius: var(--radius-sm);
   overflow: hidden;
   margin-bottom: 0.25rem;
   border: 1px solid var(--border);
+  transition: border-color 0.12s ease;
+}
+
+.chatItem:hover .chatPoster {
+  border-color: var(--border-strong);
 }
 
 .chatPoster img {

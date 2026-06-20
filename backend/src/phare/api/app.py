@@ -21,6 +21,7 @@ from phare.api import (
     recommend,
     sync,
     taste,
+    titles,
 )
 from phare.core.auth import require_auth
 from phare.core.config import get_settings
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(taste.router, dependencies=guarded)
     app.include_router(catalog.router, dependencies=guarded)
     app.include_router(recommend.router, dependencies=guarded)
+    app.include_router(titles.router, dependencies=guarded)
     app.include_router(chat.router, dependencies=guarded)
     app.include_router(actions.router, dependencies=guarded)
     app.include_router(memory.router, dependencies=guarded)

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { type RecommendationItem, api } from "../api";
 import { type ChatTurn, useChat } from "../app/ChatContext";
 import { useProfileId } from "../app/ProfileContext";
+import { TitleDetailSheet } from "../components/TitleDetailSheet";
 import { posterTint } from "../lib/poster";
 import { useChatOpening, useInvalidateAfterChat, useUndoChatAction } from "../lib/queries";
 import styles from "./routes.module.css";
@@ -24,19 +25,28 @@ function patchLast(
 
 function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
   const [failed, setFailed] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const show = item.posterUrl !== null && !failed;
   return (
-    <div data-testid="chat-item">
-      <div
-        className={styles.chatPoster}
-        style={show ? undefined : { background: posterTint(item.titleId) }}
+    <>
+      <button
+        type="button"
+        className={styles.chatItem}
+        data-testid="chat-item"
+        onClick={() => setDetailOpen(true)}
       >
-        {show && (
-          <img src={item.posterUrl ?? ""} alt="" loading="lazy" onError={() => setFailed(true)} />
-        )}
-      </div>
-      <div style={{ fontSize: "0.75rem", fontWeight: 500 }}>{item.title}</div>
-    </div>
+        <div
+          className={styles.chatPoster}
+          style={show ? undefined : { background: posterTint(item.titleId) }}
+        >
+          {show && (
+            <img src={item.posterUrl ?? ""} alt="" loading="lazy" onError={() => setFailed(true)} />
+          )}
+        </div>
+        <div style={{ fontSize: "0.75rem", fontWeight: 500 }}>{item.title}</div>
+      </button>
+      <TitleDetailSheet item={item} open={detailOpen} onOpenChange={setDetailOpen} />
+    </>
   );
 }
 
