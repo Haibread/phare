@@ -62,6 +62,9 @@ the active one. So you can run offline first, then add a key later.
 1. Set `LLM_API_KEY` (and `LLM_BASE_URL` / `LLM_CHAT_MODEL` / `LLM_EMBEDDING_MODEL` as needed).
 2. Re-embed the catalog into the new model's space: `POST /catalog/embed` (or `phare` CLI). The
    active embedding-version tag changes with the model, so existing local vectors are simply left
-   behind, not reused.
+   behind, not reused. This endpoint is the **authoritative, unbounded** embed pass — run it after
+   any catalog import. The recommendation read path only tops up a bounded batch per request (so a
+   fresh import can't make the first page load embed the whole catalog inline) and logs
+   `embeddings.deferred` when more remain.
 3. If you change `LLM_EMBEDDING_DIM` (different-dimension model), that needs a schema migration in
    addition to the re-embed.

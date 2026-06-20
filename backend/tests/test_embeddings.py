@@ -71,6 +71,20 @@ def test_embed_missing_is_idempotent(db_session: Session) -> None:
     assert db_session.scalar(select(func.count()).select_from(TitleEmbedding)) == 1
 
 
+def test_embed_missing_respects_limit(db_session: Session) -> None:
+    for n in range(5):
+        _title(db_session, tmdb_id=n, title=f"Film {n}")
+    service = EmbeddingService(db_session, FakeLLMProvider(dim=EMBEDDING_DIM), "test-model")
+
+    first = service.embed_missing(limit=2)  # bounded read-path top-up
+    assert first == 2
+    assert db_session.scalar(select(func.count()).select_from(TitleEmbedding)) == 2
+
+    rest = service.embed_missing()  # unbounded authoritative pass clears the backlog
+    assert rest == 3
+    assert db_session.scalar(select(func.count()).select_from(TitleEmbedding)) == 5
+
+
 def test_new_model_version_triggers_reembed(db_session: Session) -> None:
     _title(db_session)
     EmbeddingService(db_session, FakeLLMProvider(dim=EMBEDDING_DIM), "v1").embed_missing()

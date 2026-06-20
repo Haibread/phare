@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 CandidateFilter = Callable[[list[Candidate]], list[Candidate]]
 
+# Read-path embedding cap. The authoritative embed path is POST /catalog/embed (unbounded); the
+# lazy read-path top-up must stay bounded so a fresh import can't make the first request embed the
+# whole catalog inline (minutes against a real embedding API). Beyond the cap we log and defer.
+READ_EMBED_CAP = 512
+
 
 class RecommendationService:
     """Builds rows and ad-hoc recommendations for one engine configuration."""
@@ -50,12 +55,28 @@ class RecommendationService:
         self.chat_llm = chat_llm
         self.row_size = row_size
         self.swing_slots = swing_slots
+        # Request-scoped centroid cache: rows()/dynamic_rows fan out many candidate queries off
+        # the same centroid, and computing it re-reads every watch event. One service instance is
+        # built per request (see api.deps), so this stays correct.
+        self._centroid_cache: dict[uuid.UUID, list[float] | None] = {}
 
     def ensure_embeddings(self) -> int:
-        """Embed any title (catalog or watched) missing a vector for the active space."""
+        """Bounded lazy top-up of missing vectors for the active space.
+
+        Caps at ``READ_EMBED_CAP`` so the read path can't hang embedding a whole fresh import;
+        run ``POST /catalog/embed`` for the authoritative, unbounded pass.
+        """
         return EmbeddingService(
             self.session, self.embed_provider, self.embed_model_version
-        ).embed_missing()
+        ).embed_missing(limit=READ_EMBED_CAP)
+
+    def _centroid(self, profile_id: uuid.UUID) -> list[float] | None:
+        """Memoized taste centroid for this request."""
+        if profile_id not in self._centroid_cache:
+            self._centroid_cache[profile_id] = compute_taste_centroid(
+                self.session, profile_id, self.embed_model_version
+            )
+        return self._centroid_cache[profile_id]
 
     def load_taste(self, profile_id: uuid.UUID) -> dict[str, object]:
         """The effective taste profile (structured + sticky overrides), or {} if none yet."""
@@ -80,7 +101,7 @@ class RecommendationService:
         """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain."""
         if taste is None:
             taste = self._load_taste(profile_id)
-        centroid = compute_taste_centroid(self.session, profile_id, self.embed_model_version)
+        centroid = self._centroid(profile_id)
         if centroid is None:
             return []
 

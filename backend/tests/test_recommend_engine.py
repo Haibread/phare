@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from sqlalchemy.orm import Session
 
 from phare.catalog.sample import seed_sample_catalog
@@ -36,6 +37,29 @@ def _seeded_profile(session: Session) -> uuid.UUID:
     seed_sample_catalog(session)
     session.flush()
     return profile.id
+
+
+def test_centroid_is_memoized_per_request(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rows()/dynamic_rows fan out many recommend() calls; the centroid (which re-reads every watch
+    # event) must be computed once per service instance, not per call.
+    profile_id = _seeded_profile(db_session)
+    service = _service(db_session)
+    service.ensure_embeddings()
+
+    calls = {"n": 0}
+    real = compute_taste_centroid
+
+    def counting(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("phare.recommend.service.compute_taste_centroid", counting)
+
+    service.recommend(profile_id)
+    service.recommend(profile_id)
+    assert calls["n"] == 1  # second call hit the cache
 
 
 def test_candidates_exclude_watched(db_session: Session) -> None:
