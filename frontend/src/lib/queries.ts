@@ -17,8 +17,6 @@ export const keys = {
   commitments: (id: string) => ["commitments", id] as const,
   memory: (id: string) => ["memory", id] as const,
   titleDetail: (id: string) => ["titleDetail", id] as const,
-  titleExplanation: (profileId: string, titleId: string) =>
-    ["titleExplanation", profileId, titleId] as const,
 };
 
 /** Lazily fetch a title's "more info" (synopsis/runtime/links); only runs while the sheet is open. */
@@ -28,17 +26,6 @@ export function useTitleDetail(titleId: string, enabled: boolean) {
     queryFn: () => api.titleDetail(titleId),
     enabled,
     staleTime: 5 * 60_000, // title metadata is stable; don't refetch on every open
-  });
-}
-
-/** Lazily generate the LLM "why this fits you" reason — only when the detail sheet is open, so we
- * don't pay to explain cards nobody opens. Cached, so re-opening is free. */
-export function useTitleExplanation(profileId: string, titleId: string, enabled: boolean) {
-  return useQuery({
-    queryKey: keys.titleExplanation(profileId, titleId),
-    queryFn: () => api.titleExplanation(profileId, titleId),
-    enabled,
-    staleTime: 10 * 60_000,
   });
 }
 

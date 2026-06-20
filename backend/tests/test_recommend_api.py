@@ -99,13 +99,16 @@ def test_title_explanation_is_lazy_and_templates_offline(db_session: Session) ->
 
     resp = client.get(f"/profiles/{profile_id}/titles/{title_id}/explanation")
     assert resp.status_code == 200
-    assert resp.json()["explanation"]  # deterministic template, no LLM call
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(resp.text)
+    reply = "".join(e["data"]["text"] for e in events if e["event"] == "delta")
+    assert reply and events[-1]["event"] == "done"  # deterministic template streamed, no LLM call
 
     missing = "00000000-0000-0000-0000-000000000000"
     assert client.get(f"/profiles/{profile_id}/titles/{missing}/explanation").status_code == 404
 
 
-def test_title_explanation_uses_the_workhorse_when_available(db_session: Session) -> None:
+def test_title_explanation_streams_the_workhorse_when_available(db_session: Session) -> None:
     app = create_app()
     app.dependency_overrides[get_session] = lambda: db_session
     app.dependency_overrides[get_embedder] = lambda: Embedder(
@@ -120,8 +123,12 @@ def test_title_explanation_uses_the_workhorse_when_available(db_session: Session
         "titleId"
     ]
 
-    resp = client.get(f"/profiles/{profile_id}/titles/{title_id}/explanation")
-    assert resp.json()["explanation"] == "Because its cerebral mood is squarely your taste."
+    events = _sse_events(client.get(f"/profiles/{profile_id}/titles/{title_id}/explanation").text)
+    deltas = [e for e in events if e["event"] == "delta"]
+    assert len(deltas) > 1  # streamed in chunks (the fake yields word-by-word), not one blob
+    assert "".join(d["data"]["text"] for d in deltas) == (
+        "Because its cerebral mood is squarely your taste."
+    )
 
 
 def test_chat_journey(db_session: Session) -> None:

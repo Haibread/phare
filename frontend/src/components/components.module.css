@@ -346,6 +346,23 @@
   color: var(--accent);
 }
 
+/* Blinking caret while the "why this" reason streams in. */
+.whyCaret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: whyCaretBlink 1s steps(1) infinite;
+}
+
+@keyframes whyCaretBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
 .detailSynopsis {
   font-size: 0.9rem;
   line-height: 1.45;

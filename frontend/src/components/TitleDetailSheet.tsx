@@ -1,12 +1,13 @@
-import type { RecommendationItem } from "../api";
+import { useEffect, useState } from "react";
+import { type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
-import { useTitleDetail, useTitleExplanation } from "../lib/queries";
+import { useTitleDetail } from "../lib/queries";
 import { Sheet } from "./Sheet";
 import styles from "./components.module.css";
 
 /** "More info" for a recommended title: the card data we already have (poster, fit) plus the
- * lazily-fetched synopsis/runtime/links and a lazily-generated LLM "why this". Opened by tapping a
+ * lazily-fetched synopsis/runtime/links and a lazily-*streamed* LLM "why this". Opened by tapping a
  * poster card — nothing here costs an LLM call until the user actually opens it. */
 export function TitleDetailSheet({
   item,
@@ -19,9 +20,35 @@ export function TitleDetailSheet({
 }): React.JSX.Element {
   const profileId = useProfileId();
   const detail = useTitleDetail(item.titleId, open);
-  const explanation = useTitleExplanation(profileId, item.titleId, open);
-  // Show the instant template right away; swap to the richer LLM reason once it's generated.
-  const why = explanation.data?.explanation ?? item.explanation;
+  const [streamedWhy, setStreamedWhy] = useState("");
+  const [whyStreaming, setWhyStreaming] = useState(false);
+
+  // Generate the LLM "why this" only while the sheet is open, streaming it in; abort on close.
+  useEffect(() => {
+    if (!open) {
+      setStreamedWhy("");
+      setWhyStreaming(false);
+      return;
+    }
+    const controller = new AbortController();
+    setStreamedWhy("");
+    setWhyStreaming(true);
+    api
+      .streamTitleExplanation(
+        profileId,
+        item.titleId,
+        {
+          onDelta: (chunk) => setStreamedWhy((prev) => prev + chunk),
+          onDone: () => setWhyStreaming(false),
+        },
+        controller.signal,
+      )
+      .catch(() => setWhyStreaming(false)); // aborted on close, or a transient error
+    return () => controller.abort();
+  }, [open, profileId, item.titleId]);
+
+  // Show the instant template until the streamed reason starts arriving, then the richer one.
+  const why = streamedWhy || item.explanation;
   const runtime = detail.data?.runtimeMinutes ?? null;
   const meta = [
     item.year?.toString(),
@@ -46,6 +73,7 @@ export function TitleDetailSheet({
             <p className={styles.detailWhy} data-testid="detail-why">
               <span className={styles.detailLabel}>Why this</span>
               {why}
+              {whyStreaming && <span className={styles.whyCaret} aria-hidden="true" />}
             </p>
           )}
           <div className={styles.detailSynopsis}>

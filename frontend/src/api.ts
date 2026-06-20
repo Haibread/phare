@@ -75,8 +75,6 @@ export const recommendationItemSchema = z.object({
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 
-export const titleExplanationSchema = z.object({ explanation: z.string() });
-
 export const titleDetailSchema = z.object({
   titleId: z.string(),
   title: z.string(),
@@ -249,26 +247,13 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   return schema.parse(await response.json());
 }
 
-/** Stream a chat turn over Server-Sent Events: the picks/writes arrive in one `meta` event, then
- * the reply text streams in as `delta` events. Resolves when the stream closes (`done`). */
-async function chatStream(
-  profileId: string,
-  message: string,
-  handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
+/** Consume a Server-Sent Events response, dispatching each `(event, parsed-data)` to `onEvent`. */
+async function readEventStream(
+  response: Response,
+  onEvent: (event: string, data: unknown) => void,
 ): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (authToken !== null) {
-    headers.Authorization = `Bearer ${authToken}`;
-  }
-  const response = await fetch(`${API_BASE}/profiles/${profileId}/chat/stream`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ message }),
-    signal: signal ?? null,
-  });
   if (!response.ok || response.body === null) {
-    throw new Error(response.statusText || "chat stream failed");
+    throw new Error(response.statusText || "stream failed");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -293,20 +278,66 @@ async function chatStream(
         }
       }
       if (data !== "") {
-        const parsed: unknown = JSON.parse(data);
-        if (event === "status") {
-          handlers.onStatus?.(String((parsed as { label: string }).label));
-        } else if (event === "meta") {
-          handlers.onMeta?.(chatStreamMetaSchema.parse(parsed));
-        } else if (event === "delta") {
-          handlers.onDelta?.(String((parsed as { text: string }).text));
-        } else if (event === "done") {
-          handlers.onDone?.();
-        }
+        onEvent(event, JSON.parse(data));
       }
       sep = buffer.indexOf("\n\n");
     }
   }
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (authToken !== null) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+  return headers;
+}
+
+/** Stream a chat turn over Server-Sent Events: a `status` line, then the picks/writes in one `meta`
+ * event, then the reply text as `delta` events. Resolves when the stream closes (`done`). */
+async function chatStream(
+  profileId: string,
+  message: string,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/profiles/${profileId}/chat/stream`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ message }),
+    signal: signal ?? null,
+  });
+  await readEventStream(response, (event, parsed) => {
+    if (event === "status") {
+      handlers.onStatus?.(String((parsed as { label: string }).label));
+    } else if (event === "meta") {
+      handlers.onMeta?.(chatStreamMetaSchema.parse(parsed));
+    } else if (event === "delta") {
+      handlers.onDelta?.(String((parsed as { text: string }).text));
+    } else if (event === "done") {
+      handlers.onDone?.();
+    }
+  });
+}
+
+/** Stream a title's lazily-generated "why this fits you" reason as `delta` chunks, then `done`. */
+async function streamTitleExplanation(
+  profileId: string,
+  titleId: string,
+  handlers: { onDelta?: (text: string) => void; onDone?: () => void },
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/profiles/${profileId}/titles/${titleId}/explanation`, {
+    headers: authHeaders(),
+    signal: signal ?? null,
+  });
+  await readEventStream(response, (event, parsed) => {
+    if (event === "delta") {
+      handlers.onDelta?.(String((parsed as { text: string }).text));
+    } else if (event === "done") {
+      handlers.onDone?.();
+    }
+  });
 }
 
 export const api = {
@@ -367,8 +398,7 @@ export const api = {
   conversion: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations/conversion`, conversionSchema),
   titleDetail: (titleId: string) => request(`/titles/${titleId}`, titleDetailSchema),
-  titleExplanation: (profileId: string, titleId: string) =>
-    request(`/profiles/${profileId}/titles/${titleId}/explanation`, titleExplanationSchema),
+  streamTitleExplanation,
   chat: (profileId: string, message: string) =>
     request(`/profiles/${profileId}/chat`, chatReplySchema, {
       method: "POST",
