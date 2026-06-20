@@ -51,6 +51,7 @@ quality.
 | Taste extraction | LLM reads history into a prose profile | Limited; relies on the structured/empty path + your editable overrides |
 | Explanations | LLM, spoiler-safe sentence | Deterministic metadata-only template (genres/year/kind) |
 | Chat intent | LLM mood/intent parsing | Keyword rules ("funny", "90 min", …) |
+| Chat **write path** (register "I saw X", commitments, memory) | Full tool-using agent | **Read-only** — no writes (title resolution needs the model) |
 | Dynamic "Today's picks" rows | LLM-named themes | Deterministic calendar + top-genre fallback |
 
 The two spaces never mix: local and real vectors carry different model-version tags

@@ -93,12 +93,23 @@ const chatIntentSchema = z.object({
   mood: z.string().nullable(),
 });
 
+export const agentActionSchema = z.object({
+  kind: z.string(),
+  summary: z.string(),
+  undoToken: z.string().nullable(),
+});
+export type AgentAction = z.infer<typeof agentActionSchema>;
+
 export const chatReplySchema = z.object({
   replyText: z.string(),
   intent: chatIntentSchema,
   items: z.array(recommendationItemSchema),
+  actions: z.array(agentActionSchema),
 });
 export type ChatReply = z.infer<typeof chatReplySchema>;
+
+const chatOpeningSchema = z.object({ greeting: z.string().nullable() });
+const undoResultSchema = z.object({ undone: z.boolean() });
 
 const catalogSummarySchema = z.object({ created: z.number() });
 
@@ -145,6 +156,31 @@ export type Availability = z.infer<typeof availabilitySchema>;
 const requestResultSchema = z.object({ ok: z.boolean(), availability: z.string() });
 const connectedSchema = z.object({ connected: z.boolean() });
 
+export const commitmentSchema = z.object({
+  id: z.string(),
+  titleId: z.string(),
+  title: z.string(),
+  kind: z.string(),
+  posterUrl: z.string().nullable(),
+  status: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+});
+export type Commitment = z.infer<typeof commitmentSchema>;
+const commitmentListSchema = z.object({ items: z.array(commitmentSchema) });
+
+export const memoryNoteSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  kind: z.string(),
+  expiresAt: z.string().nullable(),
+  source: z.string(),
+  createdAt: z.string(),
+});
+export type MemoryNote = z.infer<typeof memoryNoteSchema>;
+const memoryNoteListSchema = z.object({ items: z.array(memoryNoteSchema) });
+
 // Bearer token held in memory only (never localStorage) — secrets stay in the session.
 let authToken: string | null = null;
 export function setAuthToken(token: string | null): void {
@@ -175,6 +211,10 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
     throw new Error(detail);
   }
   logger.debug("api.ok", { url, status: response.status });
+  // 204 No Content (e.g. DELETE) has no body to parse — validate against null.
+  if (response.status === 204) {
+    return schema.parse(null);
+  }
   return schema.parse(await response.json());
 }
 
@@ -240,6 +280,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  chatOpening: (profileId: string) =>
+    request(`/profiles/${profileId}/chat/opening`, chatOpeningSchema),
+  undoChatAction: (profileId: string, token: string) =>
+    request(`/profiles/${profileId}/chat/undo`, undoResultSchema, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
   searchCatalog: (profileId: string, q: string) =>
     request(
       `/profiles/${profileId}/catalog/search`,
@@ -261,4 +308,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ baseUrl, apiKey }),
     }),
+  listCommitments: (profileId: string) =>
+    request(`/profiles/${profileId}/commitments`, commitmentListSchema),
+  listMemory: (profileId: string) => request(`/profiles/${profileId}/memory`, memoryNoteListSchema),
+  addMemoryNote: (profileId: string, text: string, kind: string) =>
+    request(`/profiles/${profileId}/memory`, memoryNoteSchema, {
+      method: "POST",
+      body: JSON.stringify({ text, kind }),
+    }),
+  deleteMemoryNote: (profileId: string, noteId: string) =>
+    request(`/profiles/${profileId}/memory/${noteId}`, z.null(), { method: "DELETE" }),
 };

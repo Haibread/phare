@@ -14,6 +14,8 @@ export const keys = {
   conversion: (id: string) => ["conversion", id] as const,
   availability: (id: string) => ["availability", id] as const,
   sources: (id: string) => ["sources", id] as const,
+  commitments: (id: string) => ["commitments", id] as const,
+  memory: (id: string) => ["memory", id] as const,
 };
 
 export function useMe() {
@@ -127,6 +129,60 @@ export function useRequestTitle(profileId: string) {
   return useMutation({
     mutationFn: (titleId: string) => api.requestTitle(profileId, titleId),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.availability(profileId) }),
+  });
+}
+
+export function useChatOpening(profileId: string) {
+  return useQuery({
+    queryKey: ["chatOpening", profileId],
+    queryFn: () => api.chatOpening(profileId),
+    staleTime: 0,
+  });
+}
+
+export function useUndoChatAction(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.undoChatAction(profileId, token),
+    onSuccess: () => {
+      // A reversed write changes signals/taste/memory — refresh anything derived from them.
+      invalidateProfileData(qc, profileId);
+      qc.invalidateQueries({ queryKey: keys.memory(profileId) });
+      qc.invalidateQueries({ queryKey: keys.commitments(profileId) });
+    },
+  });
+}
+
+export function useCommitments(profileId: string | null) {
+  return useQuery({
+    queryKey: keys.commitments(profileId ?? ""),
+    queryFn: () => api.listCommitments(profileId as string),
+    enabled: profileId !== null,
+  });
+}
+
+export function useMemory(profileId: string | null) {
+  return useQuery({
+    queryKey: keys.memory(profileId ?? ""),
+    queryFn: () => api.listMemory(profileId as string),
+    enabled: profileId !== null,
+  });
+}
+
+export function useAddMemoryNote(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ text, kind }: { text: string; kind: string }) =>
+      api.addMemoryNote(profileId, text, kind),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.memory(profileId) }),
+  });
+}
+
+export function useDeleteMemoryNote(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (noteId: string) => api.deleteMemoryNote(profileId, noteId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.memory(profileId) }),
   });
 }
 

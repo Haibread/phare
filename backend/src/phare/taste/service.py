@@ -85,9 +85,20 @@ class TasteService:
             )
         return lines
 
+    def _memory_block(self, profile_id: uuid.UUID) -> str:
+        """Active agent-memory notes the user told us — distilled into the taste profile here."""
+        from phare.agent import memory as memory_store
+
+        notes = memory_store.active_notes(self.session, profile_id, now=datetime.now(UTC))
+        if not notes:
+            return ""
+        joined = "; ".join(n.text for n in notes)
+        return f"\n\nThe viewer explicitly told us to remember (weight these heavily): {joined}\n"
+
     def generate(self, profile_id: uuid.UUID) -> TasteProfile:
         lines = self._history_lines(profile_id)
-        prompt = _PROMPT_HEADER + "\n".join(lines) if lines else _PROMPT_HEADER + "(no history)"
+        history = "\n".join(lines) if lines else "(no history)"
+        prompt = _PROMPT_HEADER + history + self._memory_block(profile_id)
         logger.info("taste.generate", extra={"profile_id": str(profile_id), "events": len(lines)})
 
         raw = self.llm.complete(prompt)

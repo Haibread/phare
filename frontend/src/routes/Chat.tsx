@@ -1,11 +1,17 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { type ChatReply, type RecommendationItem, api } from "../api";
+import { type AgentAction, type ChatReply, type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
+import { useChatOpening, useUndoChatAction } from "../lib/queries";
 import styles from "./routes.module.css";
 
-type Turn = { role: "user" | "agent"; text: string; items?: RecommendationItem[] };
+type Turn = {
+  role: "user" | "agent";
+  text: string;
+  items?: RecommendationItem[];
+  actions?: AgentAction[];
+};
 
 const STARTERS = ["something funny and short", "a slow-burn sci-fi", "a comfort rewatch"];
 const FOLLOWUPS = ["something weirder", "even shorter", "lighter", "why these?"];
@@ -32,12 +38,22 @@ export function Chat(): React.JSX.Element {
   const profileId = useProfileId();
   const [log, setLog] = useState<Turn[]>([]);
   const [message, setMessage] = useState("");
+  const [undone, setUndone] = useState<Set<string>>(new Set());
+  const opening = useChatOpening(profileId);
+  const undo = useUndoChatAction(profileId);
 
   const chat = useMutation({
     mutationFn: (text: string) => api.chat(profileId, text),
     onSuccess: (reply: ChatReply) =>
-      setLog((l) => [...l, { role: "agent", text: reply.replyText, items: reply.items }]),
+      setLog((l) => [
+        ...l,
+        { role: "agent", text: reply.replyText, items: reply.items, actions: reply.actions },
+      ]),
   });
+
+  function undoAction(token: string) {
+    undo.mutate(token, { onSuccess: () => setUndone((s) => new Set(s).add(token)) });
+  }
 
   function send(text: string) {
     const trimmed = text.trim();
@@ -59,7 +75,8 @@ export function Chat(): React.JSX.Element {
         {log.length === 0 && (
           <div className={styles.bubble} data-testid="chat-greeting">
             <p style={{ margin: 0 }}>
-              Tell me your mood and I'll find something — "tired, something funny under 90 minutes".
+              {opening.data?.greeting ??
+                'Tell me your mood and I\'ll find something — "tired, something funny under 90 minutes". You can also tell me what you\'ve seen ("loved Dune") and I\'ll remember.'}
             </p>
           </div>
         )}
@@ -71,6 +88,33 @@ export function Chat(): React.JSX.Element {
             data-testid={`chat-${turn.role}`}
           >
             <p style={{ margin: 0 }}>{turn.text}</p>
+            {turn.actions && turn.actions.length > 0 && (
+              <div className={styles.actionChips} data-testid="chat-actions">
+                {turn.actions.map((action) => (
+                  <span
+                    key={action.summary}
+                    className={styles.actionChip}
+                    data-testid="chat-action"
+                  >
+                    ✓ {action.summary}
+                    {action.undoToken &&
+                      (undone.has(action.undoToken) ? (
+                        <span className="faint"> · undone</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles.undoBtn}
+                          data-testid="chat-undo"
+                          disabled={undo.isPending}
+                          onClick={() => action.undoToken && undoAction(action.undoToken)}
+                        >
+                          undo
+                        </button>
+                      ))}
+                  </span>
+                ))}
+              </div>
+            )}
             {turn.items && turn.items.length > 0 && (
               <div className={styles.bubbleStrip}>
                 {turn.items.map((item) => (

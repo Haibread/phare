@@ -146,10 +146,29 @@ class ChatIntentResponse(ApiModel):
     mood: str | None = None
 
 
+class AgentActionResponse(ApiModel):
+    kind: str
+    summary: str
+    undo_token: str | None = None
+
+
 class ChatReplyResponse(ApiModel):
     reply_text: str
     intent: ChatIntentResponse
     items: list[RecommendationItem]
+    actions: list[AgentActionResponse] = []
+
+
+class UndoRequest(ApiModel):
+    token: str = Field(min_length=1)
+
+
+class UndoResponse(ApiModel):
+    undone: bool
+
+
+class ChatOpeningResponse(ApiModel):
+    greeting: str | None = None  # a follow-up prompt when there are open watch plans
 
 
 class TraktConnectStartResponse(ApiModel):
@@ -188,3 +207,38 @@ class HistoryPage(ApiModel):
     page: int
     per_page: int
     total: int
+
+
+class CommitmentItem(ApiModel):
+    id: uuid.UUID
+    title_id: uuid.UUID
+    title: str
+    kind: str
+    poster_url: str | None = None
+    status: str
+    note: str | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None
+
+
+class CommitmentList(ApiModel):
+    items: list[CommitmentItem]
+
+
+class MemoryNoteItem(ApiModel):
+    id: uuid.UUID
+    text: str
+    kind: str
+    expires_at: datetime | None = None
+    source: str
+    created_at: datetime
+
+
+class MemoryNoteList(ApiModel):
+    items: list[MemoryNoteItem]
+
+
+class CreateMemoryNoteRequest(ApiModel):
+    text: str = Field(min_length=1, max_length=500)
+    kind: str = "fact"
+    expires_at: datetime | None = None

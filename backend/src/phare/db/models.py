@@ -56,6 +56,23 @@ class EventType(enum.StrEnum):
     watchlisted = "watchlisted"
 
 
+class CommitmentStatus(enum.StrEnum):
+    """Lifecycle of a "I'll watch this" commitment the chat agent tracks."""
+
+    pending = "pending"
+    watched = "watched"
+    dropped = "dropped"
+
+
+class MemoryKind(enum.StrEnum):
+    """Generalist agent memory note. ``preference`` is durable and distils into taste;
+    ``context`` is usually temporal (carries ``expires_at``); ``fact`` is neutral recall."""
+
+    preference = "preference"
+    context = "context"
+    fact = "fact"
+
+
 def _uuid_pk() -> Mapped[uuid.UUID]:
     return mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -260,3 +277,50 @@ class TasteProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class WatchCommitment(Base):
+    """A "I'll watch X" intent the chat agent registers, so it can follow up next session.
+
+    Resolving it (watched/dropped) is what turns a plan into a real signal. Per-profile and
+    FK-cascaded; inspectable in the UI (memory is never a black box).
+    """
+
+    __tablename__ = "watch_commitment"
+    __table_args__ = (Index("ix_watch_commitment_profile", "profile_id", "status"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
+    title_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("title.id", ondelete="CASCADE"))
+    status: Mapped[CommitmentStatus] = mapped_column(
+        Enum(CommitmentStatus, name="commitment_status"),
+        default=CommitmentStatus.pending,
+        server_default=CommitmentStatus.pending.value,
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MemoryNote(Base):
+    """Generalist, free-text agent memory — the soft/contextual/temporal facts no schema fits.
+
+    A steering input, never a ranking authority: durable preferences distil into the taste
+    profile; temporal notes (``expires_at`` set) only colour the active session. Editable in the
+    UI like the taste profile.
+    """
+
+    __tablename__ = "memory_note"
+    __table_args__ = (Index("ix_memory_note_profile", "profile_id", "expires_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
+    text: Mapped[str] = mapped_column(Text)
+    kind: Mapped[MemoryKind] = mapped_column(
+        Enum(MemoryKind, name="memory_kind"),
+        default=MemoryKind.fact,
+        server_default=MemoryKind.fact.value,
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(50), default="chat", server_default="chat")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

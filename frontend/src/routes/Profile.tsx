@@ -6,9 +6,13 @@ import { EditableChips } from "../components/EditableChips";
 import { ErrorState, Loading } from "../components/states";
 import {
   keys,
+  useAddMemoryNote,
+  useCommitments,
   useConnectedSources,
   useConversion,
+  useDeleteMemoryNote,
   useHistory,
+  useMemory,
   useTaste,
   useUpdateTaste,
 } from "../lib/queries";
@@ -42,7 +46,21 @@ export function Profile(): React.JSX.Element {
   const conversion = useConversion(profileId);
   const sources = useConnectedSources(profileId);
   const updateTaste = useUpdateTaste(profileId);
+  const commitments = useCommitments(profileId);
+  const memory = useMemory(profileId);
+  const addNote = useAddMemoryNote(profileId);
+  const deleteNote = useDeleteMemoryNote(profileId);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+
+  function submitNote() {
+    const text = noteDraft.trim();
+    if (text === "") {
+      return;
+    }
+    addNote.mutate({ text, kind: "preference" });
+    setNoteDraft("");
+  }
 
   const likes = stringList(taste.data?.structured.likes);
   const avoids = stringList(taste.data?.structured.hard_avoids);
@@ -155,6 +173,81 @@ export function Profile(): React.JSX.Element {
             {conv.rate === null
               ? `Conversion (top-${conv.topK}, ${conv.withinDays}d): not enough history yet.`
               : `Conversion: ${Math.round(conv.rate * 100)}% of ${conv.shown} shown were watched.`}
+          </p>
+        )}
+      </section>
+
+      {/* Watch plans (commitments) ------------------------------------- */}
+      <section className={styles.card} data-testid="watch-plans">
+        <h2 style={{ fontSize: "1.05rem", marginBottom: "var(--sp-3)" }}>Watch plans</h2>
+        {commitments.isPending ? (
+          <Loading label="Loading plans…" />
+        ) : commitments.data && commitments.data.items.length > 0 ? (
+          <div>
+            {commitments.data.items.map((c) => (
+              <div className={styles.sourceLine} key={c.id} data-testid="commitment">
+                <span>{c.title}</span>
+                <span className="faint" style={{ marginLeft: "auto", fontSize: "0.8rem" }}>
+                  {c.status === "pending" ? "to watch" : c.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: "0.88rem" }} data-testid="no-plans">
+            Tell the chat agent "I'll watch X" and it'll remember to ask how it went.
+          </p>
+        )}
+      </section>
+
+      {/* Memory (generalist notes) ------------------------------------- */}
+      <section className={styles.card} data-testid="memory-card">
+        <div className={styles.cardHead}>
+          <h2 style={{ fontSize: "1.05rem" }}>Memory</h2>
+          <span className="faint" style={{ fontSize: "0.75rem" }}>
+            what the agent remembers
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+          <input
+            className="field"
+            data-testid="memory-input"
+            aria-label="Add a memory note"
+            placeholder="e.g. no gore, watching with my kid this month…"
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitNote()}
+          />
+          <button
+            type="button"
+            className="btn"
+            data-testid="memory-add"
+            onClick={submitNote}
+            disabled={addNote.isPending || noteDraft.trim() === ""}
+          >
+            Remember
+          </button>
+        </div>
+        {memory.data && memory.data.items.length > 0 ? (
+          <div style={{ marginTop: "var(--sp-3)" }}>
+            {memory.data.items.map((n) => (
+              <div className={styles.sourceLine} key={n.id} data-testid="memory-note">
+                <span>{n.text}</span>
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  aria-label={`Forget: ${n.text}`}
+                  data-testid="memory-forget"
+                  onClick={() => deleteNote.mutate(n.id)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: "0.88rem", marginTop: "var(--sp-2)" }}>
+            Nothing yet — notes you add (or tell the chat) steer your recommendations.
           </p>
         )}
       </section>
