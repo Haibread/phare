@@ -202,3 +202,32 @@ def explain(
 ) -> list[Recommendation]:
     """Explain each recommendation. Back-compat shim: unbounded, uncached (per-call behavior)."""
     return Explainer(llm=llm).explain(recommendations, taste)
+
+
+def lazy_reason(
+    rec: Recommendation, taste: Mapping[str, Any], llm: LLMProvider | None, cache: TTLCache | None
+) -> str:
+    """A "why this fits you" reason for the detail sheet — generated on demand, cached on success.
+
+    Looser than the card-label blurb: a detail view can hold a short paragraph, so this only
+    rejects on a genuine plot-reveal *marker* (not length). Falls back to the template offline or
+    on a marker/error. Successes are cached per (title, taste); a (rare) rejection isn't, so a
+    re-open retries.
+    """
+    key = ("reason", str(rec.title_id), _taste_fingerprint(taste))
+    if cache is not None and (hit := cache.get(key)) is not None:
+        return str(hit)
+    if llm is None:
+        return _template(rec, taste)
+    try:
+        text = llm.complete(_llm_prompt(rec, taste)).strip()
+    except Exception:  # noqa: BLE001 - a flaky model must not sink the request
+        logger.warning("recommend.reason_failed", extra={"title": rec.title})
+        return _template(rec, taste)
+    if text and _SPOILER_MARKERS.search(text) is None:
+        if cache is not None:
+            cache.set(key, text)
+        return text
+    if text:
+        logger.warning("recommend.reason_rejected", extra={"title": rec.title})
+    return _template(rec, taste)

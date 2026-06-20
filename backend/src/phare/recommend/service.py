@@ -48,7 +48,7 @@ class RecommendationService:
         chat_llm: LLMProvider | None = None,
         row_size: int = 12,
         swing_slots: int = 2,
-        explanation_budget: int = 8,
+        explanation_budget: int = 0,  # 0 = template rows; LLM "why this" is lazy per title
     ) -> None:
         self.session = session
         self.embed_provider = embed_provider

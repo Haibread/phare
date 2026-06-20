@@ -34,7 +34,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | **Recommendation tuning** (safe defaults, rarely changed) | | |
 | `RECOMMEND_ROW_SIZE` | `12` | Items per row. |
 | `RECOMMEND_SWING_SLOTS` | `2` | Reserved high-novelty "swing" picks per slate. |
-| `RECOMMEND_EXPLANATION_BUDGET` | `8` | Max uncached LLM explanation calls per home render (fired concurrently; results cached). The rest use the template and get a blurb on a later render. `0` = always template. See [Row explanations](#row-explanations). |
+| `RECOMMEND_EXPLANATION_BUDGET` | `0` | Eager LLM "why this" calls per home render. **Default `0`** = rows use the instant template and the LLM reason is generated lazily per title (only when a card's detail is opened). Set `>0` to eagerly explain that many cards per render instead. See [Row explanations](#row-explanations). |
 | **Auth** (opt-in) | | |
 | `AUTH_PASSWORD` | _(unset)_ | Set to gate the instance. Unset = open (single-user dev posture). |
 | `SECRET_KEY` | falls back to `AUTH_PASSWORD` | Signs bearer tokens **and** derives the source-token encryption key. |
@@ -95,33 +95,25 @@ Self-hosted sources (Plex/Jellyfin/Seerr) get the retry but **no cache**: they'r
 a fresh call. LLM responses aren't cached either — prompts vary, and title embeddings are already
 persisted in Postgres.
 
-### Row explanations
+### Row explanations — lazy by default
 
-The home screen shows ~50 items across rows. Generating an LLM blurb for each one **synchronously,
-per item** makes the page take minutes against a real (often per-call-slow) provider — so the
-explainer ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)) bounds the work:
+The home screen shows ~50 items across rows, but a card's "why this fits you" reason is only ever
+*seen* when the user opens that card's detail sheet. So by default Phare **doesn't spend an LLM call
+to explain cards nobody opens**:
 
-- **Budget.** At most `RECOMMEND_EXPLANATION_BUDGET` *uncached* LLM calls per render; the rest fall
-  back to the deterministic, spoiler-proof template. The budget is pooled across all rows of one
-  render, not per-row.
-- **Concurrency.** Those bounded calls are fired concurrently (they're blocking HTTP), so a render's
-  LLM time is roughly one call, not their sum.
-- **Priority.** The budget is spent on the top-ranked items first (rows render most-personalized
-  first), so the visible top picks get the blurb; the cache then propagates it to the same titles
-  in lower rows.
-- **Spoiler guard, salvaged.** The prompt asks for one sentence; a verbose model sometimes runs
-  past the length cap with extra harmless clauses. Rather than discard that (and cache the template
-  forever — which intermittently cost on-taste top picks their blurb), a marker-free over-long reply
-  is trimmed to its first sentence. Only a genuine plot-reveal marker rejects to the template.
-- **Cache.** Every *outcome* is cached — the LLM blurb on success, the template on a marker
-  rejection or error — keyed by `(title, swing-ness, taste summary)`. So each title is attempted at
-  most once per taste version, the cache warms over the first few renders, and steady-state renders
-  are near-instant. Changing taste re-keys the cache, regenerating blurbs. The cache is in-process
-  (resets on restart). A title that templated on first attempt stays templated until taste changes —
-  the trade for instant loads.
+- **Rows render on the instant template** (genres/year/fit), spoiler-proof by construction — zero
+  LLM calls, so the home page never waits on a model.
+- **The LLM reason is generated lazily, per title.** When a detail sheet opens, the frontend calls
+  `GET /profiles/{id}/titles/{titleId}/explanation`, which generates one workhorse-model reason
+  ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)), spoiler-checks it, and
+  **caches** it (keyed by `(title, taste summary)`) so re-opening is free. Offline, it returns the
+  template. The sheet shows the template immediately and swaps in the richer reason when it arrives.
+- **Chat** is unaffected: it always templates its picks (the agent's reply already frames them).
 
-The chat path is unaffected: it always templates its picks (the agent's natural-language reply
-already frames them), so a chat turn never makes a per-item explanation call.
+Prefer the old behaviour (eagerly explain the top cards on every home render, concurrently, cached)?
+Set `RECOMMEND_EXPLANATION_BUDGET` to the number of cards to explain per render. The explainer still
+bounds + pools that budget, fires the calls concurrently, salvages over-long-but-marker-free replies
+to their first sentence, and caches every outcome — but it costs LLM calls on loads, not on clicks.
 
 ### Switching on a real model
 

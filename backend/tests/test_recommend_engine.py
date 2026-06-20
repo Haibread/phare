@@ -198,6 +198,27 @@ def _llm_service(
     )
 
 
+def test_home_rows_make_no_eager_llm_calls_by_default(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The default budget is 0: rows render instantly on templates, and the LLM "why this" is left
+    # to the lazy per-title endpoint. So a home render costs zero LLM explanation calls.
+    monkeypatch.setattr("phare.recommend.service._EXPLANATION_CACHE", TTLCache(ttl=300))
+    profile_id = _seeded_profile(db_session)
+    llm = FakeLLMProvider(completion="A great fit for your taste.")
+    service = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=llm,  # available, but default explanation_budget=0 means it's never called
+    )
+
+    rows = service.rows(profile_id)
+
+    assert rows and all(item.explanation for r in rows for item in r.items)  # templates everywhere
+    assert llm.prompts == []  # nothing explained eagerly
+
+
 def test_home_rows_explanation_calls_are_bounded(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
