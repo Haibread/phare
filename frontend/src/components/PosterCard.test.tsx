@@ -2,13 +2,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type RenderResult, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { RecommendationItem } from "../api";
+import { ProfileProvider } from "../app/ProfileContext";
 import { PosterCard } from "./PosterCard";
 import { RecRow } from "./RecRow";
 
-// Cards embed the (lazy) detail sheet, which uses react-query — provide a client.
+// Cards embed the (lazy) detail sheet, which uses react-query + the active profile — provide both.
 function renderCard(ui: React.ReactElement): RenderResult {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={qc}>
+      <ProfileProvider value="p1">{ui}</ProfileProvider>
+    </QueryClientProvider>,
+  );
 }
 
 function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {

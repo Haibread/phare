@@ -82,10 +82,11 @@ class Settings(BaseSettings):
     # Recommendation engine tuning (safe defaults; rarely need changing).
     recommend_row_size: int = 12
     recommend_swing_slots: int = 2
-    # Max *uncached* LLM explanation calls per home-rows render (fired concurrently). The rest fall
-    # back to the template and get LLM blurbs on a later render (results are cached). Bounds page
-    # latency/cost against a real provider. 0 = always template.
-    recommend_explanation_budget: int = 8
+    # Eager LLM "why this" generation on home/dynamic rows. Default 0 = off: rows use the instant
+    # deterministic template, and the richer LLM reason is generated *lazily* per title, only when
+    # the user opens its detail sheet (GET /profiles/{id}/titles/{id}/explanation) — so we don't pay
+    # to explain cards nobody opens. Set >0 to eagerly explain that many cards per render instead.
+    recommend_explanation_budget: int = 0
 
     # Auth (opt-in): when AUTH_PASSWORD is unset the API is open (single-user dev posture).
     # SECRET_KEY signs bearer tokens and derives the source-token encryption key; it falls back

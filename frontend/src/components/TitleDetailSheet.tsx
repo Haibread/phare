@@ -1,11 +1,13 @@
 import type { RecommendationItem } from "../api";
+import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
-import { useTitleDetail } from "../lib/queries";
+import { useTitleDetail, useTitleExplanation } from "../lib/queries";
 import { Sheet } from "./Sheet";
 import styles from "./components.module.css";
 
-/** "More info" for a recommended title: the card data we already have (poster, fit, why) plus the
- * lazily-fetched synopsis/runtime/links. Opened by tapping a poster card. */
+/** "More info" for a recommended title: the card data we already have (poster, fit) plus the
+ * lazily-fetched synopsis/runtime/links and a lazily-generated LLM "why this". Opened by tapping a
+ * poster card — nothing here costs an LLM call until the user actually opens it. */
 export function TitleDetailSheet({
   item,
   open,
@@ -15,7 +17,11 @@ export function TitleDetailSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
+  const profileId = useProfileId();
   const detail = useTitleDetail(item.titleId, open);
+  const explanation = useTitleExplanation(profileId, item.titleId, open);
+  // Show the instant template right away; swap to the richer LLM reason once it's generated.
+  const why = explanation.data?.explanation ?? item.explanation;
   const runtime = detail.data?.runtimeMinutes ?? null;
   const meta = [
     item.year?.toString(),
@@ -36,10 +42,10 @@ export function TitleDetailSheet({
         </div>
         <div className={styles.detailBody}>
           {meta && <p className={`muted ${styles.detailMeta}`}>{meta}</p>}
-          {item.explanation && (
-            <p className={styles.detailWhy}>
+          {why && (
+            <p className={styles.detailWhy} data-testid="detail-why">
               <span className={styles.detailLabel}>Why this</span>
-              {item.explanation}
+              {why}
             </p>
           )}
           <div className={styles.detailSynopsis}>

@@ -75,6 +75,8 @@ export const recommendationItemSchema = z.object({
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 
+export const titleExplanationSchema = z.object({ explanation: z.string() });
+
 export const titleDetailSchema = z.object({
   titleId: z.string(),
   title: z.string(),
@@ -365,6 +367,8 @@ export const api = {
   conversion: (profileId: string) =>
     request(`/profiles/${profileId}/recommendations/conversion`, conversionSchema),
   titleDetail: (titleId: string) => request(`/titles/${titleId}`, titleDetailSchema),
+  titleExplanation: (profileId: string, titleId: string) =>
+    request(`/profiles/${profileId}/titles/${titleId}/explanation`, titleExplanationSchema),
   chat: (profileId: string, message: string) =>
     request(`/profiles/${profileId}/chat`, chatReplySchema, {
       method: "POST",

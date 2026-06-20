@@ -90,6 +90,40 @@ def test_title_detail_returns_synopsis_and_links(db_session: Session) -> None:
     assert client.get(f"/titles/{missing}").status_code == 404
 
 
+def test_title_explanation_is_lazy_and_templates_offline(db_session: Session) -> None:
+    client = _client(db_session)  # offline: no workhorse LLM
+    profile_id = _profile_with_data(client)
+    title_id = client.get(f"/profiles/{profile_id}/recommendations").json()["rows"][0]["items"][0][
+        "titleId"
+    ]
+
+    resp = client.get(f"/profiles/{profile_id}/titles/{title_id}/explanation")
+    assert resp.status_code == 200
+    assert resp.json()["explanation"]  # deterministic template, no LLM call
+
+    missing = "00000000-0000-0000-0000-000000000000"
+    assert client.get(f"/profiles/{profile_id}/titles/{missing}/explanation").status_code == 404
+
+
+def test_title_explanation_uses_the_workhorse_when_available(db_session: Session) -> None:
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: db_session
+    app.dependency_overrides[get_embedder] = lambda: Embedder(
+        provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+    )
+    app.dependency_overrides[get_optional_chat_llm] = lambda: FakeLLMProvider(
+        completion="Because its cerebral mood is squarely your taste."
+    )
+    client = TestClient(app)
+    profile_id = _profile_with_data(client)
+    title_id = client.get(f"/profiles/{profile_id}/recommendations").json()["rows"][0]["items"][0][
+        "titleId"
+    ]
+
+    resp = client.get(f"/profiles/{profile_id}/titles/{title_id}/explanation")
+    assert resp.json()["explanation"] == "Because its cerebral mood is squarely your taste."
+
+
 def test_chat_journey(db_session: Session) -> None:
     client = _client(db_session)
     profile_id = _profile_with_data(client)
