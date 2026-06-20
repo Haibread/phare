@@ -6,9 +6,10 @@ provider for taste extraction, explanations, and the chat agent. Swappable via c
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 import httpx
@@ -70,6 +71,34 @@ class OpenAILLMProvider:
             {"model": self._chat_model, "messages": [{"role": "user", "content": prompt}]},
         )
         return data["choices"][0]["message"]["content"]
+
+    def stream(self, prompt: str) -> Iterator[str]:
+        """Yield reply text chunks as the model produces them (OpenAI ``stream: true`` SSE).
+
+        Used only for the user-facing chat reply, so it reaches the screen token-by-token instead
+        of after a multi-second blocking call. Callers fall back to ``complete`` if a provider has
+        no ``stream``.
+        """
+        logger.debug("llm.stream", extra={"model": self._chat_model})
+        payload = {
+            "model": self._chat_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        with self._client.stream("POST", "/chat/completions", json=payload) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    choice = json.loads(data)["choices"][0]
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+                if delta := choice.get("delta", {}).get("content"):
+                    yield delta
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         logger.debug("llm.embed", extra={"model": self._embedding_model, "count": len(texts)})

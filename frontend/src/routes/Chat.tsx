@@ -1,20 +1,26 @@
-import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { type AgentAction, type ChatReply, type RecommendationItem, api } from "../api";
+import { type RecommendationItem, api } from "../api";
+import { type ChatTurn, useChat } from "../app/ChatContext";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
-import { useChatOpening, useUndoChatAction } from "../lib/queries";
+import { useChatOpening, useInvalidateAfterChat, useUndoChatAction } from "../lib/queries";
 import styles from "./routes.module.css";
-
-type Turn = {
-  role: "user" | "agent";
-  text: string;
-  items?: RecommendationItem[];
-  actions?: AgentAction[];
-};
 
 const STARTERS = ["something funny and short", "a slow-burn sci-fi", "a comfort rewatch"];
 const FOLLOWUPS = ["something weirder", "even shorter", "lighter", "why these?"];
+
+/** Apply a patch to the last turn (the streaming agent bubble) without mutating the array. */
+function patchLast(
+  log: ChatTurn[],
+  patch: Partial<ChatTurn> | ((turn: ChatTurn) => Partial<ChatTurn>),
+): ChatTurn[] {
+  const last = log[log.length - 1];
+  if (last === undefined) {
+    return log;
+  }
+  const delta = typeof patch === "function" ? patch(last) : patch;
+  return [...log.slice(0, -1), { ...last, ...delta }];
+}
 
 function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
   const [failed, setFailed] = useState(false);
@@ -36,40 +42,70 @@ function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
 
 export function Chat(): React.JSX.Element {
   const profileId = useProfileId();
-  const [log, setLog] = useState<Turn[]>([]);
+  const { log, setLog, undone, setUndone, reset } = useChat();
   const [message, setMessage] = useState("");
-  const [undone, setUndone] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState(false);
   const opening = useChatOpening(profileId);
   const undo = useUndoChatAction(profileId);
-
-  const chat = useMutation({
-    mutationFn: (text: string) => api.chat(profileId, text),
-    onSuccess: (reply: ChatReply) =>
-      setLog((l) => [
-        ...l,
-        { role: "agent", text: reply.replyText, items: reply.items, actions: reply.actions },
-      ]),
-  });
+  const invalidateAfterChat = useInvalidateAfterChat(profileId);
 
   function undoAction(token: string) {
     undo.mutate(token, { onSuccess: () => setUndone((s) => new Set(s).add(token)) });
   }
 
-  function send(text: string) {
+  async function send(text: string) {
     const trimmed = text.trim();
-    if (trimmed === "") {
+    if (trimmed === "" || pending) {
       return;
     }
-    setLog((l) => [...l, { role: "user", text: trimmed }]);
+    const outbound = trimmed === "why these?" ? "why did you pick these?" : trimmed;
+    setLog((l) => [
+      ...l,
+      { role: "user", text: trimmed },
+      { role: "agent", text: "", streaming: true },
+    ]);
     setMessage("");
-    chat.mutate(trimmed === "why these?" ? "why did you pick these?" : trimmed);
+    setPending(true);
+    let wrote = false;
+    try {
+      await api.chatStream(profileId, outbound, {
+        onMeta: (meta) => {
+          wrote = meta.actions.length > 0;
+          setLog((l) => patchLast(l, { items: meta.items, actions: meta.actions }));
+        },
+        onDelta: (chunk) => setLog((l) => patchLast(l, (t) => ({ text: t.text + chunk }))),
+        onDone: () => setLog((l) => patchLast(l, { streaming: false })),
+      });
+    } catch {
+      setLog((l) =>
+        patchLast(l, { text: "Sorry — something went wrong. Please try again.", streaming: false }),
+      );
+    } finally {
+      setPending(false);
+      if (wrote) {
+        invalidateAfterChat(); // a chat write (e.g. "loved X") should refresh Browse + Profile
+      }
+    }
   }
 
   const suggestions = log.length === 0 ? STARTERS : FOLLOWUPS;
 
   return (
     <div className={styles.page} data-testid="chat">
-      <h1 className={styles.pageTitle}>Chat</h1>
+      <div className={styles.chatHead}>
+        <h1 className={styles.pageTitle}>Chat</h1>
+        {log.length > 0 && (
+          <button
+            type="button"
+            className={`btn ${styles.newChat}`}
+            data-testid="chat-new"
+            onClick={reset}
+            disabled={pending}
+          >
+            New chat
+          </button>
+        )}
+      </div>
 
       <div className={styles.chatLog} aria-live="polite" aria-label="Conversation">
         {log.length === 0 && (
@@ -87,7 +123,16 @@ export function Chat(): React.JSX.Element {
             className={`${styles.bubble} ${turn.role === "user" ? styles.bubbleUser : ""}`}
             data-testid={`chat-${turn.role}`}
           >
-            <p style={{ margin: 0 }}>{turn.text}</p>
+            {turn.streaming && turn.text === "" ? (
+              <span className="faint" data-testid="chat-thinking">
+                Thinking…
+              </span>
+            ) : (
+              <p style={{ margin: 0 }}>
+                {turn.text}
+                {turn.streaming && <span className={styles.caret} aria-hidden="true" />}
+              </p>
+            )}
             {turn.actions && turn.actions.length > 0 && (
               <div className={styles.actionChips} data-testid="chat-actions">
                 {turn.actions.map((action) => (
@@ -124,14 +169,9 @@ export function Chat(): React.JSX.Element {
             )}
           </div>
         ))}
-        {chat.isPending && (
-          <div className={styles.bubble} data-testid="chat-pending">
-            <span className="faint">Thinking…</span>
-          </div>
-        )}
       </div>
 
-      {!chat.isPending && (
+      {!pending && (
         <div className={styles.followups}>
           {suggestions.map((p) => (
             <button
@@ -170,7 +210,7 @@ export function Chat(): React.JSX.Element {
           type="submit"
           className="btn btn-primary"
           data-testid="chat-send"
-          disabled={chat.isPending || message.trim() === ""}
+          disabled={pending || message.trim() === ""}
         >
           Send
         </button>

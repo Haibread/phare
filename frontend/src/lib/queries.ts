@@ -102,6 +102,17 @@ function invalidateProfileData(qc: ReturnType<typeof useQueryClient>, profileId:
   qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
 }
 
+/** A callback that refreshes everything a chat write can change (signals/taste/memory/plans), so
+ * Browse and Profile reflect "I loved X" without a manual reload. */
+export function useInvalidateAfterChat(profileId: string): () => void {
+  const qc = useQueryClient();
+  return () => {
+    invalidateProfileData(qc, profileId);
+    qc.invalidateQueries({ queryKey: keys.memory(profileId) });
+    qc.invalidateQueries({ queryKey: keys.commitments(profileId) });
+  };
+}
+
 export function useLoadSampleData(profileId: string) {
   const qc = useQueryClient();
   return useMutation({

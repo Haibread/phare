@@ -15,6 +15,41 @@
   margin-bottom: var(--sp-4);
 }
 
+/* Chat header: title + New chat action on one row. */
+.chatHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.chatHead .pageTitle {
+  margin-bottom: 0;
+}
+
+.newChat {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+/* Blinking caret on the streaming reply, so it reads as "still typing". */
+.caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caretBlink 1s steps(1) infinite;
+}
+
+@keyframes caretBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
 /* Hero ------------------------------------------------------------------- */
 
 .hero {
