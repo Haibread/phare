@@ -23,6 +23,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `LLM_AGENT_MODEL` | _(falls back to `LLM_CHAT_MODEL`)_ | Optional stronger model for the **conversational chat agent** (planner + natural-language reply). Lets chat use a bigger model while the high-volume mechanical work stays cheap. |
 | `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Doubles as the embedding-space version tag. |
 | `LLM_EMBEDDING_DIM` | `1536` | Vector dimension. Fixed by the DB schema — changing it needs a migration + full re-embed. |
+| `LLM_EMBEDDING_REQUEST_DIMENSIONS` | `false` | Send `LLM_EMBEDDING_DIM` as the `dimensions` request param. Enable for models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed; leave off for models that reject the param. |
 | **Metadata + sources** (live syncs/imports only; not needed for the sample-data path) | | |
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + popular-catalog import + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
@@ -94,16 +95,20 @@ Phare asks the LLM to do two very different things, and you can point them at di
 - **Conversational agent** (`LLM_AGENT_MODEL`) — the chat planner and the natural-language reply.
   Tone, nuance, and not mis-hearing you matter, so a stronger *instruct* model earns its keep.
 
-Example (Scaleway Generative APIs):
+Phare speaks the OpenAI-compatible API, so point it at any provider (hosted or local) by setting
+`LLM_BASE_URL` to that provider's endpoint. Pick a small, fast instruct model for the workhorse and
+a stronger one for the agent:
 
 ```bash
-LLM_BASE_URL=https://api.scaleway.ai/v1
-LLM_CHAT_MODEL=qwen/qwen3.6-35b-a3b:bf16            # cheap, fast, agentic — the workhorse
-LLM_AGENT_MODEL=qwen/qwen3-235b-a22b-instruct-2507  # bigger instruct model for chat
-LLM_EMBEDDING_MODEL=qwen/qwen3-embedding-8b          # Matryoshka → set dim to match the schema
+LLM_BASE_URL=<your provider's OpenAI-compatible base URL>
+LLM_CHAT_MODEL=<small fast instruct model>     # workhorse
+LLM_AGENT_MODEL=<stronger instruct model>      # conversational chat
+LLM_EMBEDDING_MODEL=<embedding model>
 LLM_EMBEDDING_DIM=1536
+LLM_EMBEDDING_REQUEST_DIMENSIONS=true          # only if the embedding model supports it (below)
 ```
 
-`qwen3-embedding-8b` supports configurable (Matryoshka) dimensions, so it can serve the schema's
-1536 without a migration — provided the provider sends a `dimensions` request (see the embeddings
-provider). `bge-multilingual-gemma2` is excellent too but fixed at 3584 dims (needs a migration).
+**Embedding dimension:** the schema stores 1536-d vectors. If your embedding model's native size is
+something else, you either change `LLM_EMBEDDING_DIM` + run a migration on the vector column + a full
+re-embed, **or** — if the model supports configurable (Matryoshka) dimensions — set
+`LLM_EMBEDDING_REQUEST_DIMENSIONS=true` to request 1536 directly and skip the migration.

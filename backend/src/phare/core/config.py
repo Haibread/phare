@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     """Process configuration, loaded once at startup."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Look in the CWD and one level up, so the same repo-root .env is found whether the process
+        # starts from the repo root or from backend/ (the later entry wins).
+        env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -70,6 +72,10 @@ class Settings(BaseSettings):
     llm_agent_model: str | None = None
     llm_embedding_model: str = "text-embedding-3-small"
     llm_embedding_dim: int = 1536
+    # Opt in to requesting `LLM_EMBEDDING_DIM` via the standard `dimensions` parameter. Enable for
+    # models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed;
+    # leave off for models that reject the parameter.
+    llm_embedding_request_dimensions: bool = False
 
     # Recommendation engine tuning (safe defaults; rarely need changing).
     recommend_row_size: int = 12

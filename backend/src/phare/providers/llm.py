@@ -26,9 +26,14 @@ class OpenAILLMProvider:
         embedding_model: str,
         base_url: str = "https://api.openai.com/v1",
         client: httpx.Client | None = None,
+        embedding_dimensions: int | None = None,
     ) -> None:
         self._chat_model = chat_model
         self._embedding_model = embedding_model
+        # When set, request this output size via the standard OpenAI `dimensions` parameter — for
+        # models with configurable (Matryoshka) embeddings, so they fit the schema without a
+        # re-embed. Left unset for models that don't accept the parameter.
+        self._embedding_dimensions = embedding_dimensions
         self._client = client or httpx.Client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -49,10 +54,10 @@ class OpenAILLMProvider:
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         logger.debug("llm.embed", extra={"model": self._embedding_model, "count": len(texts)})
-        response = self._client.post(
-            "/embeddings",
-            json={"model": self._embedding_model, "input": list(texts)},
-        )
+        payload: dict[str, object] = {"model": self._embedding_model, "input": list(texts)}
+        if self._embedding_dimensions is not None:
+            payload["dimensions"] = self._embedding_dimensions
+        response = self._client.post("/embeddings", json=payload)
         response.raise_for_status()
         data = sorted(response.json()["data"], key=lambda d: d["index"])
         return [item["embedding"] for item in data]

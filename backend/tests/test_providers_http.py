@@ -8,6 +8,7 @@ import httpx
 
 from phare.db.models import TitleKind
 from phare.providers.jellyfin import JellyfinSourceProvider, parse_jellyfin_item
+from phare.providers.llm import OpenAILLMProvider
 from phare.providers.plex import PlexSourceProvider, parse_plex_item
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
@@ -28,6 +29,28 @@ _MOVIE = {
 
 def _tmdb_client(handler: object) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler), base_url="https://tmdb.test")
+
+
+def _llm_client(captured: dict) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+
+    return httpx.Client(transport=httpx.MockTransport(handler), base_url="https://llm.test")
+
+
+def test_embed_sends_dimensions_only_when_configured() -> None:
+    # Default: no `dimensions` (some models reject it).
+    body: dict = {}
+    OpenAILLMProvider("k", "chat", "embed", client=_llm_client(body)).embed(["x"])
+    assert "dimensions" not in body
+
+    # Opted in: the requested size is sent so a Matryoshka model matches the schema.
+    body = {}
+    OpenAILLMProvider(
+        "k", "chat", "embed", client=_llm_client(body), embedding_dimensions=1536
+    ).embed(["x"])
+    assert body["dimensions"] == 1536
 
 
 def test_tmdb_get_movie() -> None:
