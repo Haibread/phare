@@ -146,10 +146,29 @@ class ChatIntentResponse(ApiModel):
     mood: str | None = None
 
 
+class AgentActionResponse(ApiModel):
+    kind: str
+    summary: str
+    undo_token: str | None = None
+
+
 class ChatReplyResponse(ApiModel):
     reply_text: str
     intent: ChatIntentResponse
     items: list[RecommendationItem]
+    actions: list[AgentActionResponse] = []
+
+
+class UndoRequest(ApiModel):
+    token: str = Field(min_length=1)
+
+
+class UndoResponse(ApiModel):
+    undone: bool
+
+
+class ChatOpeningResponse(ApiModel):
+    greeting: str | None = None  # a follow-up prompt when there are open watch plans
 
 
 class TraktConnectStartResponse(ApiModel):

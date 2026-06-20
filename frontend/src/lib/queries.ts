@@ -132,6 +132,27 @@ export function useRequestTitle(profileId: string) {
   });
 }
 
+export function useChatOpening(profileId: string) {
+  return useQuery({
+    queryKey: ["chatOpening", profileId],
+    queryFn: () => api.chatOpening(profileId),
+    staleTime: 0,
+  });
+}
+
+export function useUndoChatAction(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.undoChatAction(profileId, token),
+    onSuccess: () => {
+      // A reversed write changes signals/taste/memory — refresh anything derived from them.
+      invalidateProfileData(qc, profileId);
+      qc.invalidateQueries({ queryKey: keys.memory(profileId) });
+      qc.invalidateQueries({ queryKey: keys.commitments(profileId) });
+    },
+  });
+}
+
 export function useCommitments(profileId: string | null) {
   return useQuery({
     queryKey: keys.commitments(profileId ?? ""),

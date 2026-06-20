@@ -93,12 +93,23 @@ const chatIntentSchema = z.object({
   mood: z.string().nullable(),
 });
 
+export const agentActionSchema = z.object({
+  kind: z.string(),
+  summary: z.string(),
+  undoToken: z.string().nullable(),
+});
+export type AgentAction = z.infer<typeof agentActionSchema>;
+
 export const chatReplySchema = z.object({
   replyText: z.string(),
   intent: chatIntentSchema,
   items: z.array(recommendationItemSchema),
+  actions: z.array(agentActionSchema),
 });
 export type ChatReply = z.infer<typeof chatReplySchema>;
+
+const chatOpeningSchema = z.object({ greeting: z.string().nullable() });
+const undoResultSchema = z.object({ undone: z.boolean() });
 
 const catalogSummarySchema = z.object({ created: z.number() });
 
@@ -268,6 +279,13 @@ export const api = {
     request(`/profiles/${profileId}/chat`, chatReplySchema, {
       method: "POST",
       body: JSON.stringify({ message }),
+    }),
+  chatOpening: (profileId: string) =>
+    request(`/profiles/${profileId}/chat/opening`, chatOpeningSchema),
+  undoChatAction: (profileId: string, token: string) =>
+    request(`/profiles/${profileId}/chat/undo`, undoResultSchema, {
+      method: "POST",
+      body: JSON.stringify({ token }),
     }),
   searchCatalog: (profileId: string, q: string) =>
     request(

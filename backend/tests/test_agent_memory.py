@@ -115,6 +115,44 @@ def test_commitments_endpoint_lists_with_title(db_session: Session) -> None:
     assert items[0]["status"] == "pending"
 
 
+def test_chat_opening_follows_up_on_pending_plans(db_session: Session) -> None:
+    profile_id, title_id = _profile_and_title(db_session)
+    client = _client(db_session)
+
+    assert client.get(f"/profiles/{profile_id}/chat/opening").json()["greeting"] is None
+
+    commitments_store.create_commitment(db_session, profile_id, title_id)
+    db_session.flush()
+    greeting = client.get(f"/profiles/{profile_id}/chat/opening").json()["greeting"]
+    assert greeting is not None and "The Matrix" in greeting
+
+
+def test_chat_undo_removes_a_chat_event(db_session: Session) -> None:
+    from sqlalchemy import select
+
+    from phare.db.models import EventType, WatchEvent
+
+    profile_id, title_id = _profile_and_title(db_session)
+    event = WatchEvent(
+        profile_id=profile_id,
+        title_id=title_id,
+        type=EventType.watched,
+        source="chat",
+        external_ref="chat:x",
+    )
+    db_session.add(event)
+    db_session.flush()
+
+    resp = _client(db_session).post(
+        f"/profiles/{profile_id}/chat/undo", json={"token": f"event:{event.id}"}
+    )
+    assert resp.status_code == 200 and resp.json()["undone"] is True
+    assert (
+        db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id)).all()
+        == []
+    )
+
+
 def test_memory_delete_other_profile_is_404(db_session: Session) -> None:
     profile_id, _ = _profile_and_title(db_session)
     other = Profile(display_name="other")
