@@ -29,6 +29,20 @@ services:
       SERVICE_NAME: ${SERVICE_NAME:-phare-backend}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       SECRET_KEY: ${SECRET_KEY:-}
+      # LLM + embeddings (OpenAI-compatible; blank = offline). Any provider that speaks the API.
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-gpt-4o-mini}
+      LLM_AGENT_MODEL: ${LLM_AGENT_MODEL:-}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
+      LLM_EMBEDDING_DIM: ${LLM_EMBEDDING_DIM:-1536}
+      LLM_EMBEDDING_REQUEST_DIMENSIONS: ${LLM_EMBEDDING_REQUEST_DIMENSIONS:-false}
+      # Metadata + sources (blank = sample-data path only)
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      TRAKT_CLIENT_ID: ${TRAKT_CLIENT_ID:-}
+      TRAKT_CLIENT_SECRET: ${TRAKT_CLIENT_SECRET:-}
+      SEERR_BASE_URL: ${SEERR_BASE_URL:-}
+      SEERR_API_KEY: ${SEERR_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
