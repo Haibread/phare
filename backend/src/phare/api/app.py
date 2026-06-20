@@ -16,6 +16,7 @@ from phare.api import (
     chat,
     health,
     history,
+    memory,
     profiles,
     recommend,
     sync,
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(recommend.router, dependencies=guarded)
     app.include_router(chat.router, dependencies=guarded)
     app.include_router(actions.router, dependencies=guarded)
+    app.include_router(memory.router, dependencies=guarded)
 
     setup_telemetry(app, get_engine(), settings)
     logger.info("app.ready", extra={"environment": settings.environment})
