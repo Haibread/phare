@@ -4,8 +4,19 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy.orm import Session
+
+from phare.db.models import Title, TitleKind
 from phare.providers.fakes import FakeLLMProvider
-from phare.recommend.explain import Explainer, coerce_safe, explain, is_spoiler_safe
+from phare.providers.http import TTLCache
+from phare.recommend.explain import (
+    Explainer,
+    PersistentReasonCache,
+    coerce_safe,
+    explain,
+    is_spoiler_safe,
+    stream_lazy_reason,
+)
 from phare.recommend.schema import Recommendation
 
 _OVERVIEW_LEAK = "the protagonist secretly dies at the end"
@@ -49,7 +60,7 @@ def test_llm_used_when_available() -> None:
 
 def test_llm_failure_falls_back_to_template() -> None:
     class _BoomLLM:
-        def complete(self, prompt: str) -> str:
+        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
             raise RuntimeError("provider down")
 
         def embed(self, texts: object) -> object:  # pragma: no cover - unused
@@ -104,3 +115,47 @@ def test_explainer_spends_budget_on_top_ranked_items_first() -> None:
     assert out[0].explanation == "A great fit for your taste."  # top picks get the blurb
     assert out[1].explanation == "A great fit for your taste."
     assert all(o.explanation != "A great fit for your taste." for o in out[2:])  # tail templated
+
+
+def test_explanation_calls_are_token_capped() -> None:
+    # A one-sentence blurb must ship a max_tokens cap so a chatty model can't run up the bill.
+    llm = FakeLLMProvider(completion="A moody sci-fi that matches your taste.")
+    explain([_rec()], {"summary": "x"}, llm=llm)
+    assert llm.max_tokens and all(mt is not None for mt in llm.max_tokens)
+
+
+def test_persistent_reason_cache_survives_a_cold_in_process_layer(db_session: Session) -> None:
+    # The whole point of the DB tier: an accepted reason outlives the process, so a restart (an
+    # empty L1) reads it back from Postgres instead of paying the model again.
+    title = Title(kind=TitleKind.movie, title="Heat", year=1995)
+    db_session.add(title)
+    db_session.flush()
+    key = ("reason", str(title.id), "abcd1234abcd1234")
+
+    PersistentReasonCache(db_session, TTLCache(ttl=3600)).set(key, "A taut crime epic.")
+    cold = PersistentReasonCache(db_session, TTLCache(ttl=3600))  # fresh L1, like a new process
+    assert cold.get(key) == "A taut crime epic."
+
+
+def test_lazy_reason_persists_and_then_replays_without_the_model(db_session: Session) -> None:
+    title = Title(kind=TitleKind.movie, title="Sicario", year=2015, genres=["Thriller"])
+    db_session.add(title)
+    db_session.flush()
+    rec = Recommendation(
+        title_id=title.id, title="Sicario", kind="movie", year=2015, genres=["Thriller"], score=0.8
+    )
+    taste = {"summary": "loves tense thrillers"}
+    llm = FakeLLMProvider(completion="A tense, methodical thriller right up your alley.")
+
+    cache = PersistentReasonCache(db_session, TTLCache(ttl=3600))
+    first = "".join(stream_lazy_reason(rec, taste, llm, cache))
+    assert first == "A tense, methodical thriller right up your alley."
+    assert len(llm.prompts) == 1
+
+    # A new process (cold L1) re-opens the same card: served from Postgres, no second model call.
+    cold = FakeLLMProvider(completion="DIFFERENT — should not be generated")
+    replay = "".join(
+        stream_lazy_reason(rec, taste, cold, PersistentReasonCache(db_session, TTLCache(ttl=3600)))
+    )
+    assert replay == first
+    assert cold.prompts == []  # the durable cache spared the workhorse call

@@ -155,6 +155,14 @@ class ChatService:
         # (falling back to the agent model only if no workhorse is wired).
         planner_llm = self.recommender.chat_llm or self.chat_llm
         agent_plan = planner.plan(session, profile_id, message, planner_llm, now=now)
+        # An explicit empty plan is the planner declining an off-topic message. Answer with a
+        # deterministic steer-back instead of spending the (big) agent model just to say no — this
+        # is also the path a prompt-injection probe hammers, so it must not cost a model call.
+        if not agent_plan.calls:
+            logger.info("agent.declined_off_topic", extra={"profile_id": str(profile_id)})
+            return PreparedTurn(
+                items=[], actions=[], intent=parse_intent(message, None), reply_text=_DECLINE_REPLY
+            )
         result = execute_plan(ctx, agent_plan)
         if result.items:
             log_chat(session, profile_id, result.items)
@@ -191,6 +199,17 @@ def _compose_reply_template(result: ExecutionResult) -> str:
     return " ".join(bits) if bits else "Done."
 
 
+# The reply is 1-3 sentences — cap it so the big agent model can't run long on the clock.
+_REPLY_MAX_TOKENS = 200
+
+# Deterministic steer-back for off-topic messages the planner declined (empty plan). Keeps the
+# scope language of the composer prompt, but costs zero LLM calls.
+_DECLINE_REPLY = (
+    "I'm just your movie & TV sidekick — I can't help with that one, but tell me what you're in "
+    "the mood to watch and I'll find something."
+)
+
+
 _COMPOSE_SYSTEM = """You are a warm, concise movie & TV recommendation assistant. You ONLY help
 with movies, TV, and the user's taste / watch history — nothing else.
 
@@ -225,7 +244,7 @@ def _compose_with_fallback(
     if agent_llm is None or prompt is None:
         return _compose_reply_template(result) if result is not None else "Done."
     try:
-        text = agent_llm.complete(prompt).strip()
+        text = agent_llm.complete(prompt, max_tokens=_REPLY_MAX_TOKENS).strip()
         return text or _compose_reply_template(result)
     except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
         logger.warning("agent.compose_failed; using template reply")
@@ -251,7 +270,7 @@ def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Ite
         return
     try:
         produced = False
-        for chunk in stream_text(agent_llm, prepared.compose_prompt):
+        for chunk in stream_text(agent_llm, prepared.compose_prompt, max_tokens=_REPLY_MAX_TOKENS):
             produced = True
             yield chunk
         if not produced:

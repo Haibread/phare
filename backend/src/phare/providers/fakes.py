@@ -66,16 +66,21 @@ class FakeLLMProvider:
         self.complete_delay = complete_delay
         self.embed_calls = 0
         self.prompts: list[str] = []
+        # Records the ``max_tokens`` passed to each complete/stream call, so cost-cap tests can
+        # assert the call sites actually bound the response length.
+        self.max_tokens: list[int | None] = []
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
         if self.complete_delay:
             time.sleep(self.complete_delay)
         self.prompts.append(prompt)
+        self.max_tokens.append(max_tokens)
         return self.completion
 
-    def stream(self, prompt: str) -> Iterable[str]:
+    def stream(self, prompt: str, *, max_tokens: int | None = None) -> Iterable[str]:
         """Yield the canned completion word-by-word, to exercise streaming assembly in tests."""
         self.prompts.append(prompt)
+        self.max_tokens.append(max_tokens)
         for i, word in enumerate(self.completion.split(" ")):
             yield word if i == 0 else f" {word}"
 

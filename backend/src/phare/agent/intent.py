@@ -100,7 +100,7 @@ def parse_intent(message: str, llm: LLMProvider | None) -> ChatIntent:
     """LLM extraction when available, else the keyword fallback. Always returns a valid intent."""
     if llm is not None:
         try:
-            raw = llm.complete(_LLM_PROMPT + message)
+            raw = llm.complete(_LLM_PROMPT + message, max_tokens=150)
             text = raw.strip()
             if text.startswith("```"):
                 text = text.split("```", 2)[1].removeprefix("json").strip()

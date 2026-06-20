@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
@@ -23,7 +23,9 @@ from phare.taste.schema import TasteProfileData
 
 logger = logging.getLogger(__name__)
 
-_MAX_EVENTS = 200
+# Taste extraction emits a bounded JSON object (summary + a handful of short arrays); cap the
+# response so a chatty model can't run up the token bill on it.
+_TASTE_MAX_TOKENS = 700
 
 _PROMPT_HEADER = """You analyze a viewer's watch history and produce a structured taste profile.
 
@@ -73,7 +75,7 @@ class TasteService:
             .join(Title, WatchEvent.title_id == Title.id)
             .where(WatchEvent.profile_id == profile_id, WatchEvent.excluded.is_(False))
             .order_by(WatchEvent.occurred_at.desc().nulls_last())
-            .limit(_MAX_EVENTS)
+            .limit(get_settings().taste_max_events)
         ).all()
         lines: list[str] = []
         for event, title in rows:
@@ -101,7 +103,7 @@ class TasteService:
         prompt = _PROMPT_HEADER + history + self._memory_block(profile_id)
         logger.info("taste.generate", extra={"profile_id": str(profile_id), "events": len(lines)})
 
-        raw = self.llm.complete(prompt)
+        raw = self.llm.complete(prompt, max_tokens=_TASTE_MAX_TOKENS)
         data = TasteProfileData.model_validate(_extract_json(raw))
 
         taste = self.session.scalar(
@@ -134,15 +136,65 @@ def optional_llm_provider() -> LLMProvider | None:
     )
 
 
+def _new_events_since(session: Session, profile_id: uuid.UUID, since: datetime) -> int:
+    """How many non-excluded events a profile has ingested since ``since`` — the change signal the
+    auto-refresh gate weighs against the cost of a full re-extraction."""
+    return (
+        session.scalar(
+            select(func.count())
+            .select_from(WatchEvent)
+            .where(
+                WatchEvent.profile_id == profile_id,
+                WatchEvent.excluded.is_(False),
+                WatchEvent.ingested_at > since,
+            )
+        )
+        or 0
+    )
+
+
+def _should_auto_refresh(session: Session, profile_id: uuid.UUID, now: datetime) -> bool:
+    """Decide whether the *automatic* taste refresh is worth a workhorse call.
+
+    Regenerating the whole profile because one episode synced is wasteful — a single event barely
+    moves a 150-event taste read. So the auto-refresh fires only when the change is material:
+    - no profile yet (or never generated) → always (the first extraction);
+    - at least ``taste_refresh_min_events`` new events since the last generation → enough drift to
+      re-read now;
+    - else, once the profile is older than ``taste_refresh_min_interval_seconds`` *and* something
+      changed, fold the trickle in — but never re-run when nothing changed at all.
+
+    The explicit ``POST /taste/generate`` bypasses this entirely (it calls ``generate`` directly).
+    """
+    settings = get_settings()
+    taste = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
+    if taste is None or taste.generated_at is None:
+        return True
+    new_events = _new_events_since(session, profile_id, taste.generated_at)
+    if new_events >= settings.taste_refresh_min_events:
+        return True
+    if new_events == 0:
+        return False
+    age = (now - taste.generated_at).total_seconds()
+    return age >= settings.taste_refresh_min_interval_seconds
+
+
 def maybe_refresh_taste(session: Session, profile_id: uuid.UUID, llm: LLMProvider | None) -> bool:
     """Best-effort: regenerate a profile's taste from its history after its events change.
 
     Taste is a derived artifact (the agent's long-term memory), so it refreshes itself on ingest
     rather than waiting for a button. No-ops when no LLM is configured (the deterministic engine
     still personalises via the embedding centroid), and never lets a taste failure break ingestion.
-    Returns ``True`` when a profile was (re)generated. The caller owns the commit.
+
+    Gated for cost: a refresh only runs when the history changed materially (see
+    :func:`_should_auto_refresh`) — so a stream of small incremental syncs doesn't fire a full
+    re-extraction on every one. Returns ``True`` when a profile was (re)generated; ``False`` when
+    skipped (offline, gated out, or failed). The caller owns the commit.
     """
     if llm is None:
+        return False
+    if not _should_auto_refresh(session, profile_id, datetime.now(UTC)):
+        logger.debug("taste.auto_refresh_skipped", extra={"profile_id": str(profile_id)})
         return False
     try:
         TasteService(session, llm, get_settings().llm_chat_model).generate(profile_id)

@@ -33,7 +33,7 @@ def judge_explanations(llm: LLMProvider, recommendations: Sequence[Recommendatio
         for rec in recommendations
     ]
     try:
-        raw = llm.complete(_PROMPT + "\n".join(lines)).strip()
+        raw = llm.complete(_PROMPT + "\n".join(lines), max_tokens=400).strip()
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1].removeprefix("json").strip()
         flags = json.loads(raw)

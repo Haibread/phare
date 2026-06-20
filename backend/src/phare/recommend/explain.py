@@ -11,20 +11,39 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Iterator, Mapping, Sequence
+import uuid
+from collections.abc import Hashable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
 from phare.recommend.schema import Recommendation
 
 logger = logging.getLogger(__name__)
 
+
+class ReasonCache(Protocol):
+    """The slice of cache behaviour the reason path needs — satisfied by both the in-process
+    :class:`TTLCache` and the DB-backed :class:`PersistentReasonCache`."""
+
+    def get(self, key: Hashable) -> Any | None: ...
+
+    def set(self, key: Hashable, value: str) -> None: ...
+
+
 # Explanation calls are slow, blocking HTTP — a real provider is seconds per call. Within one
 # render the bounded set runs concurrently (it's I/O), so wall-time is ~one call, not their sum.
 _MAX_EXPLAIN_WORKERS = 8
+
+# A "why this" reason is a single sentence — cap the response hard so a chatty model can't run up
+# the token bill (and the spoiler post-check already rejects anything that overruns this anyway).
+_REASON_MAX_TOKENS = 80
 
 # Process-wide cache of accepted LLM explanations, keyed by (title, swing-ness, taste fingerprint),
 # so a blurb is generated once and reused across rows and across page loads — not re-computed on
@@ -182,7 +201,9 @@ class Explainer:
 
     def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> str:
         try:
-            candidate = self.llm.complete(_llm_prompt(rec, taste)).strip()  # type: ignore[union-attr]
+            candidate = self.llm.complete(  # type: ignore[union-attr]
+                _llm_prompt(rec, taste), max_tokens=_REASON_MAX_TOKENS
+            ).strip()
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
             logger.warning("recommend.explain_failed", extra={"title": rec.title})
             return _template(rec, taste)
@@ -205,7 +226,10 @@ def explain(
 
 
 def stream_lazy_reason(
-    rec: Recommendation, taste: Mapping[str, Any], llm: LLMProvider | None, cache: TTLCache | None
+    rec: Recommendation,
+    taste: Mapping[str, Any],
+    llm: LLMProvider | None,
+    cache: ReasonCache | None,
 ) -> Iterator[str]:
     """Streaming variant of :func:`lazy_reason`: yields the reason chunk-by-chunk so the detail
     sheet fills in as the model types, instead of waiting for the whole blob. A cached reason comes
@@ -221,7 +245,7 @@ def stream_lazy_reason(
         return
     chunks: list[str] = []
     try:
-        for chunk in stream_text(llm, _llm_prompt(rec, taste)):
+        for chunk in stream_text(llm, _llm_prompt(rec, taste), max_tokens=_REASON_MAX_TOKENS):
             chunks.append(chunk)
             yield chunk
     except Exception:  # noqa: BLE001 - a flaky model must not sink the request
@@ -232,3 +256,66 @@ def stream_lazy_reason(
     full = "".join(chunks).strip()
     if full and _SPOILER_MARKERS.search(full) is None and cache is not None:
         cache.set(key, full)
+
+
+def _reason_db_key(key: Hashable) -> tuple[uuid.UUID, str] | None:
+    """Parse a lazy-reason cache key ``("reason", title_id, fingerprint)`` into its DB primary key.
+
+    Returns ``None`` for any other key shape (e.g. the eager Explainer's keys), so the persistent
+    cache transparently no-ops on keys it doesn't own instead of guessing.
+    """
+    if not (isinstance(key, tuple) and len(key) == 3 and key[0] == "reason"):
+        return None
+    try:
+        return uuid.UUID(str(key[1])), str(key[2])
+    except (ValueError, TypeError):
+        return None
+
+
+class PersistentReasonCache:
+    """A two-tier cache for lazy "why this" reasons: the in-process :class:`TTLCache` (L1) over a
+    Postgres ``title_explanation`` row (L2). Same ``get``/``set`` shape as ``TTLCache``, so it
+    drops into :func:`stream_lazy_reason` unchanged.
+
+    Why: the L1 alone is lost on every restart/redeploy, so each accepted reason was re-generated
+    (a workhorse call) after each recycle. Persisting it makes generation a once-per-taste-version
+    cost. Only the lazy reason path uses this — the eager Explainer stays L1-only by design.
+    """
+
+    def __init__(self, session: Session, l1: TTLCache) -> None:
+        self._session = session
+        self._l1 = l1
+
+    def get(self, key: Hashable) -> Any | None:
+        hit = self._l1.get(key)
+        if hit is not None:
+            return hit
+        db_key = _reason_db_key(key)
+        if db_key is None:
+            return None
+        row = self._session.get(TitleExplanation, db_key)
+        if row is None:
+            return None
+        self._l1.set(key, row.explanation)  # warm L1 so the next read skips the DB
+        return row.explanation
+
+    def set(self, key: Hashable, value: str) -> None:
+        self._l1.set(key, value)
+        db_key = _reason_db_key(key)
+        if db_key is None:
+            return
+        title_id, fingerprint = db_key
+        existing = self._session.get(TitleExplanation, db_key)
+        if existing is not None:
+            existing.explanation = value
+        else:
+            self._session.add(
+                TitleExplanation(
+                    title_id=title_id, taste_fingerprint=fingerprint, explanation=value
+                )
+            )
+        try:
+            self._session.commit()
+        except IntegrityError:
+            # A concurrent open inserted the same (title, taste) first — its value is just as good.
+            self._session.rollback()

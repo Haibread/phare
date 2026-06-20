@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     # leave off for models that reject the parameter.
     llm_embedding_request_dimensions: bool = False
 
+    # Taste extraction cost controls. Taste is a derived artifact that auto-refreshes after a
+    # profile's history changes, but a full re-extraction is a workhorse LLM call over the whole
+    # window — so the auto-refresh is *gated* (the explicit POST /taste/generate always runs):
+    # it skips unless enough new events accumulated, or the profile is older than the interval
+    # *and* something changed. See docs/configuration.md. `taste_max_events` bounds prompt size.
+    taste_refresh_min_events: int = 8
+    taste_refresh_min_interval_seconds: int = 6 * 60 * 60  # 6 hours
+    taste_max_events: int = 150
+
     # Recommendation engine tuning (safe defaults; rarely need changing).
     recommend_row_size: int = 12
     recommend_swing_slots: int = 2

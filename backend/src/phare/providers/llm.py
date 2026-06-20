@@ -64,15 +64,18 @@ class OpenAILLMProvider:
         response.raise_for_status()
         return response.json()
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
         logger.debug("llm.complete", extra={"model": self._chat_model})
-        data = self._post(
-            "/chat/completions",
-            {"model": self._chat_model, "messages": [{"role": "user", "content": prompt}]},
-        )
+        payload: dict[str, object] = {
+            "model": self._chat_model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        data = self._post("/chat/completions", payload)
         return data["choices"][0]["message"]["content"]
 
-    def stream(self, prompt: str) -> Iterator[str]:
+    def stream(self, prompt: str, *, max_tokens: int | None = None) -> Iterator[str]:
         """Yield reply text chunks as the model produces them (OpenAI ``stream: true`` SSE).
 
         Used only for the user-facing chat reply, so it reaches the screen token-by-token instead
@@ -80,11 +83,13 @@ class OpenAILLMProvider:
         no ``stream``.
         """
         logger.debug("llm.stream", extra={"model": self._chat_model})
-        payload = {
+        payload: dict[str, object] = {
             "model": self._chat_model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         with self._client.stream("POST", "/chat/completions", json=payload) as response:
             response.raise_for_status()
             for line in response.iter_lines():

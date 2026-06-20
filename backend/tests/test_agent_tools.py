@@ -85,6 +85,28 @@ def test_planner_bad_json_falls_back_to_recommend() -> None:
     assert [c.tool for c in plan.calls] == ["recommend"]
 
 
+def test_planner_explicit_empty_calls_is_an_off_topic_decline() -> None:
+    # `{"calls": []}` is the planner declining off-topic — kept empty (not coerced to recommend),
+    # so the service can answer with a template instead of spending the agent model.
+    plan = planner.plan(
+        _DummySession(),
+        uuid.uuid4(),
+        "write me code",
+        FakeLLMProvider(completion='{"calls":[]}'),
+        now=_NOW,
+    )
+    assert plan.calls == []
+
+
+def test_planner_missing_calls_key_falls_back_to_recommend() -> None:
+    # A response that doesn't follow the contract (no "calls" key) is a malformed plan, not a
+    # deliberate decline → default to recommend so a real request never silently does nothing.
+    plan = planner.plan(
+        _DummySession(), uuid.uuid4(), "something good", FakeLLMProvider(completion="{}"), now=_NOW
+    )
+    assert [c.tool for c in plan.calls] == ["recommend"]
+
+
 class _DummySession:
     """The planner only reads memory/taste for context; an empty profile returns nothing."""
 
@@ -233,6 +255,27 @@ def test_chat_recommend_turn_is_cost_bounded(db_session: Session) -> None:
     assert len(workhorse.prompts) == 1  # planner only — per-item explanations are templated
 
 
+def test_off_topic_turn_declines_without_spending_the_agent_model(db_session: Session) -> None:
+    # The planner declines (empty plan) → the reply is a deterministic steer-back, and the big
+    # agent model is never called. This is also the prompt-injection-probe path, so it must be free.
+    profile_id = _seed(db_session)
+    workhorse = FakeLLMProvider(completion='{"calls":[]}')
+    agent = FakeLLMProvider(completion="SHOULD NOT BE USED")
+    recommender = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=workhorse,
+    )
+
+    reply = ChatService(recommender, agent).respond(profile_id, "write me a poem", now=_NOW)
+
+    assert reply.items == [] and reply.actions == []
+    assert "watch" in reply.reply_text.lower()  # steered back to movies/TV
+    assert agent.prompts == []  # the big model was never spent on the decline
+    assert len(workhorse.prompts) == 1  # only the planner ran
+
+
 def test_agent_prompts_are_scoped_to_movies_and_tv() -> None:
     from phare.agent.planner import _SYSTEM
     from phare.agent.service import _COMPOSE_SYSTEM
@@ -259,7 +302,7 @@ def test_compose_reply_uses_model_text_and_falls_back() -> None:
     assert ok == "Lovely — noted!"
 
     class _Boom:
-        def complete(self, prompt: str) -> str:
+        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
             raise RuntimeError("down")
 
         def embed(self, texts: object) -> object:  # pragma: no cover
@@ -279,7 +322,7 @@ class _RoutingLLM:
         self.plan_json = plan_json
         self.prompts: list[str] = []
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
         self.prompts.append(prompt)
         if "planner" in prompt.lower():
             return self.plan_json
