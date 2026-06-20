@@ -30,6 +30,9 @@ snapshot of what's built is in [`docs/status.md`](docs/status.md).
 
 ## Run it
 
+Everything runs offline with no credentials; set `LLM_API_KEY` (and friends) for real
+recommendation quality. Full knobs + the no-key fallback behavior: [`docs/configuration.md`](docs/configuration.md).
+
 ```bash
 cp .env.example .env                       # optional; sensible defaults work out of the box
 

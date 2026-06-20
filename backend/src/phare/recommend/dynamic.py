@@ -8,6 +8,7 @@ feature works offline.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from phare.db.models import ROW_KEY_MAX_LEN
 from phare.providers.types import LLMProvider
 from phare.recommend.log import log_rows
 from phare.recommend.schema import Candidate, Row
@@ -49,7 +51,19 @@ _SEASONAL: dict[int, tuple[str, list[str]]] = {
 
 
 def _slug(text: str) -> str:
-    return "dyn:" + (re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "row")
+    """Stable ``dyn:`` row key from a (possibly long, LLM-supplied) theme title.
+
+    The key is persisted into ``RecommendationLog.row_key`` so it must fit ``ROW_KEY_MAX_LEN``.
+    When the slug is too long it's truncated with a short hash suffix so distinct titles keep
+    distinct keys.
+    """
+    base = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "row"
+    key = f"dyn:{base}"
+    if len(key) <= ROW_KEY_MAX_LEN:
+        return key
+    suffix = hashlib.sha1(base.encode()).hexdigest()[:8]
+    head = base[: ROW_KEY_MAX_LEN - len("dyn:") - 1 - len(suffix)].strip("-")
+    return f"dyn:{head}-{suffix}"
 
 
 def _top_affinity_genre(taste: Mapping[str, Any]) -> str | None:

@@ -8,6 +8,7 @@ as a hard avoid. Scoring/steering happens later in the re-ranker.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Sequence
 
@@ -22,7 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 def _is_hard_avoided(title: Title, avoids: Sequence[str]) -> bool:
-    """A title is avoided if any hard-avoid term matches its title, a genre, or a keyword."""
+    """A title is avoided if any hard-avoid term matches its title, a genre, or a keyword.
+
+    Matched on word boundaries, not raw substrings: avoiding "war" must not also drop "Warrior"
+    or "Steward". Multi-word terms ("true crime") match as a phrase.
+    """
     haystack = {
         title.title.lower(),
         *(g.lower() for g in title.genres),
@@ -30,7 +35,10 @@ def _is_hard_avoided(title: Title, avoids: Sequence[str]) -> bool:
     }
     for avoid in avoids:
         needle = avoid.strip().lower()
-        if needle and (needle in haystack or any(needle in h for h in haystack)):
+        if not needle:
+            continue
+        pattern = re.compile(rf"\b{re.escape(needle)}\b")
+        if any(pattern.search(text) for text in haystack):
             return True
     return False
 

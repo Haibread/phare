@@ -41,17 +41,29 @@ class EmbeddingService:
         self.llm = llm
         self.model_version = model_version
 
-    def _titles_missing_embedding(self) -> Sequence[Title]:
+    def _titles_missing_embedding(self, limit: int | None = None) -> Sequence[Title]:
         embedded = (
             select(TitleEmbedding.title_id)
             .where(TitleEmbedding.model_version == self.model_version)
             .scalar_subquery()
         )
-        return self.session.scalars(select(Title).where(Title.id.notin_(embedded))).all()
+        stmt = select(Title).where(Title.id.notin_(embedded))
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return self.session.scalars(stmt).all()
 
-    def embed_missing(self, batch_size: int = 64) -> int:
-        """Embed every title lacking a vector for the current model version. Returns count."""
-        titles = list(self._titles_missing_embedding())
+    def embed_missing(self, batch_size: int = 64, limit: int | None = None) -> int:
+        """Embed titles lacking a vector for the current model version. Returns count embedded.
+
+        ``limit`` bounds how many are embedded in one pass (the lazy read-path top-up uses it so a
+        big import can't hang a request); ``None`` embeds the whole backlog (authoritative path).
+        """
+        titles = list(self._titles_missing_embedding(limit=limit))
+        if limit is not None and len(titles) == limit:
+            logger.warning(
+                "embeddings.deferred",
+                extra={"embedded_count": limit, "hint": "run POST /catalog/embed for the rest"},
+            )
         for start in range(0, len(titles), batch_size):
             batch = titles[start : start + batch_size]
             vectors = self.llm.embed([build_embedding_text(t) for t in batch])

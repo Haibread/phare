@@ -148,3 +148,13 @@ def test_request_hands_off_and_queues(db_session: Session, monkeypatch: pytest.M
     )
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "availability": "queued"}
+
+
+def test_connect_seerr_rejects_ssrf_base_url(db_session: Session) -> None:
+    profile_id, _ = _profile_and_title(db_session)
+    resp = _client(db_session).post(
+        f"/profiles/{profile_id}/sources/seerr/connect",
+        json={"baseUrl": "http://127.0.0.1:5055", "apiKey": "k"},
+    )
+    assert resp.status_code == 400
+    assert "blocked" in resp.json()["detail"]

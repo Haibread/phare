@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Sheet } from "../components/Sheet";
 import { keys } from "../lib/queries";
@@ -34,6 +34,16 @@ export function SourcePicker({
   const [token, setToken] = useState("");
   const [userId, setUserId] = useState("");
 
+  // Trakt device-flow polling can run for minutes; abort it when the sheet closes or unmounts so
+  // it stops polling in the background and never stacks a second loop on reopen.
+  const pollAbort = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (!open) {
+      pollAbort.current?.abort();
+    }
+    return () => pollAbort.current?.abort();
+  }, [open]);
+
   function finish() {
     // Connecting any source can change the source list and library availability.
     qc.invalidateQueries({ queryKey: keys.sources(profileId) });
@@ -51,18 +61,27 @@ export function SourcePicker({
   }
 
   async function connectTrakt() {
+    const controller = new AbortController();
+    pollAbort.current?.abort(); // supersede any prior in-flight loop
+    pollAbort.current = controller;
+    const { signal } = controller;
+
     setBusy(true);
     setError(null);
     try {
       const start = await api.traktConnectStart();
+      if (signal.aborted) return;
       setTrakt({ userCode: start.userCode, verificationUrl: start.verificationUrl });
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       const deadline = Date.now() + start.expiresIn * 1000;
       while (Date.now() < deadline) {
         await sleep(start.interval * 1000);
+        if (signal.aborted) return;
         const poll = await api.traktConnectPoll(profileId, start.deviceCode);
+        if (signal.aborted) return;
         if (poll.status === "connected") {
           await api.syncTrakt(profileId);
+          if (signal.aborted) return;
           finish();
           return;
         }
@@ -72,10 +91,12 @@ export function SourcePicker({
         }
       }
     } catch (e) {
-      setError(message(e));
+      if (!signal.aborted) setError(message(e));
     } finally {
-      setBusy(false);
-      setTrakt(null);
+      if (!signal.aborted) {
+        setBusy(false);
+        setTrakt(null);
+      }
     }
   }
 

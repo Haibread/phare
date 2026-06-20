@@ -19,6 +19,7 @@ export function LoginGate({
           type="password"
           className="field"
           data-testid="login-password"
+          aria-label="Password"
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}

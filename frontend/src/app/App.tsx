@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { api, setAuthToken } from "../api";
 import { LoginGate } from "../auth/LoginGate";
-import { Loading } from "../components/states";
+import { ErrorState, Loading } from "../components/states";
 import { keys, useCreateProfile, useHistory, useMe, useProfiles } from "../lib/queries";
 import { ColdStart } from "../onboarding/ColdStart";
 import { Browse } from "../routes/Browse";
@@ -60,6 +60,12 @@ function Bootstrapped(): React.JSX.Element {
 
   if (profileId === null || history.isPending) {
     return <Loading />;
+  }
+
+  // A backend hiccup must NOT masquerade as "no history" — that would bounce an existing user
+  // back into onboarding. Only a *successful* empty history is first-run.
+  if (history.isError) {
+    return <ErrorState error={history.error} onRetry={() => history.refetch()} />;
   }
 
   // First run: no events yet → onboarding takeover (no tabs).

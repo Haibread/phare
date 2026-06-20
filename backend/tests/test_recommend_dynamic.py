@@ -6,17 +6,18 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.api.app import create_app
 from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
 from phare.catalog.sample import seed_sample_catalog
 from phare.db.base import get_session
-from phare.db.models import Profile
+from phare.db.models import ROW_KEY_MAX_LEN, Profile, RecommendationLog
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
-from phare.recommend.dynamic import dynamic_rows, propose_themes
+from phare.recommend.dynamic import _slug, dynamic_rows, propose_themes
 from phare.recommend.service import RecommendationService
 
 _OCTOBER = datetime(2026, 10, 15, tzinfo=UTC)
@@ -48,6 +49,20 @@ def test_llm_themes_are_parsed() -> None:
     themes = propose_themes({"summary": "x"}, _MARCH, llm=llm)
     assert [t.title for t in themes] == ["Cozy mysteries", "Wildcard"]
     assert themes[0].include_genres == ["Mystery"]
+
+
+def test_slug_truncates_long_titles_but_stays_distinct() -> None:
+    long_a = (
+        "Late-October horror you'd actually tolerate on a quiet school night with the lights on"
+    )
+    long_b = long_a + " and popcorn"
+    key_a, key_b = _slug(long_a), _slug(long_b)
+
+    assert len(key_a) <= ROW_KEY_MAX_LEN
+    assert len(key_b) <= ROW_KEY_MAX_LEN
+    assert key_a.startswith("dyn:")
+    assert key_a != key_b  # distinct titles keep distinct keys via the hash suffix
+    assert _slug(long_a) == key_a  # stable
 
 
 def test_llm_failure_falls_back() -> None:
@@ -85,6 +100,24 @@ def test_dynamic_rows_built_and_genre_scoped(db_session: Session) -> None:
     assert spooky is not None
     # The spooky row is genre-scoped to horror candidates (catalog has horror titles).
     assert all("Horror" in item.genres for item in spooky.items)
+
+
+def test_dynamic_rows_long_llm_theme_logs_fitting_key(db_session: Session) -> None:
+    # A realistic long theme title must not overflow recommendation_log.row_key (regression).
+    long_title = (
+        "Late-October horror you'd actually tolerate on a quiet school night with the lights on"
+    )
+    llm = FakeLLMProvider(completion=f'[{{"title":{long_title!r},"genres":["Horror"]}}]')
+    profile_id = _seeded(db_session)
+
+    rows = dynamic_rows(_service(db_session), profile_id, llm=llm, now=_OCTOBER)
+
+    assert rows
+    keys = db_session.scalars(
+        select(RecommendationLog.row_key).where(RecommendationLog.profile_id == profile_id)
+    ).all()
+    assert keys
+    assert all(len(key) <= ROW_KEY_MAX_LEN for key in keys)
 
 
 def test_dynamic_endpoint(db_session: Session) -> None:

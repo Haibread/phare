@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from phare.providers.fakes import FakeLLMProvider
-from phare.recommend.explain import explain
+from phare.recommend.explain import explain, is_spoiler_safe
 from phare.recommend.schema import Recommendation
 
 _OVERVIEW_LEAK = "the protagonist secretly dies at the end"
@@ -57,3 +57,20 @@ def test_llm_failure_falls_back_to_template() -> None:
 
     [out] = explain([_rec()], {}, llm=_BoomLLM())
     assert out.explanation is not None  # degraded, not crashed
+
+
+def test_is_spoiler_safe_flags_plot_reveals_and_runaway_length() -> None:
+    assert is_spoiler_safe("A moody, cerebral sci-fi that fits your love of slow-burn drama.")
+    assert not is_spoiler_safe(_OVERVIEW_LEAK)  # contains "dies"
+    assert not is_spoiler_safe("It's great because the killer is the brother — total plot twist.")
+    assert not is_spoiler_safe("x " * 200)  # one-line blurbs aren't 400 chars long
+    # Word-boundary, not substring: innocent words that merely contain a marker pass.
+    assert is_spoiler_safe("A warm slate of comedies and studies in friendship.")
+
+
+def test_llm_spoiler_output_falls_back_to_safe_template() -> None:
+    llm = FakeLLMProvider(completion="You'll love it — the protagonist dies in the final act.")
+    [out] = explain([_rec()], {"affinities": {"Science Fiction": 0.9}}, llm=llm)
+    assert out.explanation is not None
+    assert "dies" not in out.explanation  # the spoiler was rejected, template used instead
+    assert "Science Fiction" in out.explanation

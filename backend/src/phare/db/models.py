@@ -35,6 +35,11 @@ from phare.db.base import Base
 # model) requires a migration + full re-embed; see docs/data-model.md.
 EMBEDDING_DIM = 1536
 
+# Max length of a RecommendationLog.row_key. Dynamic rows derive their key from an LLM-supplied
+# theme title, so the slug must be truncated to fit (see recommend/dynamic._slug). Single source
+# of truth for both the column width and the slug cap; widening it needs a migration.
+ROW_KEY_MAX_LEN = 120
+
 
 class TitleKind(enum.StrEnum):
     movie = "movie"
@@ -156,6 +161,18 @@ class TitleEmbedding(Base):
 
     __tablename__ = "title_embedding"
 
+    # HNSW ANN index for cosine similarity — candidate generation orders by `embedding <=> centroid`
+    # on every recommendation, so without this it's a sequential scan + sort over the whole catalog.
+    # Defined here (not only in the migration) so create_all builds it for tests too.
+    __table_args__ = (
+        Index(
+            "ix_title_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
     # Composite PK so multiple model versions can coexist (clean cutover during a re-embed).
     title_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("title.id", ondelete="CASCADE"), primary_key=True
@@ -213,7 +230,7 @@ class RecommendationLog(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
     title_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("title.id", ondelete="CASCADE"))
-    row_key: Mapped[str] = mapped_column(String(50))
+    row_key: Mapped[str] = mapped_column(String(ROW_KEY_MAX_LEN))
     rank: Mapped[int] = mapped_column(Integer)
     score: Mapped[float | None] = mapped_column(Float)
     is_swing: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

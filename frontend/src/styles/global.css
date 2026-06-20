@@ -77,6 +77,26 @@ select {
   background: var(--surface-2);
 }
 
+/* Keyboard focus visibility for interactive elements that don't define their own ring. */
+.btn:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Respect users who ask for less motion: drop spinners/entrance animations to near-instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);

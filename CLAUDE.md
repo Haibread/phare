@@ -31,9 +31,19 @@ style, layout, and tooling, follow the convention skills; don't expect them dupl
 
 ## Docs
 
+**Document everything user- or operator-facing.** Any behavior someone would need to *know*
+to run, configure, or reason about Phare — config knobs and their defaults, fallback behavior,
+how a feature actually works, operational caveats — must live somewhere durable: the root
+`README.md` or a `*.md` under `docs/`. Not just in code comments or a commit message. Keep it
+concise (a few lines is fine), but make sure it exists, so the `docs/` tree can later be rendered
+straight into a docs website. When you add or change such behavior, update the docs in the same
+change. Example worth getting right: how the app behaves with vs. without an LLM/embedding key —
+see [`docs/configuration.md`](docs/configuration.md).
+
 - [`docs/design.md`](docs/design.md) — product & engine: what we build, scope, what's deferred.
 - [`docs/data-model.md`](docs/data-model.md) — canonical titles, events, taste profile, TV roll-up.
 - [`docs/agent.md`](docs/agent.md) — the chat agent + guardrails.
+- [`docs/configuration.md`](docs/configuration.md) — env vars, and the offline (no-key) fallback behavior.
 - [`docs/evaluation.md`](docs/evaluation.md) — how we know recommendations are good.
 
 If a spec seems wrong or a product decision is missing, **ask** — don't invent behavior.

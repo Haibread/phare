@@ -34,3 +34,15 @@ def test_jellyfin_sync_requires_tmdb(db_session: Session) -> None:
         json={"profileId": profile_id, "baseUrl": "http://jf", "userId": "u1", "apiKey": "k"},
     )
     assert response.status_code == 400
+
+
+def test_plex_sync_rejects_ssrf_base_url(db_session: Session) -> None:
+    # The metadata IP must be rejected before any server-side fetch (and before the TMDB check).
+    client = _client(db_session)
+    profile_id = client.post("/profiles", json={"displayName": "me"}).json()["id"]
+    response = client.post(
+        "/sources/plex/sync",
+        json={"profileId": profile_id, "baseUrl": "http://169.254.169.254/", "token": "t"},
+    )
+    assert response.status_code == 400
+    assert "blocked" in response.json()["detail"]

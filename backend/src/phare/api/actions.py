@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from phare.api.deps import require_safe_url
 from phare.api.schemas import ApiModel
 from phare.core.config import get_settings
 from phare.core.tokens import get_source_token, store_source_token
@@ -81,6 +82,7 @@ def connect_seerr(
     session: Annotated[Session, Depends(get_session)],
 ) -> ConnectResponse:
     _require_profile(session, profile_id)
+    require_safe_url(body.base_url)
     stored = store_source_token(
         session,
         get_settings(),
