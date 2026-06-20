@@ -11,13 +11,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
 from phare.providers.http import TTLCache
-from phare.providers.types import LLMProvider
+from phare.providers.types import LLMProvider, stream_text
 from phare.recommend.schema import Recommendation
 
 logger = logging.getLogger(__name__)
@@ -204,30 +204,31 @@ def explain(
     return Explainer(llm=llm).explain(recommendations, taste)
 
 
-def lazy_reason(
+def stream_lazy_reason(
     rec: Recommendation, taste: Mapping[str, Any], llm: LLMProvider | None, cache: TTLCache | None
-) -> str:
-    """A "why this fits you" reason for the detail sheet — generated on demand, cached on success.
-
-    Looser than the card-label blurb: a detail view can hold a short paragraph, so this only
-    rejects on a genuine plot-reveal *marker* (not length). Falls back to the template offline or
-    on a marker/error. Successes are cached per (title, taste); a (rare) rejection isn't, so a
-    re-open retries.
-    """
+) -> Iterator[str]:
+    """Streaming variant of :func:`lazy_reason`: yields the reason chunk-by-chunk so the detail
+    sheet fills in as the model types, instead of waiting for the whole blob. A cached reason comes
+    back as one chunk (instant re-open); offline yields the template. Like the chat reply, this
+    relies on the prompt for spoiler-safety (it streams before the full text exists) and only caches
+    a completed, marker-free result."""
     key = ("reason", str(rec.title_id), _taste_fingerprint(taste))
     if cache is not None and (hit := cache.get(key)) is not None:
-        return str(hit)
+        yield str(hit)
+        return
     if llm is None:
-        return _template(rec, taste)
+        yield _template(rec, taste)
+        return
+    chunks: list[str] = []
     try:
-        text = llm.complete(_llm_prompt(rec, taste)).strip()
+        for chunk in stream_text(llm, _llm_prompt(rec, taste)):
+            chunks.append(chunk)
+            yield chunk
     except Exception:  # noqa: BLE001 - a flaky model must not sink the request
         logger.warning("recommend.reason_failed", extra={"title": rec.title})
-        return _template(rec, taste)
-    if text and _SPOILER_MARKERS.search(text) is None:
-        if cache is not None:
-            cache.set(key, text)
-        return text
-    if text:
-        logger.warning("recommend.reason_rejected", extra={"title": rec.title})
-    return _template(rec, taste)
+        if not chunks:
+            yield _template(rec, taste)
+        return
+    full = "".join(chunks).strip()
+    if full and _SPOILER_MARKERS.search(full) is None and cache is not None:
+        cache.set(key, full)

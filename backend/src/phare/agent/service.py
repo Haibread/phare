@@ -21,7 +21,7 @@ from phare.agent.schema import AgentAction, ChatIntent, ChatReply
 from phare.agent.tools import ExecutionResult, ToolContext, execute_plan
 from phare.core.config import get_settings
 from phare.providers.tmdb import TMDBMetadataProvider
-from phare.providers.types import LLMProvider
+from phare.providers.types import LLMProvider, stream_text
 from phare.recommend.log import log_chat
 from phare.recommend.schema import Candidate, Recommendation
 from phare.recommend.service import RecommendationService
@@ -251,7 +251,7 @@ def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Ite
         return
     try:
         produced = False
-        for chunk in _stream_text(agent_llm, prepared.compose_prompt):
+        for chunk in stream_text(agent_llm, prepared.compose_prompt):
             produced = True
             yield chunk
         if not produced:
@@ -259,12 +259,3 @@ def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Ite
     except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
         logger.warning("agent.stream_failed; using template reply")
         yield _compose_reply_template(prepared.result)
-
-
-def _stream_text(llm: LLMProvider, prompt: str) -> Iterator[str]:
-    """Stream from a provider that supports it; otherwise one full completion as a single chunk."""
-    streamer = getattr(llm, "stream", None)
-    if callable(streamer):
-        yield from streamer(prompt)
-    else:
-        yield llm.complete(prompt)

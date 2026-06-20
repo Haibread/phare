@@ -8,7 +8,7 @@ internal value objects parsed at the provider edge — they never cross the HTTP
 from __future__ import annotations
 
 import enum
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -99,6 +99,16 @@ class LLMProvider(Protocol):
     def complete(self, prompt: str) -> str: ...
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
+
+
+def stream_text(llm: LLMProvider, prompt: str) -> Iterator[str]:
+    """Yield reply chunks from a provider that implements ``stream``; otherwise one ``complete``
+    call as a single chunk. Lets streaming callers degrade gracefully on providers without it."""
+    streamer = getattr(llm, "stream", None)
+    if callable(streamer):
+        yield from streamer(prompt)
+    else:
+        yield llm.complete(prompt)
 
 
 class MediaAvailability(enum.StrEnum):

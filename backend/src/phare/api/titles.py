@@ -8,20 +8,23 @@ still never include plot (see ``recommend/explain.py``).
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.api.deps import get_optional_chat_llm
 from phare.api.recommend import _poster_url, require_profile
-from phare.api.schemas import TitleDetail, TitleExplanation
+from phare.api.schemas import TitleDetail
 from phare.db.base import get_session
 from phare.db.models import TasteProfile, Title, TitleKind
 from phare.providers.types import LLMProvider
-from phare.recommend.explain import _EXPLANATION_CACHE, lazy_reason
+from phare.recommend.explain import _EXPLANATION_CACHE, stream_lazy_reason
 from phare.recommend.schema import Recommendation
 from phare.taste.service import effective_profile
 
@@ -56,16 +59,21 @@ def get_title(
     )
 
 
-@router.get("/profiles/{profile_id}/titles/{title_id}/explanation", response_model=TitleExplanation)
-def get_title_explanation(
+def _sse(event: str, data: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.get("/profiles/{profile_id}/titles/{title_id}/explanation")
+def stream_title_explanation(
     profile_id: uuid.UUID,
     title_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
-) -> TitleExplanation:
-    """The LLM "why this fits you" reason, generated **lazily** — only when the user opens a card's
-    detail sheet, so we never pay to explain cards nobody looks at. Uses the workhorse model, caches
-    the result per (title, taste), and falls back to the deterministic template offline."""
+) -> StreamingResponse:
+    """The LLM "why this fits you" reason, generated **lazily and streamed** — only when the user
+    opens a card's detail sheet, so we never pay to explain cards nobody opens. Server-Sent Events:
+    ``delta`` chunks as the (workhorse) model types, then ``done``. Cached per (title, taste) so a
+    re-open returns instantly as one chunk; offline streams the deterministic template."""
     require_profile(session, profile_id)
     title = session.get(Title, title_id)
     if title is None:
@@ -80,5 +88,10 @@ def get_title_explanation(
         genres=title.genres,
         score=0.0,
     )
-    # One workhorse call (cached per title+taste), spoiler-marker checked, template fallback.
-    return TitleExplanation(explanation=lazy_reason(rec, taste, chat_llm, _EXPLANATION_CACHE))
+
+    def events() -> Iterator[str]:
+        for chunk in stream_lazy_reason(rec, taste, chat_llm, _EXPLANATION_CACHE):
+            yield _sse("delta", {"text": chunk})
+        yield _sse("done", {})
+
+    return StreamingResponse(events(), media_type="text/event-stream")

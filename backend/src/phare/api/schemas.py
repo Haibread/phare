@@ -96,12 +96,6 @@ class RecommendationItem(ApiModel):
     components: dict[str, float]
 
 
-class TitleExplanation(ApiModel):
-    """The LLM "why this fits you" reason, generated on demand when a card's detail is opened."""
-
-    explanation: str
-
-
 class TitleDetail(ApiModel):
     """Extra metadata for a title's "more info" view — the synopsis/runtime a card doesn't carry."""
 
