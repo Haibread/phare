@@ -57,6 +57,19 @@ The two spaces never mix: local and real vectors carry different model-version t
 ([`embeddings/version.py`](../backend/src/phare/embeddings/version.py)) and retrieval only queries
 the active one. So you can run offline first, then add a key later.
 
+## Security notes
+
+- **SSRF guard on connect URLs.** The Plex/Jellyfin/Seerr connect endpoints take a `base_url`
+  and fetch it server-side, so it's validated first (`core/net.py`): it must be `http(s)`, and
+  loopback / link-local / unspecified hosts are rejected — `localhost`, `127.0.0.1`, and the cloud
+  metadata IP `169.254.169.254` will 400. **Private LAN ranges (`192.168.x.x`, `10.x.x.x`) are
+  allowed on purpose** so you can point at a server on your own network. (A hostname that *resolves*
+  to a blocked range isn't caught — that's a known limitation, not an oversight.)
+- **Spoiler post-check on explanations.** Explanation prompts never include a title's plot
+  (`overview`), and the LLM's one-sentence output is additionally screened (`recommend/explain.py`):
+  anything overly long or naming a plot reveal is dropped in favour of the deterministic,
+  metadata-only template. It's a cheap heuristic backstop, not a guarantee.
+
 ### Switching on a real model
 
 1. Set `LLM_API_KEY` (and `LLM_BASE_URL` / `LLM_CHAT_MODEL` / `LLM_EMBEDDING_MODEL` as needed).

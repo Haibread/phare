@@ -12,6 +12,7 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from phare.api.deps import require_safe_url
 from phare.api.schemas import (
     ApiModel,
     IngestSummary,
@@ -246,6 +247,7 @@ def sync_plex(
     session: Annotated[Session, Depends(get_session)],
 ) -> IngestSummary:
     """Sync the account owner's own Plex watch history (privacy-safe: single account)."""
+    require_safe_url(body.base_url)
     _require_tmdb(get_settings())
     token = _resolve_token(session, body.profile_id, "plex", body.token)
     source = PlexSourceProvider(base_url=body.base_url, token=token, account_id=body.account_id)
@@ -259,6 +261,7 @@ def sync_jellyfin(
     session: Annotated[Session, Depends(get_session)],
 ) -> IngestSummary:
     """Sync one Jellyfin user's own played history (privacy-safe: single user)."""
+    require_safe_url(body.base_url)
     _require_tmdb(get_settings())
     token = _resolve_token(session, body.profile_id, "jellyfin", body.api_key)
     source = JellyfinSourceProvider(base_url=body.base_url, api_key=token, user_id=body.user_id)

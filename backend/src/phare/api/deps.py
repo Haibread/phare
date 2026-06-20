@@ -11,10 +11,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fastapi import HTTPException
+
 from phare.core.config import get_settings
+from phare.core.net import validate_external_url
 from phare.embeddings.version import embedding_model_version, get_embedding_provider
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
+
+
+def require_safe_url(url: str) -> str:
+    """SSRF guard for user-supplied ``base_url``s; 400 if it isn't safe to fetch server-side."""
+    try:
+        return validate_external_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @dataclass(frozen=True)
