@@ -72,13 +72,14 @@ export function Chat(): React.JSX.Element {
     setLog((l) => [
       ...l,
       { role: "user", text: trimmed },
-      { role: "agent", text: "", streaming: true },
+      { role: "agent", text: "", streaming: true, status: "Thinking…" },
     ]);
     setMessage("");
     setPending(true);
     let wrote = false;
     try {
       await api.chatStream(profileId, outbound, {
+        onStatus: (label) => setLog((l) => patchLast(l, { status: label })),
         onMeta: (meta) => {
           wrote = meta.actions.length > 0;
           setLog((l) => patchLast(l, { items: meta.items, actions: meta.actions }));
@@ -134,8 +135,8 @@ export function Chat(): React.JSX.Element {
             data-testid={`chat-${turn.role}`}
           >
             {turn.streaming && turn.text === "" ? (
-              <span className="faint" data-testid="chat-thinking">
-                Thinking…
+              <span className="faint" data-testid="chat-status">
+                {turn.status ?? "Thinking…"}
               </span>
             ) : (
               <p style={{ margin: 0 }}>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Iterator
 from typing import Annotated
@@ -12,7 +13,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from phare.agent import commitments as commitments_store
-from phare.agent.service import ChatService, stream_compose
+from phare.agent.intent import parse_intent
+from phare.agent.service import ChatService, PreparedTurn, stream_compose
 from phare.agent.tools import undo_action
 from phare.api.deps import (
     Embedder,
@@ -35,6 +37,7 @@ from phare.db.models import Title
 from phare.providers.types import LLMProvider
 from phare.taste.service import maybe_refresh_taste
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
 
 
@@ -72,24 +75,19 @@ def _sse(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-@router.post("/profiles/{profile_id}/chat/stream")
-def chat_stream(
-    profile_id: uuid.UUID,
-    body: ChatRequest,
-    session: Annotated[Session, Depends(get_session)],
-    embedder: Annotated[Embedder, Depends(get_embedder)],
-    chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
-    agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
-) -> StreamingResponse:
-    """Same turn as ``/chat`` but Server-Sent Events: a ``meta`` event with the picks + writes
-    (so the UI can show them immediately), then ``delta`` events streaming the reply text, then
-    ``done``. Writes are committed before streaming begins — the stream itself is read-only."""
-    require_profile(session, profile_id)
-    recommender = build_recommender(session, embedder, chat_llm)
-    prepared = ChatService(recommender, agent_llm).prepare(profile_id, body.message)
-    session.commit()  # persist signals/commitments/memory + logs before the (read-only) stream
+def _planning_label(message: str) -> str:
+    """A friendly, instant acknowledgement of the request — a keyword parse (no LLM), so it can be
+    shown the moment the connection opens, while the planner model is still thinking."""
+    intent = parse_intent(message, None)
+    descriptor = ", ".join(intent.include_genres).lower()
+    runtime = f" under {intent.max_runtime} min" if intent.max_runtime else ""
+    if descriptor or runtime:
+        return f"Finding something {descriptor}{runtime}…".replace(" …", "…")
+    return "Working on it…"
 
-    meta = {
+
+def _meta_payload(prepared: PreparedTurn) -> dict[str, object]:
+    return {
         "intent": ChatIntentResponse(
             max_runtime=prepared.intent.max_runtime,
             include_genres=prepared.intent.include_genres,
@@ -105,8 +103,38 @@ def chat_stream(
         ],
     }
 
+
+@router.post("/profiles/{profile_id}/chat/stream")
+def chat_stream(
+    profile_id: uuid.UUID,
+    body: ChatRequest,
+    session: Annotated[Session, Depends(get_session)],
+    embedder: Annotated[Embedder, Depends(get_embedder)],
+    chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+    agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
+) -> StreamingResponse:
+    """The chat turn as Server-Sent Events, surfacing each step the moment it's ready so the screen
+    is never blank: a ``status`` event right away (an instant keyword-based acknowledgement, while
+    the planner runs), then ``meta`` with the picks + write-chips as soon as the tools finish, a
+    ``status`` while the reply is composed, the reply itself as ``delta`` chunks, then ``done``.
+    The DB work (incl. the commit) happens inside the generator; the streamed reply is read-only."""
+    require_profile(session, profile_id)
+    recommender = build_recommender(session, embedder, chat_llm)
+    service = ChatService(recommender, agent_llm)
+
     def events() -> Iterator[str]:
-        yield _sse("meta", meta)
+        # Instant: echo the request so the screen isn't blank during the planner call.
+        yield _sse("status", {"stage": "planning", "label": _planning_label(body.message)})
+        try:
+            prepared = service.prepare(profile_id, body.message)
+            session.commit()  # persist signals/commitments/memory + logs before the read-only reply
+        except Exception:  # noqa: BLE001 - a failed turn must still close the stream gracefully
+            logger.exception("chat.stream_prepare_failed")
+            yield _sse("delta", {"text": "Sorry — something went wrong. Please try again."})
+            yield _sse("done", {})
+            return
+        yield _sse("meta", _meta_payload(prepared))  # picks + write-chips, the moment they exist
+        yield _sse("status", {"stage": "composing", "label": "Writing a reply…"})
         for chunk in stream_compose(prepared, agent_llm):
             yield _sse("delta", {"text": chunk})
         yield _sse("done", {})

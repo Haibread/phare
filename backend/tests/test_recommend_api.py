@@ -115,9 +115,11 @@ def test_chat_stream_offline_emits_meta_then_reply(db_session: Session) -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
 
     events = _sse_events(response.text)
-    assert events[0]["event"] == "meta"
-    assert events[-1]["event"] == "done"
-    assert events[0]["data"]["intent"]["includeGenres"] == ["Comedy"]
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "status"  # instant acknowledgement, before any model call
+    assert kinds[-1] == "done"
+    meta = next(e for e in events if e["event"] == "meta")
+    assert meta["data"]["intent"]["includeGenres"] == ["Comedy"]
     reply = "".join(e["data"]["text"] for e in events if e["event"] == "delta")
     assert reply  # a (deterministic) reply was streamed
 
@@ -147,7 +149,9 @@ def test_chat_stream_with_llm_streams_chunks(db_session: Session) -> None:
     deltas = [e for e in events if e["event"] == "delta"]
     assert len(deltas) > 1  # streamed in multiple chunks, not one blob
     assert "".join(d["data"]["text"] for d in deltas) == "A few ideas you might enjoy tonight!"
-    assert events[0]["data"]["items"]  # picks surfaced in the meta event
+    assert events[0]["event"] == "status"  # progress surfaced before the picks
+    meta = next(e for e in events if e["event"] == "meta")
+    assert meta["data"]["items"]  # picks surfaced in the meta event
 
 
 def test_catalog_sample_idempotent_over_http(db_session: Session) -> None:

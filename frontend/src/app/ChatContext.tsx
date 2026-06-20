@@ -9,13 +9,15 @@ import {
 } from "react";
 import type { AgentAction, RecommendationItem } from "../api";
 
-/** One message in the conversation. `streaming` marks the agent turn whose text is still arriving. */
+/** One message in the conversation. `streaming` marks the agent turn whose text is still arriving;
+ * `status` is the live progress line shown before the reply text starts. */
 export interface ChatTurn {
   role: "user" | "agent";
   text: string;
   items?: RecommendationItem[];
   actions?: AgentAction[];
   streaming?: boolean;
+  status?: string;
 }
 
 interface ChatState {
