@@ -8,15 +8,34 @@ free-text overview, so it cannot leak plot.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any
 
+from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
 from phare.recommend.schema import Recommendation
 
 logger = logging.getLogger(__name__)
+
+# Explanation calls are slow, blocking HTTP — a real provider is seconds per call. Within one
+# render the bounded set runs concurrently (it's I/O), so wall-time is ~one call, not their sum.
+_MAX_EXPLAIN_WORKERS = 8
+
+# Process-wide cache of accepted LLM explanations, keyed by (title, swing-ness, taste fingerprint),
+# so a blurb is generated once and reused across rows and across page loads — not re-computed on
+# every home render. Keyed on the taste summary, so it self-invalidates when taste changes. A long
+# TTL is fine; the key carries correctness, the TTL only bounds memory.
+_EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
+
+
+def _taste_fingerprint(taste: Mapping[str, Any]) -> str:
+    return hashlib.sha256(str(taste.get("summary") or "").encode()).hexdigest()[:16]
+
 
 # Inputs to the LLM are already spoiler-safe (we never pass the overview), but the *output* is the
 # model's; a weak/jailbroken model could still narrate plot. This is a cheap last line of defence,
@@ -74,26 +93,93 @@ def _llm_prompt(rec: Recommendation, taste: Mapping[str, Any]) -> str:
     )
 
 
+# A budget high enough to never bind in practice — the standalone/back-compat path is unbounded.
+_UNBOUNDED = 1_000_000_000
+
+
+@dataclass
+class Explainer:
+    """Attaches explanations, bounding LLM spend per render.
+
+    Each *uncached* LLM call consumes ``budget``; once it's spent, the rest fall back to the
+    deterministic template (and earlier blurbs are cached for the next render). This is what keeps
+    a home page — which explains dozens of items across rows — from making dozens of slow,
+    sequential calls to a real provider. ``llm=None`` templates everything (offline / chat path).
+    """
+
+    llm: LLMProvider | None
+    cache: TTLCache | None = None
+    budget: int = _UNBOUNDED
+
+    def explain(
+        self, recommendations: Sequence[Recommendation], taste: Mapping[str, Any]
+    ) -> list[Recommendation]:
+        """Attach an explanation to each recommendation, returning a new list.
+
+        Cached/templated items resolve inline; the uncached LLM calls (bounded by ``budget``) are
+        decided sequentially — so the budget is spent deterministically — then fired concurrently.
+        """
+        fingerprint = _taste_fingerprint(taste)
+        texts: list[str | None] = [None] * len(recommendations)
+        to_generate: list[tuple[int, Recommendation, tuple[str, bool, str]]] = []
+        for i, rec in enumerate(recommendations):
+            if self.llm is None:
+                texts[i] = _template(rec, taste)
+                continue
+            key = (str(rec.title_id), bool(rec.is_swing), fingerprint)
+            if self.cache is not None and (cached := self.cache.get(key)) is not None:
+                texts[i] = cached
+            elif self.budget > 0:
+                self.budget -= 1  # bound *calls*, whether or not the output is accepted
+                to_generate.append((i, rec, key))
+            else:
+                texts[i] = _template(rec, taste)
+
+        if to_generate:
+            workers = min(len(to_generate), _MAX_EXPLAIN_WORKERS)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for i, text in pool.map(
+                    lambda job: (job[0], self._generate(job[1], taste, job[2])), to_generate
+                ):
+                    texts[i] = text
+
+        return [
+            rec.model_copy(update={"explanation": texts[i]})
+            for i, rec in enumerate(recommendations)
+        ]
+
+    def _generate(
+        self, rec: Recommendation, taste: Mapping[str, Any], key: tuple[str, bool, str]
+    ) -> str:
+        """One live LLM explanation with the spoiler post-check, falling back to the template.
+
+        The *outcome* is cached either way (blurb or template), so a title is attempted at most once
+        per taste version. Without this, a model whose output keeps tripping the spoiler guard would
+        re-burn the budget on every render and the cache would never warm.
+        """
+        text = self._call_or_template(rec, taste)
+        if self.cache is not None:
+            self.cache.set(key, text)
+        return text
+
+    def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> str:
+        try:
+            candidate = self.llm.complete(_llm_prompt(rec, taste)).strip()  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
+            logger.warning("recommend.explain_failed", extra={"title": rec.title})
+            return _template(rec, taste)
+        if candidate and is_spoiler_safe(candidate):
+            return candidate
+        if candidate:
+            # Output tripped the spoiler guard — drop it and fall back to the safe template.
+            logger.warning("recommend.explain_rejected", extra={"title": rec.title})
+        return _template(rec, taste)
+
+
 def explain(
     recommendations: Sequence[Recommendation],
     taste: Mapping[str, Any],
     llm: LLMProvider | None,
 ) -> list[Recommendation]:
-    """Attach an explanation to each recommendation, in place-returning a new list."""
-    out: list[Recommendation] = []
-    for rec in recommendations:
-        text: str | None = None
-        if llm is not None:
-            try:
-                candidate = llm.complete(_llm_prompt(rec, taste)).strip()
-                if candidate and is_spoiler_safe(candidate):
-                    text = candidate
-                elif candidate:
-                    # Output tripped the spoiler guard — drop it and fall back to the safe template.
-                    logger.warning("recommend.explain_rejected", extra={"title": rec.title})
-            except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
-                logger.warning("recommend.explain_failed", extra={"title": rec.title})
-        if text is None:
-            text = _template(rec, taste)
-        out.append(rec.model_copy(update={"explanation": text}))
-    return out
+    """Explain each recommendation. Back-compat shim: unbounded, uncached (per-call behavior)."""
+    return Explainer(llm=llm).explain(recommendations, taste)

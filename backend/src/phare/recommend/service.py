@@ -19,7 +19,7 @@ from phare.embeddings.service import EmbeddingService
 from phare.providers.types import LLMProvider
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
-from phare.recommend.explain import explain
+from phare.recommend.explain import _EXPLANATION_CACHE, Explainer
 from phare.recommend.log import log_rows
 from phare.recommend.reranker import rerank
 from phare.recommend.schema import Candidate, Recommendation, Row
@@ -48,6 +48,7 @@ class RecommendationService:
         chat_llm: LLMProvider | None = None,
         row_size: int = 12,
         swing_slots: int = 2,
+        explanation_budget: int = 8,
     ) -> None:
         self.session = session
         self.embed_provider = embed_provider
@@ -55,6 +56,8 @@ class RecommendationService:
         self.chat_llm = chat_llm
         self.row_size = row_size
         self.swing_slots = swing_slots
+        # Per-home-render cap on uncached LLM explanation calls (see explain.Explainer).
+        self.explanation_budget = explanation_budget
         # Request-scoped centroid cache: rows()/dynamic_rows fan out many candidate queries off
         # the same centroid, and computing it re-reads every watch event. One service instance is
         # built per request (see api.deps), so this stays correct.
@@ -88,6 +91,15 @@ class RecommendationService:
     # Backwards-compatible alias used internally.
     _load_taste = load_taste
 
+    def _explainer(self, *, with_llm: bool, budget: int | None = None) -> Explainer:
+        """An explainer sharing the process-wide blurb cache. ``budget`` caps uncached LLM calls
+        for this render (None = unbounded, for single-item/ad-hoc calls)."""
+        return Explainer(
+            llm=self.chat_llm if with_llm else None,
+            cache=_EXPLANATION_CACHE,
+            budget=budget if budget is not None else 1_000_000_000,
+        )
+
     def recommend(
         self,
         profile_id: uuid.UUID,
@@ -98,11 +110,13 @@ class RecommendationService:
         k: int | None = None,
         swing_slots: int | None = None,
         explain_with_llm: bool = True,
+        explainer: Explainer | None = None,
     ) -> list[Recommendation]:
         """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain.
 
         ``explain_with_llm=False`` uses the deterministic template explanations (no per-item LLM
         call) — the chat agent does this since its natural-language reply already frames the picks.
+        Pass a shared ``explainer`` to pool the LLM-call budget across the rows of one home render.
         """
         if taste is None:
             taste = self._load_taste(profile_id)
@@ -128,11 +142,12 @@ class RecommendationService:
             k=k,
             swing_slots=swing_slots if swing_slots is not None else self.swing_slots,
         )
-        return explain(recs, taste, self.chat_llm if explain_with_llm else None)
+        exp = explainer or self._explainer(with_llm=explain_with_llm)
+        return exp.explain(recs, taste)
 
-    def you_might_like(self, profile_id: uuid.UUID) -> Row:
+    def you_might_like(self, profile_id: uuid.UUID, *, explainer: Explainer | None = None) -> Row:
         """The full pipeline. This is the product."""
-        items = self.recommend(profile_id)
+        items = self.recommend(profile_id, explainer=explainer)
         return Row(key="you_might_like", title="You might like", items=items)
 
     def _title_vector(self, title_id: uuid.UUID) -> list[float] | None:
@@ -144,11 +159,14 @@ class RecommendationService:
         )
         return [float(x) for x in embedding] if embedding is not None else None
 
-    def because_you_watched_rows(self, profile_id: uuid.UUID, *, max_rows: int = 3) -> list[Row]:
+    def because_you_watched_rows(
+        self, profile_id: uuid.UUID, *, max_rows: int = 3, explainer: Explainer | None = None
+    ) -> list[Row]:
         """One row per loved title: catalog picks nearest to *that title's* embedding. Similarity-
         led (no swing slots) so the row reads honestly as "because you watched X"."""
         taste = self._load_taste(profile_id)
         avoids = list(taste.get("hard_avoids") or [])
+        exp = explainer or self._explainer(with_llm=True)
         rows: list[Row] = []
         for seed in row_builders.loved_seed_titles(self.session, profile_id, limit=max_rows):
             vector = self._title_vector(seed.id)
@@ -162,9 +180,7 @@ class RecommendationService:
                 limit=self.row_size * 3 + 6,
                 hard_avoids=avoids,
             )
-            items = explain(
-                rerank(candidates, taste, k=self.row_size, swing_slots=0), taste, self.chat_llm
-            )
+            items = exp.explain(rerank(candidates, taste, k=self.row_size, swing_slots=0), taste)
             if items:
                 rows.append(
                     Row(
@@ -178,11 +194,14 @@ class RecommendationService:
     def rows(self, profile_id: uuid.UUID) -> list[Row]:
         """The home-screen strip set. Empty rows are kept out so the UI stays clean."""
         self.ensure_embeddings()
+        # One explainer per render, so the LLM-call budget is pooled across every explaining row
+        # (because-you-watched + you-might-like) instead of each row fanning out independently.
+        explainer = self._explainer(with_llm=True, budget=self.explanation_budget)
         candidate_rows = [
             # Most-personalized first — these render right under the hero top pick.
-            *self.because_you_watched_rows(profile_id),
+            *self.because_you_watched_rows(profile_id, explainer=explainer),
             row_builders.continue_watching_row(self.session, profile_id, limit=self.row_size),
-            self.you_might_like(profile_id),
+            self.you_might_like(profile_id, explainer=explainer),
             row_builders.watch_again_row(self.session, profile_id, limit=self.row_size),
             row_builders.popular_row(self.session, profile_id, limit=self.row_size),
         ]

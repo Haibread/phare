@@ -14,6 +14,8 @@ from phare.catalog.sample import seed_sample_catalog
 from phare.db.models import Profile
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
+from phare.providers.fakes import FakeLLMProvider
+from phare.providers.http import TTLCache
 from phare.recommend.candidates import generate_candidates
 from phare.recommend.rows import loved_seed_titles
 from phare.recommend.service import RecommendationService
@@ -172,3 +174,77 @@ def test_because_rows_render_before_you_might_like(db_session: Session) -> None:
     assert because_idx is not None
     if "you_might_like" in keys:
         assert because_idx < keys.index("you_might_like")  # most-personalized first
+
+
+# --- home-rows explanation budget + cache ------------------------------------
+#
+# A first real run showed the home page makes one LLM explanation call *per item* across rows,
+# sequentially — dozens of slow calls against a real provider, blowing past the request timeout.
+# FakeLLMProvider is instant, so latency is invisible here; instead we assert the invariant that
+# actually bounds it — the *number* of LLM calls per render — which is deterministic and never
+# flaky. The delay test then shows that bound translates into bounded wall-time.
+
+
+def _llm_service(
+    session: Session, llm: FakeLLMProvider, *, budget: int, swing_slots: int = 0
+) -> RecommendationService:
+    return RecommendationService(
+        session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=llm,
+        swing_slots=swing_slots,
+        explanation_budget=budget,
+    )
+
+
+def test_home_rows_explanation_calls_are_bounded(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("phare.recommend.service._EXPLANATION_CACHE", TTLCache(ttl=300))
+    profile_id = _seeded_profile(db_session)
+    llm = FakeLLMProvider(completion="A great fit for your taste.")
+    service = _llm_service(db_session, llm, budget=3)
+
+    rows = service.rows(profile_id)
+
+    total_items = sum(len(r.items) for r in rows)
+    assert total_items > 3  # the page shows many items across rows...
+    assert len(llm.prompts) <= 3  # ...but the LLM is called at most `budget` times, not per item
+    assert all(item.explanation for r in rows for item in r.items)  # rest fall back to templates
+
+
+def test_home_rows_reuse_cached_explanations(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("phare.recommend.service._EXPLANATION_CACHE", TTLCache(ttl=300))
+    profile_id = _seeded_profile(db_session)
+    llm = FakeLLMProvider(completion="A great fit for your taste.")
+    service = _llm_service(db_session, llm, budget=1000)  # unbounded enough to cover the first page
+
+    service.rows(profile_id)
+    after_first = len(llm.prompts)
+    assert after_first > 0  # the first render actually generated blurbs
+
+    service.rows(profile_id)
+    assert len(llm.prompts) == after_first  # the second render is fully served from the cache
+
+
+def test_home_rows_latency_is_bounded_by_budget(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With a per-call delay, an unbounded per-item fan-out would scale with item count; the budget
+    # caps both calls and wall-time. Tiny delay + generous bound keep this fast and non-flaky.
+    import time
+
+    monkeypatch.setattr("phare.recommend.service._EXPLANATION_CACHE", TTLCache(ttl=300))
+    profile_id = _seeded_profile(db_session)
+    llm = FakeLLMProvider(completion="A great fit for your taste.", complete_delay=0.01)
+    service = _llm_service(db_session, llm, budget=3)
+
+    start = time.perf_counter()
+    service.rows(profile_id)
+    elapsed = time.perf_counter() - start
+
+    assert len(llm.prompts) <= 3
+    assert elapsed < 0.5  # ~3 * 10ms of LLM time + DB work — not item-count * 10ms
