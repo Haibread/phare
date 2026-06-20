@@ -131,6 +131,7 @@ export const chatStreamMetaSchema = z.object({
 export type ChatStreamMeta = z.infer<typeof chatStreamMetaSchema>;
 
 export interface ChatStreamHandlers {
+  onStatus?: (label: string) => void;
   onMeta?: (meta: ChatStreamMeta) => void;
   onDelta?: (text: string) => void;
   onDone?: () => void;
@@ -291,7 +292,9 @@ async function chatStream(
       }
       if (data !== "") {
         const parsed: unknown = JSON.parse(data);
-        if (event === "meta") {
+        if (event === "status") {
+          handlers.onStatus?.(String((parsed as { label: string }).label));
+        } else if (event === "meta") {
           handlers.onMeta?.(chatStreamMetaSchema.parse(parsed));
         } else if (event === "delta") {
           handlers.onDelta?.(String((parsed as { text: string }).text));
