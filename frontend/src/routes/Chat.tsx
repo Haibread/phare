@@ -55,7 +55,7 @@ export function Chat(): React.JSX.Element {
     <div className={styles.page} data-testid="chat">
       <h1 className={styles.pageTitle}>Chat</h1>
 
-      <div className={styles.chatLog}>
+      <div className={styles.chatLog} aria-live="polite" aria-label="Conversation">
         {log.length === 0 && (
           <div className={styles.bubble} data-testid="chat-greeting">
             <p style={{ margin: 0 }}>
@@ -103,26 +103,34 @@ export function Chat(): React.JSX.Element {
         </div>
       )}
 
-      <div className={styles.composer}>
+      <form
+        className={styles.composer}
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(message);
+        }}
+      >
+        <label htmlFor="chat-input" className="sr-only">
+          Tell the agent a mood
+        </label>
         <input
+          id="chat-input"
           type="text"
           className="field"
           data-testid="chat-input"
           placeholder="e.g. something funny and short"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send(message)}
         />
         <button
-          type="button"
+          type="submit"
           className="btn btn-primary"
           data-testid="chat-send"
-          onClick={() => send(message)}
           disabled={chat.isPending || message.trim() === ""}
         >
           Send
         </button>
-      </div>
+      </form>
     </div>
   );
 }

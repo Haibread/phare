@@ -38,6 +38,7 @@ export function Search(): React.JSX.Element {
         type="search"
         className="field"
         data-testid="search-input"
+        aria-label="Search movies and shows"
         placeholder="Search movies & shows…"
         value={query}
         // biome-ignore lint/a11y/noAutofocus: search is the whole point of this screen.
