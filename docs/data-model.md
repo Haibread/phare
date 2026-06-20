@@ -60,6 +60,19 @@ comfort axis / discovery tolerance) + a human-readable summary + a **confidence*
 guessing" honesty). User edits live separately and **always win**, surviving regeneration.
 Recency decay applies wherever taste is computed.
 
+## Agent memory (commitments + notes)
+
+The chat agent ([`agent.md`](agent.md)) writes back, so two structured, per-profile, inspectable
+stores back its long-term memory (chat is just another event `source="chat"` in the stream above):
+
+- **WatchCommitment** — an "I'll watch X" intent: `title`, `status` (`pending|watched|dropped`),
+  `note`, timestamps. Resolving one (watched/dropped) is what turns a plan into a real signal; open
+  ones drive the next-session follow-up.
+- **MemoryNote** — free-text generalist memory: `text`, `kind` (`preference|context|fact`), optional
+  `expires_at` (temporal context), `source`. A **steering input, never a ranking authority**:
+  durable preferences distil into the taste profile's overrides; temporal notes only colour the
+  active session and feed the taste-extraction prompt. Editable like the taste profile.
+
 ## Recommendation log
 
 Every recommendation shown (any surface) is logged with its context (title, surface, rank, taste

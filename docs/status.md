@@ -80,6 +80,16 @@ A compact snapshot of what's built and what's next. Update as features land.
 - **Catalog search** — a header search icon opens a search surface. `POST /profiles/{id}/catalog/
   search` matches the local catalog and, when TMDB is configured, pulls live matches in first
   (upserting them so they're requestable); results reuse the poster card + Seerr request action.
+- **Tool-using chat agent + memory** — chat is now a read *and write* path (when an LLM is
+  configured; offline stays read-only). A planner picks tools (`recommend` / `log_signal` /
+  `set_commitment` / `resolve_commitment` / `remember` / `update_taste`) executed deterministically
+  over the same engine. Telling it "I saw Dune and loved it" registers a `chat`-sourced signal;
+  "I'll watch X" sets a **commitment** the agent follows up on next session (`/chat/opening`).
+  **Auto-write + undo:** every write surfaces as an undoable chip (`/chat/undo`). Two-tier memory —
+  the structured spine (events/taste/commitments) plus generalist free-text **notes** that distil
+  into taste (durable → overrides; temporal → session filters), all inspectable/editable in Profile
+  ("Watch plans" + "Memory"). New tables `watch_commitment` / `memory_note` (migration 0010); see
+  [`agent.md`](agent.md).
 
 ## Run it
 
