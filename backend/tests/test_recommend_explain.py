@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from phare.providers.fakes import FakeLLMProvider
-from phare.recommend.explain import explain, is_spoiler_safe
+from phare.recommend.explain import Explainer, coerce_safe, explain, is_spoiler_safe
 from phare.recommend.schema import Recommendation
 
 _OVERVIEW_LEAK = "the protagonist secretly dies at the end"
@@ -74,3 +74,33 @@ def test_llm_spoiler_output_falls_back_to_safe_template() -> None:
     assert out.explanation is not None
     assert "dies" not in out.explanation  # the spoiler was rejected, template used instead
     assert "Science Fiction" in out.explanation
+
+
+_FIRST_SENTENCE = "A taut, atmospheric thriller that rewards patience."
+
+
+def test_coerce_safe_trims_overlong_marker_free_reply_to_first_sentence() -> None:
+    long_reply = _FIRST_SENTENCE + " It also goes on with needless padding clauses." * 8
+    assert len(long_reply) > 320  # a verbose run past the one-sentence cap...
+    assert coerce_safe(long_reply) == _FIRST_SENTENCE  # ...is salvaged, not discarded
+    assert coerce_safe("Gripping until the killer is unmasked.") is None  # a real marker rejects
+
+
+def test_overlong_explanation_is_salvaged_not_templated() -> None:
+    # Regression: a verbose-but-harmless reply used to be rejected and the template cached forever,
+    # so on-taste top picks intermittently lost their LLM blurb. Now it's trimmed and kept.
+    llm = FakeLLMProvider(completion=_FIRST_SENTENCE + " Plus assorted extra rambling." * 12)
+    [out] = explain([_rec()], {"summary": "loves slow-burn thrillers"}, llm=llm)
+    assert out.explanation == _FIRST_SENTENCE  # the LLM blurb survived, trimmed to one sentence
+
+
+def test_explainer_spends_budget_on_top_ranked_items_first() -> None:
+    # The budget is front-loaded onto the top-ranked items (the most visible); the tail templates.
+    llm = FakeLLMProvider(completion="A great fit for your taste.")
+    recs = [_rec(title=f"T{i}", title_id=uuid.uuid4()) for i in range(5)]
+    out = Explainer(llm=llm, budget=2).explain(recs, {"summary": "s"})
+
+    assert len(llm.prompts) == 2  # only two LLM calls (the budget)
+    assert out[0].explanation == "A great fit for your taste."  # top picks get the blurb
+    assert out[1].explanation == "A great fit for your taste."
+    assert all(o.explanation != "A great fit for your taste." for o in out[2:])  # tail templated

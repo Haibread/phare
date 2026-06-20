@@ -55,6 +55,23 @@ def is_spoiler_safe(text: str) -> bool:
     return _SPOILER_MARKERS.search(text) is None
 
 
+def coerce_safe(text: str) -> str | None:
+    """Best-effort spoiler-safe blurb, or ``None`` to reject.
+
+    A genuine plot-reveal marker rejects outright. But the prompt asks for *one sentence*, and a
+    verbose model sometimes runs past the length cap with extra, harmless clauses — discarding that
+    (and caching the template forever) is why on-taste top picks intermittently lost their blurb.
+    So an over-long but marker-free reply is trimmed to its first sentence rather than thrown away.
+    """
+    if _SPOILER_MARKERS.search(text):
+        return None
+    if len(text) <= _MAX_EXPLANATION_LEN:
+        return text
+    first = re.match(r"\s*(.+?[.!?])(\s|$)", text, re.S)
+    sentence = first.group(1).strip() if first else ""
+    return sentence if sentence and len(sentence) <= _MAX_EXPLANATION_LEN else None
+
+
 _SYSTEM = """You write one-sentence, spoiler-safe reasons a viewer might enjoy a title.
 
 Rules:
@@ -117,7 +134,8 @@ class Explainer:
         """Attach an explanation to each recommendation, returning a new list.
 
         Cached/templated items resolve inline; the uncached LLM calls (bounded by ``budget``) are
-        decided sequentially — so the budget is spent deterministically — then fired concurrently.
+        decided sequentially — so spend is deterministic and front-loaded onto the top-ranked
+        items — then fired concurrently.
         """
         fingerprint = _taste_fingerprint(taste)
         texts: list[str | None] = [None] * len(recommendations)
@@ -168,10 +186,11 @@ class Explainer:
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
             logger.warning("recommend.explain_failed", extra={"title": rec.title})
             return _template(rec, taste)
-        if candidate and is_spoiler_safe(candidate):
-            return candidate
+        safe = coerce_safe(candidate) if candidate else None
+        if safe:
+            return safe
         if candidate:
-            # Output tripped the spoiler guard — drop it and fall back to the safe template.
+            # A genuine plot-reveal marker — drop it and fall back to the safe template.
             logger.warning("recommend.explain_rejected", extra={"title": rec.title})
         return _template(rec, taste)
 
