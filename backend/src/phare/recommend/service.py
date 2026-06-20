@@ -97,8 +97,13 @@ class RecommendationService:
         candidate_filter: CandidateFilter | None = None,
         k: int | None = None,
         swing_slots: int | None = None,
+        explain_with_llm: bool = True,
     ) -> list[Recommendation]:
-        """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain."""
+        """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain.
+
+        ``explain_with_llm=False`` uses the deterministic template explanations (no per-item LLM
+        call) — the chat agent does this since its natural-language reply already frames the picks.
+        """
         if taste is None:
             taste = self._load_taste(profile_id)
         centroid = self._centroid(profile_id)
@@ -123,7 +128,7 @@ class RecommendationService:
             k=k,
             swing_slots=swing_slots if swing_slots is not None else self.swing_slots,
         )
-        return explain(recs, taste, self.chat_llm)
+        return explain(recs, taste, self.chat_llm if explain_with_llm else None)
 
     def you_might_like(self, profile_id: uuid.UUID) -> Row:
         """The full pipeline. This is the product."""

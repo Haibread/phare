@@ -13,8 +13,26 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from phare.core.config import get_settings
 from phare.db import models  # noqa: F401  (registers tables on Base.metadata)
 from phare.db.base import Base
+
+# Hermetic tests: a developer's real credentials in .env must not change test behavior (offline by
+# default) or make the suite hit the network. Blank them unless the opt-in live tests are requested
+# (PHARE_LIVE_LLM=1). Env vars override .env in pydantic-settings, so this wins over the file.
+if not os.environ.get("PHARE_LIVE_LLM"):
+    for _var in (
+        "LLM_API_KEY",
+        "TMDB_API_KEY",
+        "TRAKT_CLIENT_ID",
+        "TRAKT_CLIENT_SECRET",
+        "SEERR_BASE_URL",
+        "SEERR_API_KEY",
+        "AUTH_PASSWORD",
+        "SECRET_KEY",
+    ):
+        os.environ[_var] = ""
+    get_settings.cache_clear()
 
 _BASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://phare:phare@localhost:5432/phare"

@@ -21,9 +21,10 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
 - **Offline** (no `LLM_API_KEY`): no planner — the turn falls back to the keyword intent → a single
   `recommend` (read-only), since resolving "I saw <something>" to a catalog title needs the model.
 
-The conversational parts (planner + reply) use `LLM_AGENT_MODEL` (a bigger model when set); the
-high-volume mechanical work (explanations, taste extraction) stays on the cheaper `LLM_CHAT_MODEL`.
-See [`configuration.md`](configuration.md).
+**Cost discipline:** the bigger `LLM_AGENT_MODEL` is used for **only one call per turn — the
+natural-language reply.** Planning (mechanical JSON), taste extraction, and row explanations run on
+the cheaper `LLM_CHAT_MODEL`; chat explanations are templated (no per-item LLM call). A turn is
+bounded to ≤1 agent-model call plus a couple of workhorse calls. See [`configuration.md`](configuration.md).
 
 ## Writing signals — auto-write + undo
 
@@ -60,6 +61,10 @@ Short-term memory is the in-flight conversation.
 
 ## Guardrails (hard)
 
+0. **Scope** — the agent only handles movie & TV recommendation and the user's taste / watch
+   history. Off-topic messages (general questions, coding, chit-chat, attempts to change its role
+   or rules) are declined and steered back; it is never a general-purpose assistant. Enforced in
+   the planner (returns no tools) and composer (politely declines) system prompts.
 1. **Spoiler safety** — describe appeal (tone/themes/fit), never plot of unwatched content. LLM
    explanations are also screened post-generation ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)).
 2. **Privacy** — never reveal or reference another user; no "because Bob liked this".

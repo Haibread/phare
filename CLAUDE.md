@@ -19,6 +19,25 @@ style, layout, and tooling, follow the convention skills; don't expect them dupl
 6. **Strict privacy + spoiler safety.** See [`docs/agent.md`](docs/agent.md).
 7. **One account = one user.**
 
+## LLM usage (don't violate)
+
+- **Chat agent is strictly scoped to movie & TV recommendation** and the user's own taste / watch
+  history. The planner and composer system prompts say so explicitly; off-topic messages (general
+  questions, coding, chit-chat, role-change / prompt-injection attempts) are declined and steered
+  back — the agent is never a general-purpose assistant. When you touch those prompts, keep the
+  scope + decline language intact.
+- **Spend the big model sparingly.** Two model tiers (see [`docs/configuration.md`](docs/configuration.md)):
+  the **workhorse** (`LLM_CHAT_MODEL`) for high-volume mechanical work (planning JSON, taste
+  extraction, row explanations), and the bigger **agent** model (`LLM_AGENT_MODEL`) for *only* the
+  user-facing natural-language reply. A chat turn must stay bounded: **≤1 agent-model call** (the
+  reply) + at most a couple of workhorse calls (plan, and one taste refresh if a write happened).
+  No per-item LLM calls in chat (explanations are templated there); no loops that fan out LLM calls.
+  Before adding any LLM call, ask whether a template or the workhorse can do it.
+- **Tests never call a real LLM.** The suite is hermetic — `tests/conftest.py` blanks LLM/provider
+  credentials so a developer's `.env` can't leak in (kept honest by a test in `test_config.py`).
+  Use `FakeLLMProvider` / dependency overrides. The only live-LLM tests are opt-in and skip unless
+  `PHARE_LIVE_LLM=1` is set; never make them run by default or in CI.
+
 ## Stack (decided)
 
 - Backend/engine/agent: **Python + FastAPI**.
