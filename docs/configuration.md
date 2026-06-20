@@ -34,6 +34,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | **Recommendation tuning** (safe defaults, rarely changed) | | |
 | `RECOMMEND_ROW_SIZE` | `12` | Items per row. |
 | `RECOMMEND_SWING_SLOTS` | `2` | Reserved high-novelty "swing" picks per slate. |
+| `RECOMMEND_EXPLANATION_BUDGET` | `8` | Max uncached LLM explanation calls per home render (fired concurrently; results cached). The rest use the template and get a blurb on a later render. `0` = always template. See [Row explanations](#row-explanations). |
 | **Auth** (opt-in) | | |
 | `AUTH_PASSWORD` | _(unset)_ | Set to gate the instance. Unset = open (single-user dev posture). |
 | `SECRET_KEY` | falls back to `AUTH_PASSWORD` | Signs bearer tokens **and** derives the source-token encryption key. |
@@ -93,6 +94,27 @@ Self-hosted sources (Plex/Jellyfin/Seerr) get the retry but **no cache**: they'r
 (they won't rate-limit their owner) and their state is mutable, so a stale read would be worse than
 a fresh call. LLM responses aren't cached either — prompts vary, and title embeddings are already
 persisted in Postgres.
+
+### Row explanations
+
+The home screen shows ~50 items across rows. Generating an LLM blurb for each one **synchronously,
+per item** makes the page take minutes against a real (often per-call-slow) provider — so the
+explainer ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)) bounds the work:
+
+- **Budget.** At most `RECOMMEND_EXPLANATION_BUDGET` *uncached* LLM calls per render; the rest fall
+  back to the deterministic, spoiler-proof template. The budget is pooled across all rows of one
+  render, not per-row.
+- **Concurrency.** Those bounded calls are fired concurrently (they're blocking HTTP), so a render's
+  LLM time is roughly one call, not their sum.
+- **Cache.** Every *outcome* is cached — the LLM blurb on success, the template on a spoiler-guard
+  rejection or error — keyed by `(title, swing-ness, taste summary)`. So each title is attempted at
+  most once per taste version, the cache warms over the first few renders, and steady-state renders
+  are near-instant. Changing taste re-keys the cache, regenerating blurbs. The cache is in-process
+  (resets on restart). A title that templated on first attempt stays templated until taste changes —
+  the trade for instant loads.
+
+The chat path is unaffected: it always templates its picks (the agent's natural-language reply
+already frames them), so a chat turn never makes a per-item explanation call.
 
 ### Switching on a real model
 

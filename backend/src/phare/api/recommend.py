@@ -44,6 +44,7 @@ def build_recommender(
         chat_llm=chat_llm,
         row_size=settings.recommend_row_size,
         swing_slots=settings.recommend_swing_slots,
+        explanation_budget=settings.recommend_explanation_budget,
     )
 
 

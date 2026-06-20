@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
@@ -48,17 +49,27 @@ class FakeSourceProvider:
 
 
 class FakeLLMProvider:
-    """Deterministic LLMProvider: stable pseudo-embeddings + a canned completion."""
+    """Deterministic LLMProvider: stable pseudo-embeddings + a canned completion.
+
+    ``complete_delay`` sleeps that many seconds per ``complete`` call — used by tests to make a
+    fan-out of LLM calls *observably* slow without a real provider (keep it tiny). Every call is
+    recorded in ``prompts``, so call-count budgets can be asserted deterministically.
+    """
 
     name = "fake-llm"
 
-    def __init__(self, dim: int = 1536, completion: str = "{}") -> None:
+    def __init__(
+        self, dim: int = 1536, completion: str = "{}", *, complete_delay: float = 0.0
+    ) -> None:
         self.dim = dim
         self.completion = completion
+        self.complete_delay = complete_delay
         self.embed_calls = 0
         self.prompts: list[str] = []
 
     def complete(self, prompt: str) -> str:
+        if self.complete_delay:
+            time.sleep(self.complete_delay)
         self.prompts.append(prompt)
         return self.completion
 

@@ -89,22 +89,38 @@ class TTLCache:
         self._lock = threading.Lock()
         self._store: OrderedDict[Hashable, tuple[float, Any]] = OrderedDict()
 
-    def get_or_set(self, key: Hashable, factory: Callable[[], T]) -> T:
+    def get(self, key: Hashable) -> Any | None:
+        """Return the cached value if present and unexpired, else ``None`` (evicting if stale)."""
         if self._ttl <= 0:
-            return factory()
+            return None
         now = self._clock()
         with self._lock:
             hit = self._store.get(key)
-            if hit is not None:
-                expires_at, value = hit
-                if expires_at > now:
-                    self._store.move_to_end(key)
-                    return value
-                del self._store[key]
-        value = factory()
+            if hit is None:
+                return None
+            expires_at, value = hit
+            if expires_at > now:
+                self._store.move_to_end(key)
+                return value
+            del self._store[key]
+            return None
+
+    def set(self, key: Hashable, value: Any) -> None:
+        """Store ``value`` under ``key`` with the configured TTL (no-op when caching off)."""
+        if self._ttl <= 0:
+            return
         with self._lock:
-            self._store[key] = (now + self._ttl, value)
+            self._store[key] = (self._clock() + self._ttl, value)
             self._store.move_to_end(key)
             while len(self._store) > self._maxsize:
                 self._store.popitem(last=False)
+
+    def get_or_set(self, key: Hashable, factory: Callable[[], T]) -> T:
+        if self._ttl <= 0:
+            return factory()
+        cached = self.get(key)
+        if cached is not None:
+            return cached
+        value = factory()
+        self.set(key, value)
         return value
