@@ -34,9 +34,12 @@ A compact snapshot of what's built and what's next. Update as features land.
   the log against later watch events — *of titles shown in the top-K, the fraction watched within
   N days* — counting only matured impressions and reporting swing picks separately
   (`GET .../recommendations/conversion`, surfaced in the UI; also `phare conversion` from the CLI).
-- **Opt-in auth + token model** — `AUTH_PASSWORD`-gated bearer auth (stateless HMAC), `/auth/login`,
-  `/me`; per-profile source tokens encrypted at rest (`source_token`, Fernet from `SECRET_KEY`).
-  No-op when unconfigured (open dev posture); SPA shows a login gate only when required.
+- **Multi-user auth + token model** — per-account credentials (`user` + `identity`, argon2id local
+  passwords, **Sign in with Plex** behind an `AuthProvider` seam), identity-bearing bearer tokens
+  (stateless HMAC carrying the user id), `/auth/register`, `/auth/login`, `/auth/plex/*`, `/me`.
+  Closed by default; enforced per-user isolation; first account is admin; Plex sign-in gated by
+  server membership. Source tokens encrypted at rest (`source_token`, Fernet from `SECRET_KEY`).
+  See [`auth.md`](auth.md).
 - **More sources** — Plex + Jellyfin source providers (own history only),
   `POST /sources/{plex,jellyfin}/sync`, reusing stored per-profile tokens.
 - **Incremental sync** — a per-(profile, source) high-water mark (`sync_state`) feeds `since` to
@@ -111,7 +114,8 @@ compose). Runs fully offline without `LLM_API_KEY`; set it to use a real embeddi
 
 ## Known gaps / debt
 
-- Auth is opt-in instance-level (single shared password), not multi-account.
+- Local password reset is admin-driven (no SMTP yet); OAuth providers beyond Plex (Trakt, generic
+  OIDC) are not built — the `AuthProvider` seam is shaped for them. See [`auth.md`](auth.md).
 - Plex/Jellyfin episode→show id mapping depends on what the history payload exposes
   (`SeriesProviderIds` / `grandparentGuids`); unmapped episodes are skipped, not guessed.
 - The offline local-hash embedder is for dev/CI only — it gives relative similarity, not semantic

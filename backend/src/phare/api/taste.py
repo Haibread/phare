@@ -11,10 +11,11 @@ from sqlalchemy.orm import Session
 
 from phare.api.deps import get_language
 from phare.api.schemas import TasteResponse, UpdateTasteRequest
+from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import get_settings
 from phare.core.i18n import Language
 from phare.db.base import get_session
-from phare.db.models import Profile, TasteProfile
+from phare.db.models import TasteProfile, User
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
 from phare.taste.service import TasteService, effective_profile
@@ -58,7 +59,9 @@ def _require_taste(session: Session, profile_id: uuid.UUID) -> TasteProfile:
 def get_taste(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> TasteResponse:
+    require_own_profile(user, profile_id)
     return _to_response(_require_taste(session, profile_id))
 
 
@@ -66,11 +69,11 @@ def get_taste(
 def generate_taste(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     llm: Annotated[LLMProvider, Depends(get_llm_provider)],
     language: Annotated[Language, Depends(get_language)],
 ) -> TasteResponse:
-    if session.get(Profile, profile_id) is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+    require_own_profile(user, profile_id)
     model_version = get_settings().llm_chat_model
     taste = TasteService(session, llm, model_version, language).generate(profile_id)
     session.commit()
@@ -82,7 +85,9 @@ def update_taste(
     profile_id: uuid.UUID,
     body: UpdateTasteRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> TasteResponse:
+    require_own_profile(user, profile_id)
     taste = _require_taste(session, profile_id)
     taste.user_overrides = body.user_overrides
     session.commit()

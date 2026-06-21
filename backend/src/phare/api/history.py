@@ -10,8 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.api.schemas import HistoryItemResponse, HistoryPage
+from phare.core.auth import get_current_user, require_own_profile
 from phare.db.base import get_session
-from phare.db.models import Episode, Season, Title, WatchEvent
+from phare.db.models import Episode, Season, Title, User, WatchEvent
 
 router = APIRouter(tags=["History"])
 
@@ -20,13 +21,16 @@ router = APIRouter(tags=["History"])
 def get_history(
     profile_id: Annotated[uuid.UUID, Query(alias="profileId")],
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 50,
 ) -> HistoryPage:
     """Return one profile's watch/rating history, most recent first.
 
-    Per-profile isolation is enforced here: every query is scoped to ``profile_id``.
+    Per-profile isolation is enforced here: the profile must be the caller's, and every query is
+    scoped to ``profile_id``.
     """
+    require_own_profile(user, profile_id)
     scoped = WatchEvent.profile_id == profile_id
     total = session.scalar(select(func.count()).select_from(WatchEvent).where(scoped))
 

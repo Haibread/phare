@@ -40,10 +40,17 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `RECOMMEND_ROW_SIZE` | `12` | Items per row. |
 | `RECOMMEND_SWING_SLOTS` | `2` | Reserved high-novelty "swing" picks per slate. |
 | `RECOMMEND_EXPLANATION_BUDGET` | `0` | Eager LLM "why this" calls per home render. **Default `0`** = rows use the instant template and the LLM reason is generated lazily per title (only when a card's detail is opened). Set `>0` to eagerly explain that many cards per render instead. See [Row explanations](#row-explanations). |
-| **Auth** (opt-in) | | |
-| `AUTH_PASSWORD` | _(unset)_ | Set to gate the instance. Unset = open (single-user dev posture). |
-| `SECRET_KEY` | falls back to `AUTH_PASSWORD` | Signs bearer tokens **and** derives the source-token encryption key. |
+| **Auth** (multi-user, closed by default — see [`auth.md`](auth.md)) | | |
+| `SECRET_KEY` | _(required once an account exists)_ | Signs identity-bearing bearer tokens **and** derives the source-token encryption key. |
 | `AUTH_TOKEN_TTL_SECONDS` | `2592000` (30 days) | Bearer token lifetime. |
+| `REGISTRATION_OPEN` | `false` | When true, anyone may self-register a local account. Default closed (admin-created; Plex sign-in is gated by server membership). |
+| `PLEX_CLIENT_IDENTIFIER` | _(derived from `SECRET_KEY`)_ | Stable client id Phare presents to plex.tv for "Sign in with Plex". |
+| `PLEX_PRODUCT_NAME` | `Phare` | Product name shown on the Plex auth screen. |
+
+The first cut gated the whole instance behind one shared `AUTH_PASSWORD` and was open when unset.
+That's **removed** — Phare is now multi-user with per-account credentials, real per-user isolation,
+and no open mode. See [`auth.md`](auth.md) for the model, the "Sign in with Plex" flow, and how the
+first account becomes the admin.
 
 ## Seeding the catalog
 

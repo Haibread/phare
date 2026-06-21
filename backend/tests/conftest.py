@@ -5,17 +5,22 @@ skip cleanly when no Postgres server is reachable.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from phare.api.app import create_app
+from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.db import models  # noqa: F401  (registers tables on Base.metadata)
-from phare.db.base import Base
+from phare.db.base import Base, get_session
+from phare.db.models import Profile, User
 
 # Hermetic tests: a developer's real credentials in .env must not change test behavior (offline by
 # default) or make the suite hit the network. Blank them unless the opt-in live tests are requested
@@ -28,8 +33,8 @@ if not os.environ.get("PHARE_LIVE_LLM"):
         "TRAKT_CLIENT_SECRET",
         "SEERR_BASE_URL",
         "SEERR_API_KEY",
-        "AUTH_PASSWORD",
         "SECRET_KEY",
+        "PLEX_CLIENT_IDENTIFIER",
     ):
         os.environ[_var] = ""
     get_settings.cache_clear()
@@ -61,6 +66,54 @@ def engine() -> Iterator[Engine]:
     with admin.connect() as connection:
         connection.execute(text(f"DROP DATABASE IF EXISTS {_TEST_DB} WITH (FORCE)"))
     admin.dispose()
+
+
+def make_account(
+    session: Session,
+    *,
+    display_name: str = "me",
+    email: str | None = "me@example.test",
+    is_admin: bool = True,
+) -> User:
+    """Create a User and its 1:1 Profile directly in the DB (auth-bypassing test setup)."""
+    user = User(email=email, display_name=display_name, is_admin=is_admin)
+    session.add(user)
+    session.flush()
+    session.add(Profile(user_id=user.id, display_name=display_name))
+    session.flush()
+    return user
+
+
+def authed_client(
+    session: Session,
+    user: User,
+    overrides: dict[Callable[..., object], Callable[[], object]] | None = None,
+) -> TestClient:
+    """A TestClient acting as ``user`` — overrides the session + auth dependency (no real token).
+
+    Pass ``overrides`` as ``{dependency_callable: factory}`` for per-test fakes (e.g. an LLM
+    provider). For token-path tests, build the client without this and send a real
+    ``Authorization`` header instead.
+    """
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: user
+    for dependency, factory in (overrides or {}).items():
+        app.dependency_overrides[dependency] = factory
+    return TestClient(app)
+
+
+def unauthed_app(session: Session) -> FastAPI:
+    """An app wired to the test session but with auth left intact (for token-path / 401 tests)."""
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: session
+    return app
+
+
+@pytest.fixture
+def account(db_session: Session) -> User:
+    """A ready-made admin account (User + Profile) for the common single-user test."""
+    return make_account(db_session)
 
 
 @pytest.fixture

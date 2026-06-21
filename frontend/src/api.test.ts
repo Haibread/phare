@@ -14,13 +14,17 @@ describe("api request() zod boundary", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("parses a well-formed response", async () => {
-    vi.stubGlobal("fetch", mockFetch({ authRequired: true, authenticated: false }));
-    await expect(api.me()).resolves.toEqual({ authRequired: true, authenticated: false });
+    const me = { needsSetup: false, registrationOpen: false, authenticated: false, user: null };
+    vi.stubGlobal("fetch", mockFetch(me));
+    await expect(api.me()).resolves.toEqual(me);
   });
 
   it("rejects a structurally invalid response instead of passing bad data through", async () => {
-    // authRequired must be a boolean — the zod boundary should throw, not hand back a junk object.
-    vi.stubGlobal("fetch", mockFetch({ authRequired: "yes", authenticated: false }));
+    // needsSetup must be a boolean — the zod boundary should throw, not hand back a junk object.
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ needsSetup: "yes", registrationOpen: false, authenticated: false, user: null }),
+    );
     await expect(api.me()).rejects.toThrow();
   });
 

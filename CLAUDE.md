@@ -62,6 +62,7 @@ see [`docs/configuration.md`](docs/configuration.md).
 - [`docs/design.md`](docs/design.md) — product & engine: what we build, scope, what's deferred.
 - [`docs/data-model.md`](docs/data-model.md) — canonical titles, events, taste profile, TV roll-up.
 - [`docs/agent.md`](docs/agent.md) — the chat agent + guardrails.
+- [`docs/auth.md`](docs/auth.md) — multi-user accounts, tokens, isolation, Sign in with Plex.
 - [`docs/configuration.md`](docs/configuration.md) — env vars, and the offline (no-key) fallback behavior.
 - [`docs/evaluation.md`](docs/evaluation.md) — how we know recommendations are good.
 

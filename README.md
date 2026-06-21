@@ -29,8 +29,10 @@ snapshot of what's built is in [`docs/status.md`](docs/status.md).
   (saved per browser). The choice flows to the backend via `Accept-Language`, so TMDB metadata, row
   titles, and LLM-generated text (explanations, chat, taste) localise too — see
   [`docs/configuration.md`](docs/configuration.md#languages).
-- **Opt-in auth** — set `AUTH_PASSWORD` to gate the instance; per-profile source tokens are
-  encrypted at rest. Unset = open (single-user dev posture).
+- **Multi-user accounts** — per-user login (email + password, or **Sign in with Plex**), each
+  account fully isolated from the others; closed by default. The first account is the admin; Plex
+  sign-in is gated by access to the owner's Plex server. Source tokens are encrypted at rest. See
+  [`docs/auth.md`](docs/auth.md).
 - **Evaluation** — persona guardrails + anti-degeneracy metrics (`phare evaluate`), gating CI.
 
 ## Run it

@@ -165,9 +165,35 @@ export const conversionSchema = z.object({
 });
 export type Conversion = z.infer<typeof conversionSchema>;
 
-const meSchema = z.object({ authRequired: z.boolean(), authenticated: z.boolean() });
+export const userSchema = z.object({
+  id: z.string(),
+  email: z.string().nullable(),
+  displayName: z.string(),
+  isAdmin: z.boolean(),
+  profileId: z.string(),
+});
+export type User = z.infer<typeof userSchema>;
+
+const meSchema = z.object({
+  needsSetup: z.boolean(),
+  registrationOpen: z.boolean(),
+  authenticated: z.boolean(),
+  user: userSchema.nullable(),
+});
 export type Me = z.infer<typeof meSchema>;
 const tokenSchema = z.object({ token: z.string() });
+
+const registerResponseSchema = z.object({ token: z.string().nullable(), user: userSchema });
+export type RegisterResponse = z.infer<typeof registerResponseSchema>;
+
+const plexStartSchema = z.object({ challengeId: z.string(), authUrl: z.string() });
+export type PlexStart = z.infer<typeof plexStartSchema>;
+
+const plexPollSchema = z.object({
+  status: z.enum(["pending", "authorized", "expired"]),
+  token: z.string().nullable(),
+});
+export type PlexPoll = z.infer<typeof plexPollSchema>;
 
 export const connectedSourceSchema = z.object({
   source: z.string(),
@@ -352,17 +378,23 @@ async function streamTitleExplanation(
 
 export const api = {
   me: () => request("/me", meSchema),
-  login: (password: string) =>
+  login: (email: string, password: string) =>
     request("/auth/login", tokenSchema, {
       method: "POST",
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ email, password }),
+    }),
+  register: (email: string, password: string, displayName: string) =>
+    request("/auth/register", registerResponseSchema, {
+      method: "POST",
+      body: JSON.stringify({ email, password, displayName }),
+    }),
+  plexStart: () => request("/auth/plex/start", plexStartSchema, { method: "POST" }),
+  plexPoll: (challengeId: string) =>
+    request("/auth/plex/poll", plexPollSchema, {
+      method: "POST",
+      body: JSON.stringify({ challengeId }),
     }),
   listProfiles: () => request("/profiles", profilePageSchema),
-  createProfile: (displayName: string) =>
-    request("/profiles", profileSchema, {
-      method: "POST",
-      body: JSON.stringify({ displayName }),
-    }),
   loadSampleData: (profileId: string) =>
     request(`/profiles/${profileId}/sample-data`, ingestSummarySchema, { method: "POST" }),
   history: (profileId: string) =>

@@ -17,10 +17,11 @@ from sqlalchemy.orm import Session
 
 from phare.api.deps import require_safe_url
 from phare.api.schemas import ApiModel
+from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import get_settings
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
-from phare.db.models import Profile, Title
+from phare.db.models import Title, User
 from phare.providers.seerr import SeerrProvider
 from phare.providers.types import ActionProvider, MediaAvailability
 
@@ -43,9 +44,8 @@ def seerr_provider(session: Session, profile_id: uuid.UUID) -> ActionProvider | 
     return None
 
 
-def _require_profile(session: Session, profile_id: uuid.UUID) -> None:
-    if session.get(Profile, profile_id) is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+def _require_profile(user: User, profile_id: uuid.UUID) -> None:
+    require_own_profile(user, profile_id)
 
 
 class ConnectSeerrRequest(ApiModel):
@@ -80,8 +80,9 @@ def connect_seerr(
     profile_id: uuid.UUID,
     body: ConnectSeerrRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> ConnectResponse:
-    _require_profile(session, profile_id)
+    _require_profile(user, profile_id)
     require_safe_url(body.base_url)
     stored = store_source_token(
         session,
@@ -101,9 +102,10 @@ def get_availability(
     profile_id: uuid.UUID,
     body: AvailabilityRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> AvailabilityResponse:
     """Library availability for the given titles. Empty + ``configured=false`` when no Seerr."""
-    _require_profile(session, profile_id)
+    _require_profile(user, profile_id)
     provider = seerr_provider(session, profile_id)
     if provider is None:
         return AvailabilityResponse(configured=False, results={})
@@ -124,8 +126,9 @@ def request_title(
     profile_id: uuid.UUID,
     body: RequestTitleRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> RequestTitleResponse:
-    _require_profile(session, profile_id)
+    _require_profile(user, profile_id)
     provider = seerr_provider(session, profile_id)
     if provider is None:
         raise HTTPException(status_code=400, detail="No Seerr connected")

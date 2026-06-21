@@ -27,8 +27,12 @@ services:
       MIGRATE_ON_STARTUP: ${MIGRATE_ON_STARTUP:-true}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       SERVICE_NAME: ${SERVICE_NAME:-phare-backend}
-      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      # Auth (multi-user, closed by default — see docs/auth.md). SECRET_KEY is required once an
+      # account exists; the first account created is the admin.
       SECRET_KEY: ${SECRET_KEY:-}
+      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-}
+      PLEX_CLIENT_IDENTIFIER: ${PLEX_CLIENT_IDENTIFIER:-}
+      PLEX_PRODUCT_NAME: ${PLEX_PRODUCT_NAME:-Phare}
       # LLM + embeddings (OpenAI-compatible; blank = offline). Any provider that speaks the API.
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}

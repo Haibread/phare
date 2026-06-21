@@ -22,8 +22,9 @@ from phare.api.schemas import (
     MemoryNoteItem,
     MemoryNoteList,
 )
+from phare.core.auth import get_current_user
 from phare.db.base import get_session
-from phare.db.models import MemoryKind, MemoryNote, Title, WatchCommitment
+from phare.db.models import MemoryKind, MemoryNote, Title, User, WatchCommitment
 
 router = APIRouter(tags=["Memory"])
 
@@ -58,8 +59,9 @@ def _note_item(note: MemoryNote) -> MemoryNoteItem:
 def list_commitments(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> CommitmentList:
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     rows = commitments_store.list_commitments(session, profile_id)
     return CommitmentList(items=[_commitment_item(session, c) for c in rows])
 
@@ -69,8 +71,9 @@ def delete_commitment(
     profile_id: uuid.UUID,
     commitment_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     commitment = commitments_store.get_commitment(session, commitment_id)
     if commitment is None or commitment.profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Commitment not found")
@@ -82,8 +85,9 @@ def delete_commitment(
 def list_memory(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> MemoryNoteList:
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     return MemoryNoteList(
         items=[_note_item(n) for n in memory_store.list_notes(session, profile_id)]
     )
@@ -94,8 +98,9 @@ def add_memory(
     profile_id: uuid.UUID,
     body: CreateMemoryNoteRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> MemoryNoteItem:
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     try:
         kind = MemoryKind(body.kind)
     except ValueError as exc:
@@ -112,8 +117,9 @@ def delete_memory(
     profile_id: uuid.UUID,
     note_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     note = memory_store.get_note(session, note_id)
     if note is None or note.profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Note not found")

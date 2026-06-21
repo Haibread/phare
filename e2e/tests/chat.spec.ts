@@ -32,11 +32,12 @@ test("typing a mood also works", async ({ page }) => {
   await expect(page.getByTestId("chat-agent").first()).toBeVisible({ timeout: 20_000 });
 });
 
-test("the app stays open when no password is set", async ({ page }) => {
-  // Default stack runs without AUTH_PASSWORD, so /me reports open mode and no gate appears.
+test("the app is closed by default and requires signing in", async ({ page }) => {
+  // Multi-user auth is mandatory now: a fresh context (no token) must hit the auth gate — either
+  // first-run setup or the login form — and never the app shell directly.
   await page.goto("/");
-  await expect(page.getByTestId("login-gate")).toHaveCount(0);
   await expect(
-    page.getByTestId("cold-start").or(page.getByTestId("tab-browse")),
+    page.getByTestId("setup-gate").or(page.getByTestId("login-gate")),
   ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("tab-browse")).toHaveCount(0);
 });

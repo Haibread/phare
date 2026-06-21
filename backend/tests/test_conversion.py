@@ -5,12 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
 from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
-from phare.db.base import get_session
 from phare.db.models import (
     EventType,
     Profile,
@@ -21,6 +18,7 @@ from phare.db.models import (
 )
 from phare.eval.conversion import ConversionStats, conversion_stats, format_conversion
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
+from tests.conftest import authed_client, make_account
 
 _NOW = datetime(2026, 6, 1, tzinfo=UTC)
 _SHOWN = _NOW - timedelta(days=30)  # mature: window has long since elapsed
@@ -186,23 +184,22 @@ def test_format_conversion_handles_no_data() -> None:
 # --- API --------------------------------------------------------------------
 
 
-def _client(session: Session) -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    app.dependency_overrides[get_embedder] = lambda: Embedder(
+_OFFLINE_OVERRIDES = {
+    get_embedder: lambda: Embedder(
         provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
-    )
-    app.dependency_overrides[get_optional_chat_llm] = lambda: None
-    return TestClient(app)
+    ),
+    get_optional_chat_llm: lambda: None,
+}
 
 
 def test_conversion_endpoint_shape(db_session: Session) -> None:
-    p, t = _profile(db_session), _title(db_session)
+    user = make_account(db_session)
+    p, t = user.profile.id, _title(db_session)
     _log(db_session, p, t)
     _watch(db_session, p, t, occurred_at=_SHOWN + timedelta(days=3))
 
     body = (
-        _client(db_session)
+        authed_client(db_session, user, overrides=_OFFLINE_OVERRIDES)
         .get(f"/profiles/{p}/recommendations/conversion?topK=10&withinDays=14")
         .json()
     )

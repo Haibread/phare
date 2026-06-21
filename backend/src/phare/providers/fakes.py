@@ -7,6 +7,7 @@ import time
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
+from phare.auth.provider import AuthChallenge, AuthPollResult, AuthStatus, ResolvedIdentity
 from phare.db.models import TitleKind
 from phare.providers.types import ExternalMatch, RawEvent, TitleMetadata
 
@@ -46,6 +47,37 @@ class FakeSourceProvider:
             if since is not None and event.occurred_at and event.occurred_at < since:
                 continue
             yield event
+
+
+class FakeAuthProvider:
+    """AuthProvider returning a canned challenge then a preset poll result. Keeps tests off Plex.
+
+    Defaults to immediately authorizing a fixed identity; set ``status`` to ``pending``/``expired``
+    to exercise those branches. Records ``poll`` calls so retry/timing can be asserted.
+    """
+
+    name = "fake-auth"
+
+    def __init__(
+        self,
+        identity: ResolvedIdentity,
+        *,
+        status: AuthStatus = AuthStatus.authorized,
+        auth_url: str = "https://example.test/auth",
+    ) -> None:
+        self.identity = identity
+        self.status = status
+        self.auth_url = auth_url
+        self.poll_calls = 0
+
+    def start(self) -> AuthChallenge:
+        return AuthChallenge(challenge_id="fake-pin", auth_url=self.auth_url)
+
+    def poll(self, challenge_id: str) -> AuthPollResult:
+        self.poll_calls += 1
+        if self.status is AuthStatus.authorized:
+            return AuthPollResult(status=AuthStatus.authorized, identity=self.identity)
+        return AuthPollResult(status=self.status)
 
 
 class FakeLLMProvider:

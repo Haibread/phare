@@ -16,7 +16,7 @@ from phare.core.config import Settings
 
 
 class EncryptionUnavailableError(RuntimeError):
-    """Raised when token encryption is requested but no SECRET_KEY/AUTH_PASSWORD is set."""
+    """Raised when token encryption is requested but no SECRET_KEY is set."""
 
 
 def encryption_available(settings: Settings) -> bool:
@@ -26,9 +26,7 @@ def encryption_available(settings: Settings) -> bool:
 def _fernet(settings: Settings) -> Fernet:
     secret = settings.signing_secret
     if secret is None:
-        raise EncryptionUnavailableError(
-            "SECRET_KEY (or AUTH_PASSWORD) must be set to store tokens"
-        )
+        raise EncryptionUnavailableError("SECRET_KEY must be set to store tokens")
     # Derive a stable 32-byte urlsafe key from the configured secret.
     digest = hashlib.sha256(secret.encode()).digest()
     return Fernet(base64.urlsafe_b64encode(digest))

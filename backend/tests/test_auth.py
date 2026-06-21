@@ -1,25 +1,25 @@
-"""Opt-in auth: open passthrough when unconfigured, enforced when AUTH_PASSWORD is set."""
+"""Multi-user auth: tokens, local accounts, Sign in with Plex, and enforced isolation.
+
+The suite stays hermetic — no real Plex. ``FakeAuthProvider`` (overriding the Plex provider
+dependency) supplies canned identities + server membership. See ``docs/auth.md``.
+"""
 
 from __future__ import annotations
 
 import time
+import uuid
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
-from phare.core.auth import issue_token, verify_token
+from phare.api.auth import get_plex_auth_provider
+from phare.auth.provider import AuthStatus, ResolvedIdentity
+from phare.core.auth import hash_password, issue_token, verify_password, verify_token
 from phare.core.config import Settings, get_settings
 from phare.core.crypto import decrypt, encrypt
 from phare.core.tokens import get_source_token, store_source_token
-from phare.db.base import get_session
-from phare.db.models import Profile
-
-
-def _client(session: Session, settings: Settings) -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    return TestClient(app)
+from phare.providers.fakes import FakeAuthProvider
+from tests.conftest import make_account, unauthed_app
 
 
 def _with_settings(monkeypatch, **env: str) -> Settings:
@@ -29,18 +29,50 @@ def _with_settings(monkeypatch, **env: str) -> Settings:
     return get_settings()
 
 
-# --- token primitives -------------------------------------------------------
+def _plex_client(session: Session, identity: ResolvedIdentity, *, status=AuthStatus.authorized):
+    """A client whose Plex auth provider is a fake yielding ``identity``."""
+    app = unauthed_app(session)
+    app.dependency_overrides[get_plex_auth_provider] = lambda: FakeAuthProvider(
+        identity, status=status
+    )
+    return TestClient(app)
 
 
-def test_token_roundtrip_and_expiry() -> None:
-    settings = Settings(auth_password="hunter2")
-    token = issue_token(settings)
-    assert verify_token(settings, token)
-    # Tampered signature is rejected.
-    assert not verify_token(settings, token + "x")
-    # Expired token is rejected.
-    expired = issue_token(settings, now=time.time() - settings.auth_token_ttl_seconds - 10)
-    assert not verify_token(settings, expired)
+def _identity(
+    subject: str, *, servers: tuple[str, ...], email: str | None = None
+) -> ResolvedIdentity:
+    return ResolvedIdentity(
+        provider="plex",
+        subject=subject,
+        display_name=f"Plex {subject}",
+        email=email,
+        access_token=f"tok-{subject}",
+        server_ids=servers,
+    )
+
+
+# --- token + password primitives -------------------------------------------
+
+
+def test_token_carries_user_id_and_expires() -> None:
+    settings = Settings(secret_key="sign-me")
+    user_id = uuid.uuid4()
+    token = issue_token(settings, user_id)
+    assert verify_token(settings, token) == user_id
+    # Tampered signature -> None.
+    assert verify_token(settings, token + "x") is None
+    # Expired -> None.
+    expired = issue_token(settings, user_id, now=time.time() - settings.auth_token_ttl_seconds - 10)
+    assert verify_token(settings, expired) is None
+    # No secret -> can't verify.
+    assert verify_token(Settings(secret_key=None), token) is None
+
+
+def test_password_hash_roundtrip() -> None:
+    stored = hash_password("correct horse battery staple")
+    assert stored != "correct horse battery staple"  # never plaintext
+    assert verify_password(stored, "correct horse battery staple") is True
+    assert verify_password(stored, "wrong") is False
 
 
 def test_encryption_roundtrip_and_wrong_secret() -> None:
@@ -51,34 +83,187 @@ def test_encryption_roundtrip_and_wrong_secret() -> None:
     assert decrypt(b, cipher) is None  # wrong secret -> None, not a crash
 
 
-# --- open mode (no AUTH_PASSWORD) -------------------------------------------
+# --- secure by default ------------------------------------------------------
 
 
-def test_open_mode_allows_unauthenticated(monkeypatch, db_session: Session) -> None:
-    settings = _with_settings(monkeypatch, AUTH_PASSWORD="")
-    assert settings.auth_enabled is False
-    client = _client(db_session, settings)
-    assert client.get("/profiles").status_code == 200
-    assert client.get("/me").json() == {"authRequired": False, "authenticated": True}
-    get_settings.cache_clear()
-
-
-# --- enforced mode ----------------------------------------------------------
-
-
-def test_enforced_mode_requires_token(monkeypatch, db_session: Session) -> None:
-    _with_settings(monkeypatch, AUTH_PASSWORD="hunter2", SECRET_KEY="sign-me")
-    client = _client(db_session, get_settings())
+def test_closed_by_default_and_reports_setup(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
     try:
+        client = TestClient(unauthed_app(db_session))
+        # No token -> every data endpoint is closed.
         assert client.get("/profiles").status_code == 401
-        assert client.get("/me").json()["authRequired"] is True
+        body = client.get("/me").json()
+        assert body == {
+            "needsSetup": True,
+            "registrationOpen": False,
+            "authenticated": False,
+            "user": None,
+        }
+    finally:
+        get_settings.cache_clear()
 
-        assert client.post("/auth/login", json={"password": "wrong"}).status_code == 401
-        token = client.post("/auth/login", json={"password": "hunter2"}).json()["token"]
 
-        headers = {"Authorization": f"Bearer {token}"}
-        assert client.get("/profiles", headers=headers).status_code == 200
-        assert client.get("/me", headers=headers).json()["authenticated"] is True
+# --- local accounts ---------------------------------------------------------
+
+
+def test_first_register_becomes_admin_and_logs_in(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = TestClient(unauthed_app(db_session))
+        resp = client.post(
+            "/auth/register",
+            json={"email": "owner@example.test", "password": "hunter2pass", "displayName": "Owner"},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["token"] is not None
+        assert body["user"]["isAdmin"] is True
+        assert body["user"]["profileId"]  # a profile was created with the account
+
+        headers = {"Authorization": f"Bearer {body['token']}"}
+        me = client.get("/me", headers=headers).json()
+        assert me["authenticated"] is True
+        assert me["needsSetup"] is False
+        # The token grants access to the account's own profile listing.
+        profiles = client.get("/profiles", headers=headers).json()
+        assert [p["id"] for p in profiles["items"]] == [body["user"]["profileId"]]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_registration_closed_for_second_user(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        make_account(db_session, email="owner@example.test")  # an account already exists
+        client = TestClient(unauthed_app(db_session))
+        resp = client.post(
+            "/auth/register",
+            json={"email": "intruder@example.test", "password": "longenough", "displayName": "X"},
+        )
+        assert resp.status_code == 403
+    finally:
+        get_settings.cache_clear()
+
+
+def test_open_registration_allows_self_signup(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me", REGISTRATION_OPEN="true")
+    try:
+        make_account(db_session, email="owner@example.test")
+        client = TestClient(unauthed_app(db_session))
+        resp = client.post(
+            "/auth/register",
+            json={"email": "newbie@example.test", "password": "longenough", "displayName": "New"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["user"]["isAdmin"] is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_login_rejects_wrong_password(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = TestClient(unauthed_app(db_session))
+        client.post(
+            "/auth/register",
+            json={"email": "owner@example.test", "password": "rightpass1", "displayName": "Owner"},
+        )
+        assert (
+            client.post(
+                "/auth/login", json={"email": "owner@example.test", "password": "wrongpass"}
+            ).status_code
+            == 401
+        )
+        ok = client.post(
+            "/auth/login", json={"email": "owner@example.test", "password": "rightpass1"}
+        )
+        assert ok.status_code == 200
+        assert ok.json()["token"]
+    finally:
+        get_settings.cache_clear()
+
+
+# --- Sign in with Plex ------------------------------------------------------
+
+
+def test_plex_first_signin_becomes_owner(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = _plex_client(db_session, _identity("owner", servers=("srv-A",), email="o@x.test"))
+        resp = client.post("/auth/plex/poll", json={"challengeId": "pin"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "authorized"
+        token = body["token"]
+        me = client.get("/me", headers={"Authorization": f"Bearer {token}"}).json()
+        assert me["user"]["isAdmin"] is True  # first sign-in is the owner/admin
+        # The Plex token was stored for ingestion (login also connects the source).
+        owner_profile = uuid.UUID(me["user"]["profileId"])
+        assert get_source_token(db_session, get_settings(), owner_profile, "plex") == "tok-owner"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_plex_member_allowed_stranger_refused(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        # Owner binds srv-A.
+        _plex_client(db_session, _identity("owner", servers=("srv-A",))).post(
+            "/auth/plex/poll", json={"challengeId": "pin"}
+        )
+        # A friend who shares srv-A is let in (but isn't admin).
+        member = _plex_client(db_session, _identity("friend", servers=("srv-A", "srv-B")))
+        resp = member.post("/auth/plex/poll", json={"challengeId": "pin"})
+        assert resp.status_code == 200
+        token = resp.json()["token"]
+        assert (
+            member.get("/me", headers={"Authorization": f"Bearer {token}"}).json()["user"][
+                "isAdmin"
+            ]
+            is False
+        )
+        # A stranger on an unrelated server is refused.
+        stranger = _plex_client(db_session, _identity("stranger", servers=("srv-Z",)))
+        assert stranger.post("/auth/plex/poll", json={"challengeId": "pin"}).status_code == 403
+    finally:
+        get_settings.cache_clear()
+
+
+def test_plex_poll_pending_returns_status(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = _plex_client(
+            db_session, _identity("owner", servers=("srv-A",)), status=AuthStatus.pending
+        )
+        resp = client.post("/auth/plex/poll", json={"challengeId": "pin"})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "pending", "token": None}
+    finally:
+        get_settings.cache_clear()
+
+
+# --- isolation --------------------------------------------------------------
+
+
+def test_one_user_cannot_reach_anothers_profile(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        alice = make_account(db_session, display_name="alice", email="alice@example.test")
+        bob = make_account(db_session, display_name="bob", email="bob@example.test")
+        client = TestClient(unauthed_app(db_session))
+        headers = {"Authorization": f"Bearer {issue_token(get_settings(), alice.id)}"}
+
+        # Alice sees her own profile only.
+        items = client.get("/profiles", headers=headers).json()["items"]
+        assert [p["id"] for p in items] == [str(alice.profile.id)]
+        # Bob's profile is a 404 for Alice, across every profile-scoped surface.
+        bob_id = bob.profile.id
+        assert (
+            client.get("/history", params={"profileId": str(bob_id)}, headers=headers).status_code
+            == 404
+        )
+        assert client.get(f"/profiles/{bob_id}/taste", headers=headers).status_code == 404
+        assert client.get(f"/profiles/{bob_id}/memory", headers=headers).status_code == 404
     finally:
         get_settings.cache_clear()
 
@@ -86,11 +271,8 @@ def test_enforced_mode_requires_token(monkeypatch, db_session: Session) -> None:
 def test_stored_token_encrypts_and_reads_back(monkeypatch, db_session: Session) -> None:
     settings = _with_settings(monkeypatch, SECRET_KEY="sign-me")
     try:
-        profile = Profile(display_name="me")
-        db_session.add(profile)
-        db_session.flush()
-
-        assert store_source_token(db_session, settings, profile.id, "trakt", "abc123") is True
-        assert get_source_token(db_session, settings, profile.id, "trakt") == "abc123"
+        user = make_account(db_session)
+        assert store_source_token(db_session, settings, user.profile.id, "trakt", "abc123") is True
+        assert get_source_token(db_session, settings, user.profile.id, "trakt") == "abc123"
     finally:
         get_settings.cache_clear()

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { ensureOnboarded } from "./helpers";
+import { ensureOnboarded, signIn } from "./helpers";
 
 test("the header switcher flips the UI language and persists the choice", async ({ page }) => {
   await ensureOnboarded(page);
@@ -28,8 +28,11 @@ test("the saved language survives a reload and localises backend text", async ({
   await expect(page.getByTestId("tab-browse")).toContainText("Parcourir");
 
   // A fresh load reads the saved language and sends Accept-Language: fr, so the row titles the
-  // backend builds come back in French too — proving the language flows end to end.
+  // backend builds come back in French too — proving the language flows end to end. The bearer
+  // token is in-memory only (a deliberate security posture), so a reload drops it and shows the
+  // gate in the saved language — sign back in, then assert the localised shell.
   await page.reload();
+  await signIn(page);
   await expect(page.getByTestId("tab-browse")).toContainText("Parcourir");
   const row = page.locator('[data-row-key="you_might_like"]');
   await expect(row).toBeVisible({ timeout: 20_000 });
