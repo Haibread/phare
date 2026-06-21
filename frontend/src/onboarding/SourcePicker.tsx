@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { api } from "../api";
 import { Sheet } from "../components/Sheet";
@@ -31,6 +31,12 @@ export function SourcePicker({
   const [error, setError] = useState<string | null>(null);
   const [trakt, setTrakt] = useState<{ userCode: string; verificationUrl: string } | null>(null);
 
+  // A history import (Trakt/Plex/Jellyfin) can run for minutes. Rather than block on the await with
+  // no feedback, we flip into a "syncing" view and poll `GET /history` for the running `total`,
+  // which the backend now commits incrementally as it ingests.
+  const [syncing, setSyncing] = useState(false);
+  const [count, setCount] = useState(0);
+
   // Plex / Jellyfin / Seerr form fields.
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
@@ -39,12 +45,26 @@ export function SourcePicker({
   // Trakt device-flow polling can run for minutes; abort it when the sheet closes or unmounts so
   // it stops polling in the background and never stacks a second loop on reopen.
   const pollAbort = useRef<AbortController | null>(null);
+  // Interval that polls the import progress count; cleared on completion/error/close/unmount.
+  const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopCountPolling = useCallback(() => {
+    if (countTimer.current !== null) {
+      clearInterval(countTimer.current);
+      countTimer.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) {
       pollAbort.current?.abort();
+      stopCountPolling();
     }
-    return () => pollAbort.current?.abort();
-  }, [open]);
+    return () => {
+      pollAbort.current?.abort();
+      stopCountPolling();
+    };
+  }, [open, stopCountPolling]);
 
   function finish() {
     // Connecting any source can change the source list and library availability.
@@ -52,6 +72,39 @@ export function SourcePicker({
     qc.invalidateQueries({ queryKey: keys.availability(profileId) });
     onConnected();
     onOpenChange(false);
+  }
+
+  /** Flip into the syncing view, poll `GET /history` `total` every ~2s for live progress, and run
+   * the actual sync. On resolve: invalidate + close. On reject: surface the error, leave syncing. */
+  async function runSync(sync: () => Promise<unknown>): Promise<void> {
+    setBusy(true);
+    setError(null);
+    setTrakt(null); // hide the Trakt device-code notice once the import starts
+    setCount(0);
+    setSyncing(true);
+
+    stopCountPolling();
+    countTimer.current = setInterval(() => {
+      api
+        .history(profileId)
+        .then((page) => setCount(page.total))
+        .catch(() => {
+          // A transient poll failure shouldn't abort the import; keep the last known count.
+        });
+    }, 2000);
+
+    try {
+      await sync();
+      stopCountPolling();
+      setSyncing(false);
+      setBusy(false);
+      finish();
+    } catch (e) {
+      stopCountPolling();
+      setSyncing(false);
+      setBusy(false);
+      setError(message(e));
+    }
   }
 
   function select(next: Active) {
@@ -82,9 +135,8 @@ export function SourcePicker({
         const poll = await api.traktConnectPoll(profileId, start.deviceCode);
         if (signal.aborted) return;
         if (poll.status === "connected") {
-          await api.syncTrakt(profileId);
-          if (signal.aborted) return;
-          finish();
+          // Device flow is done; hand off to the shared syncing view + progress poll.
+          await runSync(() => api.syncTrakt(profileId));
           return;
         }
         if (poll.status === "expired" || poll.status === "denied") {
@@ -102,6 +154,7 @@ export function SourcePicker({
     }
   }
 
+  /** Seerr connects instantly (no history import), so it keeps the plain blocking flow. */
   async function submit(run: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
@@ -113,6 +166,31 @@ export function SourcePicker({
     } finally {
       setBusy(false);
     }
+  }
+
+  if (syncing) {
+    return (
+      <Sheet
+        open={open}
+        onOpenChange={onOpenChange}
+        title={t("sources.title")}
+        description={t("sources.description")}
+      >
+        <output className={styles.syncing} data-testid="sync-progress">
+          <span className={styles.syncSpinner} aria-hidden="true" />
+          <p className={styles.syncMessage}>
+            <Trans
+              t={t}
+              i18nKey="sources.importing"
+              count={count}
+              values={{ count }}
+              components={{ c: <strong data-testid="sync-progress-count" /> }}
+            />
+          </p>
+          {error && <p className={styles.errorText}>{error}</p>}
+        </output>
+      </Sheet>
+    );
   }
 
   return (
@@ -184,7 +262,7 @@ export function SourcePicker({
             type="button"
             className="btn btn-primary"
             disabled={busy || baseUrl === "" || token === ""}
-            onClick={() => submit(() => api.syncPlex(profileId, baseUrl, token))}
+            onClick={() => void runSync(() => api.syncPlex(profileId, baseUrl, token))}
           >
             {t("sources.plex.connect")}
           </button>
@@ -227,7 +305,7 @@ export function SourcePicker({
             type="button"
             className="btn btn-primary"
             disabled={busy || baseUrl === "" || userId === "" || token === ""}
-            onClick={() => submit(() => api.syncJellyfin(profileId, baseUrl, userId, token))}
+            onClick={() => void runSync(() => api.syncJellyfin(profileId, baseUrl, userId, token))}
           >
             {t("sources.jellyfin.connect")}
           </button>

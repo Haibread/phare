@@ -236,10 +236,33 @@ export const memoryNoteSchema = z.object({
 export type MemoryNote = z.infer<typeof memoryNoteSchema>;
 const memoryNoteListSchema = z.object({ items: z.array(memoryNoteSchema) });
 
-// Bearer token held in memory only (never localStorage) — secrets stay in the session.
-let authToken: string | null = null;
+// Bearer token, persisted to localStorage so a reload keeps you signed in. It's a short-lived
+// bearer (30-day TTL, see docs/auth.md); for a self-hosted instance that's the right trade-off —
+// re-authenticating on every refresh is worse UX than the marginal XSS exposure. Mirrored in a
+// module variable to avoid a storage read on every request, and dropped on a 401 (expiry).
+const TOKEN_STORAGE_KEY = "phare.token";
+
+function readStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null; // storage unavailable (private mode) — fall back to in-memory only
+  }
+}
+
+let authToken: string | null = readStoredToken();
+
 export function setAuthToken(token: string | null): void {
   authToken = token;
+  try {
+    if (token === null) {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    } else {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    }
+  } catch {
+    // storage unavailable — keep the in-memory token so the current session still works
+  }
 }
 
 // Active UI language, sent as Accept-Language so the backend can localise the text it generates
@@ -263,6 +286,10 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
   if (!response.ok) {
+    if (response.status === 401) {
+      // Expired/invalid token — drop it so the app falls back to the login gate on the next /me.
+      setAuthToken(null);
+    }
     let detail = response.statusText;
     try {
       const body: unknown = await response.json();
