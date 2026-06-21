@@ -1,0 +1,15 @@
+.select {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+}
+
+.select:hover {
+  color: var(--text);
+}

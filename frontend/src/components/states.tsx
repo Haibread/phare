@@ -1,10 +1,12 @@
+import { useTranslation } from "react-i18next";
 import styles from "./components.module.css";
 
-export function Loading({ label = "Loading…" }: { label?: string }): React.JSX.Element {
+export function Loading({ label }: { label?: string }): React.JSX.Element {
+  const { t } = useTranslation("common");
   return (
     <output className={styles.center} data-testid="loading">
       <span className={styles.spinner} aria-hidden="true" />
-      <span className="faint">{label}</span>
+      <span className="faint">{label ?? t("loading")}</span>
     </output>
   );
 }
@@ -26,13 +28,14 @@ export function ErrorState({
   error: unknown;
   onRetry?: () => void;
 }): React.JSX.Element {
+  const { t } = useTranslation("common");
   const message = error instanceof Error ? error.message : String(error);
   return (
     <div className={styles.center} data-testid="error" role="alert">
-      <span className={styles.error}>Something went wrong: {message}</span>
+      <span className={styles.error}>{t("error", { message })}</span>
       {onRetry && (
         <button type="button" className="btn" onClick={onRetry}>
-          Try again
+          {t("tryAgain")}
         </button>
       )}
     </div>

@@ -1,0 +1,25 @@
+{
+  "title": "Chat",
+  "newChat": "New chat",
+  "conversation": "Conversation",
+  "greeting": "Tell me your mood and I'll find something — \"tired, something funny under 90 minutes\". You can also tell me what you've seen (\"loved Dune\") and I'll remember.",
+  "inputLabel": "Tell the agent a mood",
+  "inputPlaceholder": "e.g. something funny and short",
+  "send": "Send",
+  "undo": "undo",
+  "undone": "undone",
+  "error": "Sorry — something went wrong. Please try again.",
+  "status": {
+    "thinking": "Thinking…"
+  },
+  "suggestions": {
+    "funnyShort": "something funny and short",
+    "slowBurnSciFi": "a slow-burn sci-fi",
+    "comfortRewatch": "a comfort rewatch",
+    "weirder": "something weirder",
+    "shorter": "even shorter",
+    "lighter": "lighter",
+    "whyThese": "why these?",
+    "whyThesePayload": "why did you pick these?"
+  }
+}

@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "./components.module.css";
 
 /** Library availability + a request handler, provided by Browse to every poster card. Null when
@@ -14,6 +15,7 @@ const Ctx = createContext<AvailabilityCtx | null>(null);
 export const AvailabilityProvider = Ctx.Provider;
 
 export function TitleAction({ titleId }: { titleId: string }): React.JSX.Element | null {
+  const { t } = useTranslation("title");
   const ctx = useContext(Ctx);
   if (ctx === null || !ctx.configured) {
     return null;
@@ -25,14 +27,14 @@ export function TitleAction({ titleId }: { titleId: string }): React.JSX.Element
   if (status === "available") {
     return (
       <span className={`${styles.availTag} ${styles.availOk}`} data-testid="title-available">
-        Available
+        {t("availability.available")}
       </span>
     );
   }
   if (status === "queued") {
     return (
       <span className={`${styles.availTag} ${styles.availQueued}`} data-testid="title-queued">
-        Queued
+        {t("availability.queued")}
       </span>
     );
   }
@@ -44,7 +46,7 @@ export function TitleAction({ titleId }: { titleId: string }): React.JSX.Element
       onClick={() => ctx.onRequest(titleId)}
       disabled={ctx.requestingId === titleId}
     >
-      {ctx.requestingId === titleId ? "Requesting…" : "Request"}
+      {ctx.requestingId === titleId ? t("availability.requesting") : t("availability.request")}
     </button>
   );
 }

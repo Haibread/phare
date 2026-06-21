@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useProfileId } from "../app/ProfileContext";
 import { AvailabilityProvider } from "../components/Availability";
 import { PosterCard } from "../components/PosterCard";
@@ -7,6 +8,7 @@ import { useAvailability, useRequestTitle, useSearch } from "../lib/queries";
 import styles from "./routes.module.css";
 
 export function Search(): React.JSX.Element {
+  const { t } = useTranslation("search");
   const profileId = useProfileId();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -33,13 +35,13 @@ export function Search(): React.JSX.Element {
 
   return (
     <div className={styles.page} data-testid="search">
-      <h1 className={styles.pageTitle}>Search</h1>
+      <h1 className={styles.pageTitle}>{t("heading")}</h1>
       <input
         type="search"
         className="field"
         data-testid="search-input"
-        aria-label="Search movies and shows"
-        placeholder="Search movies & shows…"
+        aria-label={t("inputLabel")}
+        placeholder={t("placeholder")}
         value={query}
         // biome-ignore lint/a11y/noAutofocus: search is the whole point of this screen.
         autoFocus
@@ -48,13 +50,13 @@ export function Search(): React.JSX.Element {
 
       {!ready ? (
         <p className="muted" style={{ marginTop: "var(--sp-4)" }}>
-          Type to find a title — search your library and, if TMDB is connected, anything to request.
+          {t("prompt")}
         </p>
       ) : search.isPending ? (
-        <Loading label="Searching…" />
+        <Loading label={t("searching")} />
       ) : results.length === 0 ? (
         <p className="muted" data-testid="search-empty" style={{ marginTop: "var(--sp-4)" }}>
-          No matches for "{debounced.trim()}".
+          {t("noMatches", { query: debounced.trim() })}
         </p>
       ) : (
         <AvailabilityProvider value={availabilityCtx}>

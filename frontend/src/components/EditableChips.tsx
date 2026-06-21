@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "../routes/routes.module.css";
 
 /** A labelled set of taste chips the user can edit. Removing/adding writes the new list up to the
@@ -18,6 +19,7 @@ export function EditableChips({
   onAdd: (value: string) => void;
   onRemove: (value: string) => void;
 }): React.JSX.Element {
+  const { t } = useTranslation("profile");
   const [draft, setDraft] = useState("");
   const chipClass = tone === "like" ? styles.chipLike : styles.chipAvoid;
 
@@ -41,7 +43,7 @@ export function EditableChips({
             <button
               type="button"
               className={styles.chipRemove}
-              aria-label={`Remove ${g}`}
+              aria-label={t("chips.remove", { value: g })}
               onClick={() => onRemove(g)}
               disabled={busy}
             >
@@ -52,7 +54,7 @@ export function EditableChips({
         <input
           className={styles.chipInput}
           data-testid={`taste-add-${tone}`}
-          placeholder="+ add"
+          placeholder={t("chips.add")}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}

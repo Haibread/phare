@@ -1,0 +1,25 @@
+{
+  "title": "Discussion",
+  "newChat": "Nouvelle discussion",
+  "conversation": "Conversation",
+  "greeting": "Dis-moi ton humeur et je te trouve quelque chose — « fatigué, un truc drôle de moins de 90 minutes ». Tu peux aussi me dire ce que tu as vu (« adoré Dune ») et je m'en souviendrai.",
+  "inputLabel": "Indique une humeur à l'agent",
+  "inputPlaceholder": "p. ex. un truc drôle et court",
+  "send": "Envoyer",
+  "undo": "annuler",
+  "undone": "annulé",
+  "error": "Désolé — un problème est survenu. Réessaie.",
+  "status": {
+    "thinking": "Réflexion…"
+  },
+  "suggestions": {
+    "funnyShort": "un truc drôle et court",
+    "slowBurnSciFi": "une SF qui prend son temps",
+    "comfortRewatch": "un revisionnage doudou",
+    "weirder": "quelque chose de plus bizarre",
+    "shorter": "encore plus court",
+    "lighter": "plus léger",
+    "whyThese": "pourquoi ceux-là ?",
+    "whyThesePayload": "pourquoi as-tu choisi ceux-là ?"
+  }
+}

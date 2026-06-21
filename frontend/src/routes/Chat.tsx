@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type RecommendationItem, api } from "../api";
 import { type ChatTurn, useChat } from "../app/ChatContext";
 import { useProfileId } from "../app/ProfileContext";
@@ -7,8 +8,9 @@ import { posterTint } from "../lib/poster";
 import { useChatOpening, useInvalidateAfterChat, useUndoChatAction } from "../lib/queries";
 import styles from "./routes.module.css";
 
-const STARTERS = ["something funny and short", "a slow-burn sci-fi", "a comfort rewatch"];
-const FOLLOWUPS = ["something weirder", "even shorter", "lighter", "why these?"];
+/** Suggestion keys map to a translated chip label; "whyThese" also rewrites the outbound message. */
+const STARTER_KEYS = ["funnyShort", "slowBurnSciFi", "comfortRewatch"] as const;
+const FOLLOWUP_KEYS = ["weirder", "shorter", "lighter", "whyThese"] as const;
 
 /** Apply a patch to the last turn (the streaming agent bubble) without mutating the array. */
 function patchLast(
@@ -51,6 +53,7 @@ function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
 }
 
 export function Chat(): React.JSX.Element {
+  const { t } = useTranslation("chat");
   const profileId = useProfileId();
   const { log, setLog, undone, setUndone, reset } = useChat();
   const [message, setMessage] = useState("");
@@ -63,22 +66,22 @@ export function Chat(): React.JSX.Element {
     undo.mutate(token, { onSuccess: () => setUndone((s) => new Set(s).add(token)) });
   }
 
-  async function send(text: string) {
+  /** `outbound` overrides the message sent to the agent (e.g. the "why these?" chip). */
+  async function send(text: string, outbound?: string) {
     const trimmed = text.trim();
     if (trimmed === "" || pending) {
       return;
     }
-    const outbound = trimmed === "why these?" ? "why did you pick these?" : trimmed;
     setLog((l) => [
       ...l,
       { role: "user", text: trimmed },
-      { role: "agent", text: "", streaming: true, status: "Thinking…" },
+      { role: "agent", text: "", streaming: true, status: t("status.thinking") },
     ]);
     setMessage("");
     setPending(true);
     let wrote = false;
     try {
-      await api.chatStream(profileId, outbound, {
+      await api.chatStream(profileId, outbound ?? trimmed, {
         onStatus: (label) => setLog((l) => patchLast(l, { status: label })),
         onMeta: (meta) => {
           wrote = meta.actions.length > 0;
@@ -88,9 +91,7 @@ export function Chat(): React.JSX.Element {
         onDone: () => setLog((l) => patchLast(l, { streaming: false })),
       });
     } catch {
-      setLog((l) =>
-        patchLast(l, { text: "Sorry — something went wrong. Please try again.", streaming: false }),
-      );
+      setLog((l) => patchLast(l, { text: t("error"), streaming: false }));
     } finally {
       setPending(false);
       if (wrote) {
@@ -99,12 +100,12 @@ export function Chat(): React.JSX.Element {
     }
   }
 
-  const suggestions = log.length === 0 ? STARTERS : FOLLOWUPS;
+  const suggestionKeys = log.length === 0 ? STARTER_KEYS : FOLLOWUP_KEYS;
 
   return (
     <div className={styles.page} data-testid="chat">
       <div className={styles.chatHead}>
-        <h1 className={styles.pageTitle}>Chat</h1>
+        <h1 className={styles.pageTitle}>{t("title")}</h1>
         {log.length > 0 && (
           <button
             type="button"
@@ -113,18 +114,15 @@ export function Chat(): React.JSX.Element {
             onClick={reset}
             disabled={pending}
           >
-            New chat
+            {t("newChat")}
           </button>
         )}
       </div>
 
-      <div className={styles.chatLog} aria-live="polite" aria-label="Conversation">
+      <div className={styles.chatLog} aria-live="polite" aria-label={t("conversation")}>
         {log.length === 0 && (
           <div className={styles.bubble} data-testid="chat-greeting">
-            <p style={{ margin: 0 }}>
-              {opening.data?.greeting ??
-                'Tell me your mood and I\'ll find something — "tired, something funny under 90 minutes". You can also tell me what you\'ve seen ("loved Dune") and I\'ll remember.'}
-            </p>
+            <p style={{ margin: 0 }}>{opening.data?.greeting ?? t("greeting")}</p>
           </div>
         )}
         {log.map((turn, i) => (
@@ -136,7 +134,7 @@ export function Chat(): React.JSX.Element {
           >
             {turn.streaming && turn.text === "" ? (
               <span className="faint" data-testid="chat-status">
-                {turn.status ?? "Thinking…"}
+                {turn.status ?? t("status.thinking")}
               </span>
             ) : (
               <p style={{ margin: 0 }}>
@@ -155,7 +153,7 @@ export function Chat(): React.JSX.Element {
                     ✓ {action.summary}
                     {action.undoToken &&
                       (undone.has(action.undoToken) ? (
-                        <span className="faint"> · undone</span>
+                        <span className="faint"> · {t("undone")}</span>
                       ) : (
                         <button
                           type="button"
@@ -164,7 +162,7 @@ export function Chat(): React.JSX.Element {
                           disabled={undo.isPending}
                           onClick={() => action.undoToken && undoAction(action.undoToken)}
                         >
-                          undo
+                          {t("undo")}
                         </button>
                       ))}
                   </span>
@@ -184,17 +182,22 @@ export function Chat(): React.JSX.Element {
 
       {!pending && (
         <div className={styles.followups}>
-          {suggestions.map((p) => (
-            <button
-              key={p}
-              type="button"
-              className={styles.followup}
-              data-testid="chat-suggestion"
-              onClick={() => send(p)}
-            >
-              {p}
-            </button>
-          ))}
+          {suggestionKeys.map((key) => {
+            const label = t(`suggestions.${key}`);
+            return (
+              <button
+                key={key}
+                type="button"
+                className={styles.followup}
+                data-testid="chat-suggestion"
+                onClick={() =>
+                  send(label, key === "whyThese" ? t("suggestions.whyThesePayload") : undefined)
+                }
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -206,14 +209,14 @@ export function Chat(): React.JSX.Element {
         }}
       >
         <label htmlFor="chat-input" className="sr-only">
-          Tell the agent a mood
+          {t("inputLabel")}
         </label>
         <input
           id="chat-input"
           type="text"
           className="field"
           data-testid="chat-input"
-          placeholder="e.g. something funny and short"
+          placeholder={t("inputPlaceholder")}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
         />
@@ -223,7 +226,7 @@ export function Chat(): React.JSX.Element {
           data-testid="chat-send"
           disabled={pending || message.trim() === ""}
         >
-          Send
+          {t("send")}
         </button>
       </form>
     </div>

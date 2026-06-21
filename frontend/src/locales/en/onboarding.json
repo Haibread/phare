@@ -1,0 +1,42 @@
+{
+  "coldStart": {
+    "title": "Let's find your taste",
+    "lede": "Connect where you already track what you watch, and Phare builds your profile from it.",
+    "connectLibrary": "Connect your library",
+    "or": "or",
+    "exploreSample": "Explore with sample data",
+    "loadingSample": "Loading sample data…",
+    "sampleHint": "See how it works first — no account needed."
+  },
+  "sources": {
+    "title": "Connect a source",
+    "description": "Phare reads your own watch history — never anyone else's.",
+    "groups": {
+      "watchHistory": "Watch history",
+      "requests": "Requests & availability"
+    },
+    "form": {
+      "serverUrl": "Server URL (https://…)",
+      "userId": "User ID",
+      "apiKey": "API key"
+    },
+    "trakt": {
+      "hint": "Ratings, history & watchlist",
+      "notice": "Go to <lnk>{{url}}</lnk> and enter <b>{{code}}</b>. Waiting for authorization…",
+      "connectionFailed": "Trakt connection {{status}}."
+    },
+    "plex": {
+      "hint": "Your server's watch history",
+      "token": "Plex token",
+      "connect": "Connect Plex"
+    },
+    "jellyfin": {
+      "hint": "Your server's watch history",
+      "connect": "Connect Jellyfin"
+    },
+    "seerr": {
+      "hint": "Request picks straight to your library",
+      "connect": "Connect Seerr"
+    }
+  }
+}

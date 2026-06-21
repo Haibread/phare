@@ -216,9 +216,19 @@ export function setAuthToken(token: string | null): void {
   authToken = token;
 }
 
+// Active UI language, sent as Accept-Language so the backend can localise the text it generates
+// (TMDB metadata, LLM explanations/chat). Kept in sync with i18next by src/i18n.ts.
+let apiLanguage = "en";
+export function setApiLanguage(language: string): void {
+  apiLanguage = language;
+}
+
 async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept-Language": apiLanguage,
+  };
   if (authToken !== null) {
     headers.Authorization = `Bearer ${authToken}`;
   }
@@ -286,7 +296,7 @@ async function readEventStream(
 }
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { ...extra };
+  const headers: Record<string, string> = { "Accept-Language": apiLanguage, ...extra };
   if (authToken !== null) {
     headers.Authorization = `Bearer ${authToken}`;
   }

@@ -1,0 +1,15 @@
+{
+  "loading": "Loading…",
+  "error": "Something went wrong: {{message}}",
+  "tryAgain": "Try again",
+  "language": {
+    "label": "Language"
+  },
+  "fit": {
+    "stretch": "A stretch",
+    "worthALook": "Worth a look",
+    "strong": "Strong fit",
+    "worthATry": "Worth a try",
+    "longShot": "A long shot"
+  }
+}

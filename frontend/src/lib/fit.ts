@@ -7,23 +7,24 @@
 export type FitTone = "success" | "neutral" | "swing";
 
 export interface Fit {
-  label: string;
+  /** i18n key under the `common:fit` namespace; translated where rendered (no English here). */
+  labelKey: string;
   tone: FitTone;
   filled: 1 | 2 | 3;
 }
 
 export function fitFor(confidence: number | null, isSwing: boolean): Fit {
   if (isSwing) {
-    return { label: "A stretch", tone: "swing", filled: 1 };
+    return { labelKey: "fit.stretch", tone: "swing", filled: 1 };
   }
   if (confidence === null) {
-    return { label: "Worth a look", tone: "neutral", filled: 1 };
+    return { labelKey: "fit.worthALook", tone: "neutral", filled: 1 };
   }
   if (confidence >= 0.66) {
-    return { label: "Strong fit", tone: "success", filled: 3 };
+    return { labelKey: "fit.strong", tone: "success", filled: 3 };
   }
   if (confidence >= 0.4) {
-    return { label: "Worth a try", tone: "neutral", filled: 2 };
+    return { labelKey: "fit.worthATry", tone: "neutral", filled: 2 };
   }
-  return { label: "A long shot", tone: "neutral", filled: 1 };
+  return { labelKey: "fit.longShot", tone: "neutral", filled: 1 };
 }

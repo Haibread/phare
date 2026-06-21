@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { RecommendationItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
@@ -16,6 +17,7 @@ import {
 import styles from "./routes.module.css";
 
 function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
+  const { t } = useTranslation("browse");
   return (
     <section className={styles.hero} data-testid="hero">
       <div
@@ -31,7 +33,7 @@ function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
         }
       />
       <div className={styles.heroBody}>
-        <span className={styles.heroKicker}>Top pick tonight</span>
+        <span className={styles.heroKicker}>{t("hero.topPick")}</span>
         <h2 className={styles.heroTitle}>
           {item.title}
           {item.year !== null && <span className="muted"> ({item.year})</span>}
@@ -44,6 +46,7 @@ function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
 }
 
 export function Browse(): React.JSX.Element {
+  const { t } = useTranslation("browse");
   const profileId = useProfileId();
   const recs = useRecommendations(profileId);
   const dynamic = useDynamicRows(profileId);
@@ -63,7 +66,7 @@ export function Browse(): React.JSX.Element {
   const request = useRequestTitle(profileId);
 
   if (recs.isPending) {
-    return <Loading label="Loading recommendations…" />;
+    return <Loading label={t("loading")} />;
   }
   if (recs.isError) {
     return <ErrorState error={recs.error} onRetry={() => recs.refetch()} />;
@@ -85,12 +88,12 @@ export function Browse(): React.JSX.Element {
         {hero && <Hero item={hero} />}
 
         <Link to="/chat" className={styles.askChip} data-testid="ask-phare">
-          Ask Phare for a mood…
+          {t("askChip")}
         </Link>
 
         {rows.length === 0 ? (
           <p className="muted" data-testid="recs-empty">
-            No recommendations yet — load sample data or connect a source.
+            {t("empty")}
           </p>
         ) : (
           rows.map((row) => <RecRow key={row.key} row={row} />)
@@ -99,7 +102,7 @@ export function Browse(): React.JSX.Element {
         {dynamic.data?.rows.some((r) => r.items.length > 0) && (
           <>
             <h3 className={styles.pageTitle} style={{ marginTop: "var(--sp-5)" }}>
-              Today's picks
+              {t("todaysPicks")}
             </h3>
             {dynamic.data.rows.map((row) => (
               <RecRow key={row.key} row={row} />

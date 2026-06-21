@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
 import styles from "./TabBar.module.css";
 
@@ -22,14 +23,15 @@ const ICONS: Record<string, React.JSX.Element> = {
 };
 
 const TABS = [
-  { to: "/", key: "browse", label: "Browse" },
-  { to: "/chat", key: "chat", label: "Chat" },
-  { to: "/profile", key: "profile", label: "Profile" },
+  { to: "/", key: "browse" },
+  { to: "/chat", key: "chat" },
+  { to: "/profile", key: "profile" },
 ] as const;
 
 export function TabBar(): React.JSX.Element {
+  const { t } = useTranslation("nav");
   return (
-    <nav className={styles.bar} aria-label="Primary">
+    <nav className={styles.bar} aria-label={t("primary")}>
       {TABS.map((tab) => (
         <NavLink
           key={tab.key}
@@ -39,7 +41,7 @@ export function TabBar(): React.JSX.Element {
           data-testid={`tab-${tab.key}`}
         >
           {ICONS[tab.key]}
-          {tab.label}
+          {t(tab.key)}
         </NavLink>
       ))}
     </nav>

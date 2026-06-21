@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { BeaconGlyph } from "../components/Brand";
 import { ErrorState } from "../components/states";
 import { keys, useLoadSampleData, useSeedCatalog } from "../lib/queries";
@@ -9,6 +10,7 @@ import styles from "./onboarding.module.css";
 /** First-run takeover: one connect call-to-action + a sample-data escape hatch. Shown until the
  * profile has any history, at which point the app reveals the tabbed shell. */
 export function ColdStart({ profileId }: { profileId: string }): React.JSX.Element {
+  const { t } = useTranslation("onboarding");
   const qc = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
   const sample = useLoadSampleData(profileId);
@@ -33,10 +35,8 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
       <span className={styles.halo} aria-hidden="true">
         <BeaconGlyph />
       </span>
-      <h1 className={styles.coldTitle}>Let's find your taste</h1>
-      <p className={styles.lede}>
-        Connect where you already track what you watch, and Phare builds your profile from it.
-      </p>
+      <h1 className={styles.coldTitle}>{t("coldStart.title")}</h1>
+      <p className={styles.lede}>{t("coldStart.lede")}</p>
 
       <button
         type="button"
@@ -44,10 +44,10 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
         data-testid="open-source-picker"
         onClick={() => setPickerOpen(true)}
       >
-        Connect your library
+        {t("coldStart.connectLibrary")}
       </button>
 
-      <div className={styles.or}>or</div>
+      <div className={styles.or}>{t("coldStart.or")}</div>
 
       <button
         type="button"
@@ -56,10 +56,10 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
         onClick={() => void exploreSample()}
         disabled={busy}
       >
-        {busy ? "Loading sample data…" : "Explore with sample data"}
+        {busy ? t("coldStart.loadingSample") : t("coldStart.exploreSample")}
       </button>
       <p className="faint" style={{ fontSize: "0.8rem", maxWidth: "16rem" }}>
-        See how it works first — no account needed.
+        {t("coldStart.sampleHint")}
       </p>
 
       {sample.isError && <ErrorState error={sample.error} />}
