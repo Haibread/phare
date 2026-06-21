@@ -52,6 +52,7 @@ class TMDBMetadataProvider:
         base_url: str = "https://api.themoviedb.org/3",
         client: httpx.Client | None = None,
         *,
+        language: str | None = None,
         cache: TTLCache | None = None,
         cache_ttl: float = DEFAULT_CACHE_TTL_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -59,6 +60,9 @@ class TMDBMetadataProvider:
     ) -> None:
         self._api_key = api_key
         self._client = client or httpx.Client(base_url=base_url, timeout=10.0)
+        # TMDB serves localised titles/overviews/genres when asked; None lets it use its default.
+        # The language is part of the cache key (built from params), so languages cache separately.
+        self._language = language
         # Tests inject an isolated cache; production shares one across request-scoped instances.
         self._cache = cache if cache is not None else _get_shared_cache(cache_ttl)
         self._max_retries = max_retries
@@ -84,6 +88,8 @@ class TMDBMetadataProvider:
     def _get_params(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         # Cache key excludes the api_key so it stays stable; reads are idempotent. Takes a dict so
         # callers can pass TMDB's dotted params (e.g. ``vote_count.gte``) that aren't kwarg names.
+        if self._language is not None:
+            params = {"language": self._language, **params}
         key = (path, tuple(sorted(params.items())))
         return self._cache.get_or_set(key, lambda: self._fetch(path, params))
 

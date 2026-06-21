@@ -8,12 +8,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from phare.api.deps import Embedder, get_embedder
+from phare.api.deps import Embedder, get_embedder, get_language
 from phare.api.recommend import _poster_url
 from phare.api.schemas import ApiModel, CatalogSummary, EmbedSummary, RecommendationItem
 from phare.catalog.sample import seed_sample_catalog
 from phare.catalog.service import import_from_tmdb, search_titles
 from phare.core.config import Settings, get_settings
+from phare.core.i18n import Language
 from phare.db.base import get_session
 from phare.db.models import Profile, Title
 from phare.embeddings.service import EmbeddingService
@@ -51,6 +52,7 @@ def search_catalog(
     profile_id: uuid.UUID,
     body: SearchRequest,
     session: Annotated[Session, Depends(get_session)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> SearchResponse:
     """Search the catalog (and live TMDB when configured) so a title can be found + requested."""
     if session.get(Profile, profile_id) is None:
@@ -60,6 +62,7 @@ def search_catalog(
         TMDBMetadataProvider(
             api_key=settings.tmdb_api_key,
             base_url=settings.tmdb_base_url,
+            language=language,
             cache_ttl=settings.tmdb_cache_ttl_seconds,
         )
         if settings.tmdb_api_key

@@ -80,6 +80,26 @@ def test_tmdb_get_movie() -> None:
     assert meta.poster_path == "/dune.jpg"
 
 
+def test_tmdb_language_is_sent_and_localises_the_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["language"] == "fr"
+        return httpx.Response(
+            200,
+            json={
+                "id": 438631,
+                "title": "Dune",
+                "overview": "Paul sur Arrakis.",
+                "genres": [{"id": 878, "name": "Science-Fiction"}],
+            },
+        )
+
+    meta = _tmdb(handler, language="fr").get_title(438631, TitleKind.movie)
+
+    assert meta is not None
+    assert meta.overview == "Paul sur Arrakis."
+    assert meta.genres == ["Science-Fiction"]
+
+
 def test_tmdb_discover_resolves_genres_and_passes_filters() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/genre/movie/list":

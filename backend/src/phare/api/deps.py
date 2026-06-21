@@ -10,10 +10,12 @@ Two distinct LLM concerns (see ``recommend/explain`` and ``agent/intent``):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated
 
-from fastapi import HTTPException
+from fastapi import Header, HTTPException
 
 from phare.core.config import get_settings
+from phare.core.i18n import Language, parse_accept_language
 from phare.core.net import validate_external_url
 from phare.embeddings.version import embedding_model_version, get_embedding_provider
 from phare.providers.llm import OpenAILLMProvider
@@ -34,6 +36,14 @@ class Embedder:
 
     provider: LLMProvider
     model_version: str
+
+
+def get_language(accept_language: Annotated[str | None, Header()] = None) -> Language:
+    """Resolve the request language from ``Accept-Language``, else the configured default.
+
+    Drives both TMDB's ``language`` param and which side of the localized catalog / LLM prompt is
+    used, so backend-generated text matches the language the UI is showing."""
+    return parse_accept_language(accept_language, default=get_settings().default_language)
 
 
 def get_embedder() -> Embedder:

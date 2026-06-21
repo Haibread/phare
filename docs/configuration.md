@@ -10,6 +10,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ENVIRONMENT` | `development` | Free-form environment label. |
+| `DEFAULT_LANGUAGE` | `en` | Language (`en`/`fr`) for localised output when a request sends no `Accept-Language`. The SPA sends one per request; see [Languages](#languages). |
 | `LOG_LEVEL` | `INFO` | Log verbosity. |
 | `SERVICE_NAME` | `phare-backend` | Service name in logs / telemetry. |
 | `MIGRATE_ON_STARTUP` | `false` | Run Alembic upgrade on boot. On for compose/E2E; keep off in prod and migrate explicitly. |
@@ -80,6 +81,26 @@ ENVIRONMENT=production phare import-catalog --scope broad   # or: --confirm
 
 After any import, embeddings are topped up lazily on the read path (bounded) and authoritatively by
 `POST /catalog/embed` — see [Switching on a real model](#switching-on-a-real-model).
+
+## Languages
+
+Phare ships in **English and French**. The SPA picks the browser language (overridable via the
+top-right switcher) and sends it on every request as `Accept-Language`; the backend resolves that to
+a supported language (falling back to `DEFAULT_LANGUAGE`) and localises the text it generates.
+
+What localises with the request language:
+
+- **UI chrome** — all static interface text (frontend i18n).
+- **Backend-built strings** — recommendation row titles ("You might like" / "Pourrait vous plaire")
+  and the offline explanation templates.
+- **Freshly-fetched TMDB metadata** — search results and the title-detail synopsis/genres are
+  fetched from TMDB in the request language (so the detail sheet shows a French synopsis).
+- **LLM-generated text** — explanations, the chat reply, taste summary, and dynamic row themes are
+  written in the request language _(wired in a follow-up; currently English regardless)_.
+
+What does **not** localise: catalog metadata already stored from a previous import keeps the
+language it was imported in (genre labels in a row can stay English even in a French sentence). Only
+re-fetched TMDB data honours the current language. Titles, people, and years are never translated.
 
 ## Offline / no-key behavior
 

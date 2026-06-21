@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
+from phare.api.deps import Embedder, get_embedder, get_language, get_optional_chat_llm
 from phare.api.schemas import (
     ConversionResponse,
     RecommendationItem,
@@ -19,6 +19,7 @@ from phare.api.schemas import (
     RecommendationsResponse,
 )
 from phare.core.config import get_settings
+from phare.core.i18n import DEFAULT_LANGUAGE, Language
 from phare.db.base import get_session
 from phare.db.models import Profile, RecommendationLog
 from phare.eval.conversion import conversion_stats
@@ -34,6 +35,7 @@ def build_recommender(
     session: Session,
     embedder: Embedder,
     chat_llm: LLMProvider | None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> RecommendationService:
     """Construct the engine from request-scoped dependencies + tuning config."""
     settings = get_settings()
@@ -45,6 +47,7 @@ def build_recommender(
         row_size=settings.recommend_row_size,
         swing_slots=settings.recommend_swing_slots,
         explanation_budget=settings.recommend_explanation_budget,
+        language=language,
     )
 
 
@@ -88,9 +91,10 @@ def get_recommendations(
     session: Annotated[Session, Depends(get_session)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> RecommendationsResponse:
     require_profile(session, profile_id)
-    recommender = build_recommender(session, embedder, chat_llm)
+    recommender = build_recommender(session, embedder, chat_llm, language)
     rows = recommender.rows(profile_id)
     session.commit()  # lazy embeddings (and any logging) persist
     return RecommendationsResponse(rows=[to_row(row) for row in rows])
@@ -104,10 +108,11 @@ def get_dynamic_recommendations(
     session: Annotated[Session, Depends(get_session)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> RecommendationsResponse:
     """Today's LLM-picked themed rows (calendar + taste fallback when no LLM is configured)."""
     require_profile(session, profile_id)
-    recommender = build_recommender(session, embedder, chat_llm)
+    recommender = build_recommender(session, embedder, chat_llm, language)
     rows = dynamic_rows(recommender, profile_id, llm=chat_llm)
     session.commit()
     return RecommendationsResponse(rows=[to_row(row) for row in rows])

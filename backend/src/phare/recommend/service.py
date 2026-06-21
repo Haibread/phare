@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import TasteProfile, TitleEmbedding
 from phare.embeddings.service import EmbeddingService
 from phare.providers.types import LLMProvider
@@ -49,6 +50,7 @@ class RecommendationService:
         row_size: int = 12,
         swing_slots: int = 2,
         explanation_budget: int = 0,  # 0 = template rows; LLM "why this" is lazy per title
+        language: Language = DEFAULT_LANGUAGE,
     ) -> None:
         self.session = session
         self.embed_provider = embed_provider
@@ -56,6 +58,7 @@ class RecommendationService:
         self.chat_llm = chat_llm
         self.row_size = row_size
         self.swing_slots = swing_slots
+        self.language = language
         # Per-home-render cap on uncached LLM explanation calls (see explain.Explainer).
         self.explanation_budget = explanation_budget
         # Request-scoped centroid cache: rows()/dynamic_rows fan out many candidate queries off
@@ -100,6 +103,7 @@ class RecommendationService:
             llm=self.chat_llm if with_llm else None,
             cache=_EXPLANATION_CACHE,
             budget=budget if budget is not None else 1_000_000_000,
+            language=self.language,
         )
 
     def recommend(
@@ -150,7 +154,9 @@ class RecommendationService:
     def you_might_like(self, profile_id: uuid.UUID, *, explainer: Explainer | None = None) -> Row:
         """The full pipeline. This is the product."""
         items = self.recommend(profile_id, explainer=explainer)
-        return Row(key="you_might_like", title="You might like", items=items)
+        return Row(
+            key="you_might_like", title=translate(self.language, "row.youMightLike"), items=items
+        )
 
     def _title_vector(self, title_id: uuid.UUID) -> list[float] | None:
         embedding = self.session.scalar(
@@ -187,7 +193,7 @@ class RecommendationService:
                 rows.append(
                     Row(
                         key=f"because:{seed.id}",
-                        title=f"Because you watched {seed.title}",
+                        title=translate(self.language, "row.becauseYouWatched", title=seed.title),
                         items=items,
                     )
                 )
@@ -202,10 +208,16 @@ class RecommendationService:
         candidate_rows = [
             # Most-personalized first — these render right under the hero top pick.
             *self.because_you_watched_rows(profile_id, explainer=explainer),
-            row_builders.continue_watching_row(self.session, profile_id, limit=self.row_size),
+            row_builders.continue_watching_row(
+                self.session, profile_id, limit=self.row_size, language=self.language
+            ),
             self.you_might_like(profile_id, explainer=explainer),
-            row_builders.watch_again_row(self.session, profile_id, limit=self.row_size),
-            row_builders.popular_row(self.session, profile_id, limit=self.row_size),
+            row_builders.watch_again_row(
+                self.session, profile_id, limit=self.row_size, language=self.language
+            ),
+            row_builders.popular_row(
+                self.session, profile_id, limit=self.row_size, language=self.language
+            ),
         ]
         result = [row for row in candidate_rows if row.items]
         log_rows(self.session, profile_id, result)

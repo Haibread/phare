@@ -13,6 +13,8 @@ from typing import Annotated
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from phare.core.i18n import DEFAULT_LANGUAGE, Language
+
 
 class Settings(BaseSettings):
     """Process configuration, loaded once at startup."""
@@ -29,6 +31,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     service_name: str = "phare-backend"
+
+    # Language for localised output (row titles, templates, and the language the LLM is told to
+    # write in) when a request carries no Accept-Language header. The frontend sends one per call.
+    default_language: Language = DEFAULT_LANGUAGE
 
     # Run Alembic upgrade on app startup. Convenient for dev / E2E / compose; off by default
     # so production controls migrations explicitly.

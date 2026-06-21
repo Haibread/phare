@@ -20,6 +20,7 @@ from typing import Any, Protocol
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
@@ -101,21 +102,30 @@ Rules:
 """
 
 
-def _template(rec: Recommendation, taste: Mapping[str, Any]) -> str:
-    """Deterministic, metadata-only explanation. Spoiler-proof by construction."""
-    genres = ", ".join(rec.genres[:2]) if rec.genres else "genre-spanning"
-    era = f" from {rec.year}" if rec.year else ""
+def _template(
+    rec: Recommendation, taste: Mapping[str, Any], language: Language = DEFAULT_LANGUAGE
+) -> str:
+    """Deterministic, metadata-only explanation. Spoiler-proof by construction.
+
+    Localised via the catalog; genre names stay as stored (their import language), so a French
+    sentence can still carry English genre labels until the catalog is re-fetched localised."""
+    genres = (
+        ", ".join(rec.genres[:2]) if rec.genres else translate(language, "explain.genreSpanning")
+    )
+    kind = translate(language, f"explain.kind.{rec.kind}")
+    era = translate(language, "explain.era", year=rec.year) if rec.year else ""
     if rec.is_swing:
-        return (
-            f"A {genres} {rec.kind}{era} — a discovery pick outside your usual lane, "
-            f"offered as a deliberate stretch rather than a sure thing."
-        )
+        return translate(language, "explain.swing", genres=genres, kind=kind, era=era)
     affinities = taste.get("affinities") or {}
     matched = next(
         (key for key in affinities if key.lower() in {g.lower() for g in rec.genres}), None
     )
-    because = f" that leans into your taste for {matched}" if matched else " that fits your profile"
-    return f"A {genres} {rec.kind}{era}{because}."
+    because = (
+        translate(language, "explain.becauseAffinity", matched=matched)
+        if matched
+        else translate(language, "explain.becauseProfile")
+    )
+    return translate(language, "explain.base", genres=genres, kind=kind, era=era, because=because)
 
 
 def _llm_prompt(rec: Recommendation, taste: Mapping[str, Any]) -> str:
@@ -146,6 +156,7 @@ class Explainer:
     llm: LLMProvider | None
     cache: TTLCache | None = None
     budget: int = _UNBOUNDED
+    language: Language = DEFAULT_LANGUAGE
 
     def explain(
         self, recommendations: Sequence[Recommendation], taste: Mapping[str, Any]
@@ -161,7 +172,7 @@ class Explainer:
         to_generate: list[tuple[int, Recommendation, tuple[str, bool, str]]] = []
         for i, rec in enumerate(recommendations):
             if self.llm is None:
-                texts[i] = _template(rec, taste)
+                texts[i] = _template(rec, taste, self.language)
                 continue
             key = (str(rec.title_id), bool(rec.is_swing), fingerprint)
             if self.cache is not None and (cached := self.cache.get(key)) is not None:
@@ -170,7 +181,7 @@ class Explainer:
                 self.budget -= 1  # bound *calls*, whether or not the output is accepted
                 to_generate.append((i, rec, key))
             else:
-                texts[i] = _template(rec, taste)
+                texts[i] = _template(rec, taste, self.language)
 
         if to_generate:
             workers = min(len(to_generate), _MAX_EXPLAIN_WORKERS)
@@ -206,23 +217,24 @@ class Explainer:
             ).strip()
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
             logger.warning("recommend.explain_failed", extra={"title": rec.title})
-            return _template(rec, taste)
+            return _template(rec, taste, self.language)
         safe = coerce_safe(candidate) if candidate else None
         if safe:
             return safe
         if candidate:
             # A genuine plot-reveal marker — drop it and fall back to the safe template.
             logger.warning("recommend.explain_rejected", extra={"title": rec.title})
-        return _template(rec, taste)
+        return _template(rec, taste, self.language)
 
 
 def explain(
     recommendations: Sequence[Recommendation],
     taste: Mapping[str, Any],
     llm: LLMProvider | None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> list[Recommendation]:
     """Explain each recommendation. Back-compat shim: unbounded, uncached (per-call behavior)."""
-    return Explainer(llm=llm).explain(recommendations, taste)
+    return Explainer(llm=llm, language=language).explain(recommendations, taste)
 
 
 def stream_lazy_reason(
@@ -230,6 +242,7 @@ def stream_lazy_reason(
     taste: Mapping[str, Any],
     llm: LLMProvider | None,
     cache: ReasonCache | None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> Iterator[str]:
     """Streaming variant of :func:`lazy_reason`: yields the reason chunk-by-chunk so the detail
     sheet fills in as the model types, instead of waiting for the whole blob. A cached reason comes
@@ -241,7 +254,7 @@ def stream_lazy_reason(
         yield str(hit)
         return
     if llm is None:
-        yield _template(rec, taste)
+        yield _template(rec, taste, language)
         return
     chunks: list[str] = []
     try:
@@ -251,7 +264,7 @@ def stream_lazy_reason(
     except Exception:  # noqa: BLE001 - a flaky model must not sink the request
         logger.warning("recommend.reason_failed", extra={"title": rec.title})
         if not chunks:
-            yield _template(rec, taste)
+            yield _template(rec, taste, language)
         return
     full = "".join(chunks).strip()
     if full and _SPOILER_MARKERS.search(full) is None and cache is not None:
