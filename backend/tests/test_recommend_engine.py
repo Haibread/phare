@@ -116,7 +116,10 @@ def test_rows_have_watch_again_and_continue_watching(db_session: Session) -> Non
     assert "watch_again" in by_key
     assert any(item.title == "Dune" for item in by_key["watch_again"].items)
     assert "continue_watching" in by_key
-    assert any(item.title == "Severance" for item in by_key["continue_watching"].items)
+    cont = by_key["continue_watching"]
+    assert any(item.title == "Severance" for item in cont.items)
+    # Each item now carries a real recency-decayed confidence, not a null placeholder.
+    assert all(item.confidence is not None for item in cont.items)
 
 
 def test_empty_profile_degrades_gracefully(db_session: Session) -> None:

@@ -4,6 +4,7 @@ non-LLM rows live here. Every row degrades to empty rather than erroring at N=0.
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import UTC, datetime
 
@@ -15,6 +16,30 @@ from phare.db.models import EventType, Title, TitleKind, WatchEvent
 from phare.recommend.schema import Recommendation, Row
 
 _MIN_DT = datetime(1, 1, 1, tzinfo=UTC)
+
+# "Continue watching" confidence decays with how long ago you last touched the show — a thread you
+# watched this week is warm, one you abandoned months ago has cooled off. Half-life ~6 weeks.
+_CONTINUE_HALF_LIFE_DAYS = 45.0
+# "Popular" confidence is the popularity magnitude on a log scale: TMDB popularity ~1000 reads as a
+# full bar, a mild ~100 as roughly two-thirds, so a runaway hit outranks a lukewarm one honestly.
+_POPULAR_LOG_FULL = 3.0
+
+
+def _recency_confidence(last: datetime | None, *, now: datetime) -> float:
+    """Exponential decay of a "keep watching" signal by days since the last episode."""
+    if last is None:
+        return 0.1
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    days = max((now - last).total_seconds() / 86_400.0, 0.0)
+    return round(0.5 ** (days / _CONTINUE_HALF_LIFE_DAYS), 4)
+
+
+def _popularity_confidence(popularity: float | None) -> float:
+    """Map an unbounded TMDB popularity to a [0, 1] confidence on a log scale."""
+    if not popularity or popularity <= 0:
+        return 0.0
+    return round(min(math.log10(popularity + 1.0) / _POPULAR_LOG_FULL, 1.0), 4)
 
 
 def loved_seed_titles(session: Session, profile_id: uuid.UUID, *, limit: int = 3) -> list[Title]:
@@ -131,7 +156,7 @@ def popular_row(
         _rec(
             title,
             score=title.popularity or 0.0,
-            confidence=None,
+            confidence=_popularity_confidence(title.popularity),
             explanation=translate(language, "explain.popular"),
         )
         for title in rows
@@ -161,14 +186,15 @@ def continue_watching_row(
         .order_by(last_activity.desc().nulls_last())
         .limit(limit)
     ).all()
+    now = datetime.now(UTC)
     items = [
         _rec(
             title,
             score=1.0,
-            confidence=None,
+            confidence=_recency_confidence(last, now=now),
             explanation=translate(language, "explain.continueWatching"),
         )
-        for title, _ in rows
+        for title, last in rows
     ]
     return Row(
         key="continue_watching", title=translate(language, "row.continueWatching"), items=items
