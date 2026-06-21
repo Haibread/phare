@@ -9,8 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from phare.api.deps import get_language
 from phare.api.schemas import TasteResponse, UpdateTasteRequest
 from phare.core.config import get_settings
+from phare.core.i18n import Language
 from phare.db.base import get_session
 from phare.db.models import Profile, TasteProfile
 from phare.providers.llm import OpenAILLMProvider
@@ -65,11 +67,12 @@ def generate_taste(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
     llm: Annotated[LLMProvider, Depends(get_llm_provider)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> TasteResponse:
     if session.get(Profile, profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     model_version = get_settings().llm_chat_model
-    taste = TasteService(session, llm, model_version).generate(profile_id)
+    taste = TasteService(session, llm, model_version, language).generate(profile_id)
     session.commit()
     return _to_response(taste)
 

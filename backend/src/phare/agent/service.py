@@ -20,6 +20,7 @@ from phare.agent.intent import parse_intent
 from phare.agent.schema import AgentAction, ChatIntent, ChatReply
 from phare.agent.tools import ExecutionResult, ToolContext, execute_plan
 from phare.core.config import get_settings
+from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, translate
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider, stream_text
 from phare.recommend.log import log_chat
@@ -45,6 +46,7 @@ class PreparedTurn:
     reply_text: str | None = None
     compose_prompt: str | None = None
     result: ExecutionResult | None = None
+    language: Language = DEFAULT_LANGUAGE
 
 
 def intent_filter(intent: ChatIntent):
@@ -68,16 +70,20 @@ def intent_filter(intent: ChatIntent):
     return apply
 
 
-def _reply_text(intent: ChatIntent, count: int) -> str:
+def _reply_text(intent: ChatIntent, count: int, language: Language = DEFAULT_LANGUAGE) -> str:
     """Deterministic reply used in the offline (no-LLM) path."""
     if count == 0:
-        return "I couldn't find a good match for that — try loosening the constraints a little."
+        return translate(language, "chat.offlineNoMatch")
     bits: list[str] = []
     if intent.include_genres:
         bits.append(", ".join(intent.include_genres).lower())
     descriptor = f"{' '.join(bits)} " if bits else ""
-    runtime = f" under {intent.max_runtime} minutes" if intent.max_runtime else ""
-    return f"Here are a few {descriptor}picks{runtime} you might enjoy."
+    runtime = (
+        translate(language, "chat.runtimeUnder", minutes=intent.max_runtime)
+        if intent.max_runtime
+        else ""
+    )
+    return translate(language, "chat.offlinePicks", descriptor=descriptor, runtime=runtime)
 
 
 class ChatService:
@@ -95,7 +101,9 @@ class ChatService:
         if prepared.reply_text is not None:
             text = prepared.reply_text
         else:
-            text = _compose_with_fallback(self.chat_llm, prepared.compose_prompt, prepared.result)
+            text = _compose_with_fallback(
+                self.chat_llm, prepared.compose_prompt, prepared.result, prepared.language
+            )
         return ChatReply(
             reply_text=text,
             intent=prepared.intent,
@@ -125,8 +133,13 @@ class ChatService:
             swing_slots=1,
         )
         log_chat(self.recommender.session, profile_id, items)
+        language = self.recommender.language
         return PreparedTurn(
-            items=items, actions=[], intent=intent, reply_text=_reply_text(intent, len(items))
+            items=items,
+            actions=[],
+            intent=intent,
+            reply_text=_reply_text(intent, len(items), language),
+            language=language,
         )
 
     def _prepare_with_tools(
@@ -162,7 +175,11 @@ class ChatService:
         if not agent_plan.calls:
             logger.info("agent.declined_off_topic", extra={"profile_id": str(profile_id)})
             return PreparedTurn(
-                items=[], actions=[], intent=parse_intent(message, None), reply_text=_DECLINE_REPLY
+                items=[],
+                actions=[],
+                intent=parse_intent(message, None),
+                reply_text=translate(self.recommender.language, "chat.decline"),
+                language=self.recommender.language,
             )
         result = execute_plan(ctx, agent_plan)
         if result.items:
@@ -181,34 +198,32 @@ class ChatService:
             actions=result.actions,
             intent=result.intent,
             notes=result.notes,
-            compose_prompt=build_compose_prompt(message, result),
+            compose_prompt=build_compose_prompt(message, result, self.recommender.language),
             result=result,
+            language=self.recommender.language,
         )
 
 
-def _compose_reply_template(result: ExecutionResult) -> str:
-    """Deterministic reply — the offline path, and the fallback if the LLM composer fails."""
+def _compose_reply_template(result: ExecutionResult, language: Language = DEFAULT_LANGUAGE) -> str:
+    """Deterministic reply — the offline path, and the fallback if the LLM composer fails.
+
+    Tool notes are surfaced verbatim (they're produced in English by the tools); the framing
+    sentences around them are localised."""
     bits: list[str] = []
     if result.actions:
-        bits.append("Got it — " + "; ".join(a.summary for a in result.actions) + ".")
+        actions = "; ".join(a.summary for a in result.actions)
+        bits.append(translate(language, "chat.gotIt", actions=actions))
     for note in result.notes:
         bits.append(note[:1].upper() + note[1:] + ".")
     if result.items:
-        bits.append("Here are a few picks you might enjoy.")
+        bits.append(translate(language, "chat.herePicks"))
     elif not result.actions and not result.notes:
-        bits.append("I couldn't find a good match — try loosening the constraints a little.")
-    return " ".join(bits) if bits else "Done."
+        bits.append(translate(language, "chat.noMatch"))
+    return " ".join(bits) if bits else translate(language, "chat.done")
 
 
 # The reply is 1-3 sentences — cap it so the big agent model can't run long on the clock.
 _REPLY_MAX_TOKENS = 200
-
-# Deterministic steer-back for off-topic messages the planner declined (empty plan). Keeps the
-# scope language of the composer prompt, but costs zero LLM calls.
-_DECLINE_REPLY = (
-    "I'm just your movie & TV sidekick — I can't help with that one, but tell me what you're in "
-    "the mood to watch and I'll find something."
-)
 
 
 _COMPOSE_SYSTEM = """You are a warm, concise movie & TV recommendation assistant. You ONLY help
@@ -226,35 +241,49 @@ list above. Output ONLY the reply text, no preamble.
 """
 
 
-def build_compose_prompt(message: str, result: ExecutionResult) -> str:
+def build_compose_prompt(
+    message: str, result: ExecutionResult, language: Language = DEFAULT_LANGUAGE
+) -> str:
     """The grounded composer prompt — what the agent model turns into a natural reply."""
+    directive = llm_output_directive(language)
+    tail = f"{directive}\n" if directive else ""
     return (
         _COMPOSE_SYSTEM.format(
             actions="; ".join(a.summary for a in result.actions) or "(none)",
             notes="; ".join(result.notes) or "(none)",
             titles=", ".join(i.title for i in result.items) or "(none)",
         )
-        + f"\nUser message: {message}\n"
+        + f"\nUser message: {message}\n{tail}"
     )
 
 
 def _compose_with_fallback(
-    agent_llm: LLMProvider | None, prompt: str | None, result: ExecutionResult | None
+    agent_llm: LLMProvider | None,
+    prompt: str | None,
+    result: ExecutionResult | None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> str:
     """Blocking compose with a template fallback (the non-streaming path)."""
     if agent_llm is None or prompt is None:
-        return _compose_reply_template(result) if result is not None else "Done."
+        return _compose_reply_template(result, language) if result is not None else "Done."
     try:
         text = agent_llm.complete(prompt, max_tokens=_REPLY_MAX_TOKENS).strip()
-        return text or _compose_reply_template(result)
+        return text or _compose_reply_template(result, language)
     except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
         logger.warning("agent.compose_failed; using template reply")
-        return _compose_reply_template(result)
+        return _compose_reply_template(result, language)
 
 
-def _compose_reply_llm(agent_llm: LLMProvider, message: str, result: ExecutionResult) -> str:
+def _compose_reply_llm(
+    agent_llm: LLMProvider,
+    message: str,
+    result: ExecutionResult,
+    language: Language = DEFAULT_LANGUAGE,
+) -> str:
     """Natural-language reply from the agent model, grounded in what the tools actually did."""
-    return _compose_with_fallback(agent_llm, build_compose_prompt(message, result), result)
+    return _compose_with_fallback(
+        agent_llm, build_compose_prompt(message, result, language), result, language
+    )
 
 
 def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Iterator[str]:
@@ -267,7 +296,10 @@ def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Ite
         yield prepared.reply_text
         return
     if agent_llm is None or prepared.compose_prompt is None:
-        yield _compose_reply_template(prepared.result) if prepared.result else "Done."
+        if prepared.result is not None:
+            yield _compose_reply_template(prepared.result, prepared.language)
+        else:
+            yield translate(prepared.language, "chat.done")
         return
     try:
         produced = False
@@ -275,7 +307,7 @@ def stream_compose(prepared: PreparedTurn, agent_llm: LLMProvider | None) -> Ite
             produced = True
             yield chunk
         if not produced:
-            yield _compose_reply_template(prepared.result)
+            yield _compose_reply_template(prepared.result, prepared.language)
     except Exception:  # noqa: BLE001 - a flaky composer must not sink the turn
         logger.warning("agent.stream_failed; using template reply")
-        yield _compose_reply_template(prepared.result)
+        yield _compose_reply_template(prepared.result, prepared.language)

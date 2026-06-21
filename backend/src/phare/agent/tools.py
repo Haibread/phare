@@ -295,7 +295,9 @@ def execute_plan(ctx: ToolContext, plan: AgentPlan) -> ExecutionResult:
     if result.taste_dirty:
         # Taste extraction is mechanical JSON — use the recommender's (workhorse) model, not the
         # bigger agent model. No-ops when offline. The caller owns the commit.
-        maybe_refresh_taste(ctx.session, ctx.profile_id, ctx.recommender.chat_llm)
+        maybe_refresh_taste(
+            ctx.session, ctx.profile_id, ctx.recommender.chat_llm, ctx.recommender.language
+        )
     return result
 
 

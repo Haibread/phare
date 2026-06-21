@@ -55,6 +55,17 @@ def test_generate_builds_profile(db_session: Session) -> None:
     assert "Dune" in llm.prompts[0]
 
 
+def test_generate_localises_only_the_summary(db_session: Session) -> None:
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion=CANNED)
+
+    TasteService(db_session, llm, "test-model", language="fr").generate(profile_id)
+
+    prompt = llm.prompts[0]
+    assert "summary` field in French" in prompt  # the human-readable summary localises
+    assert "in English" in prompt  # structured keys stay English so affinity matching holds
+
+
 def test_generate_preserves_user_overrides(db_session: Session) -> None:
     profile_id = _profile_with_history(db_session)
     service = TasteService(db_session, FakeLLMProvider(completion=CANNED), "m")

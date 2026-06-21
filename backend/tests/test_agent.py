@@ -7,13 +7,40 @@ import uuid
 from sqlalchemy.orm import Session
 
 from phare.agent.intent import keyword_intent, parse_intent
-from phare.agent.service import ChatService
+from phare.agent.schema import AgentAction, ChatIntent
+from phare.agent.service import (
+    ChatService,
+    _compose_reply_template,
+    _reply_text,
+    build_compose_prompt,
+)
+from phare.agent.tools import ExecutionResult
 from phare.catalog.sample import seed_sample_catalog
 from phare.db.models import Profile
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
 from phare.recommend.service import RecommendationService
+
+
+def test_composer_prompt_carries_french_directive() -> None:
+    result = ExecutionResult()
+    assert "French" in build_compose_prompt("salut", result, "fr")
+    # English: no output-language directive is appended.
+    assert "Write your response in" not in build_compose_prompt("hi", result)
+
+
+def test_offline_reply_text_localises() -> None:
+    intent = ChatIntent(include_genres=["Comedy"], max_runtime=90)
+    assert _reply_text(intent, 0, "fr").startswith("Je n'ai rien trouvé")
+    fr = _reply_text(intent, 3, "fr")
+    assert fr.startswith("Voici quelques suggestions") and "90 minutes" in fr
+
+
+def test_template_reply_localises_framing() -> None:
+    result = ExecutionResult(actions=[AgentAction(kind="logged_signal", summary="loved Heat")])
+    fr = _compose_reply_template(result, "fr")
+    assert fr.startswith("C'est noté — loved Heat")  # framing localised, tool summary verbatim
 
 
 def test_keyword_intent_extracts_runtime_and_genre() -> None:
