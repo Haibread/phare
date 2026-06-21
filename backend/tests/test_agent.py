@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from phare.agent.intent import keyword_intent, parse_intent
+from phare.agent.intent import keyword_intent
 from phare.agent.schema import AgentAction, ChatIntent
 from phare.agent.service import (
     ChatService,
@@ -19,7 +19,6 @@ from phare.catalog.sample import seed_sample_catalog
 from phare.db.models import Profile
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
-from phare.providers.fakes import FakeLLMProvider
 from phare.recommend.service import RecommendationService
 from phare.recommend.taste_vector import watched_title_ids
 
@@ -59,20 +58,6 @@ def test_keyword_intent_negation_excludes_genre() -> None:
     intent = keyword_intent("a thriller but no horror")
     assert "Thriller" in intent.include_genres
     assert intent.exclude_genres == ["Horror"]
-
-
-def test_parse_intent_prefers_llm_json() -> None:
-    llm = FakeLLMProvider(
-        completion='{"max_runtime":120,"include_genres":["Drama"],"exclude_genres":[],"mood":"cozy"}'
-    )
-    intent = parse_intent("anything cozy", llm)
-    assert intent.max_runtime == 120
-    assert intent.include_genres == ["Drama"]
-
-
-def test_parse_intent_falls_back_on_bad_llm_json() -> None:
-    intent = parse_intent("funny and short", FakeLLMProvider(completion="not json at all"))
-    assert intent.include_genres == ["Comedy"]  # keyword fallback kicked in
 
 
 def _recommender(session: Session) -> RecommendationService:

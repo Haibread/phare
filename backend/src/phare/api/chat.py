@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from phare.agent import commitments as commitments_store
-from phare.agent.intent import parse_intent
+from phare.agent.intent import keyword_intent
 from phare.agent.service import ChatService, PreparedTurn, stream_compose
 from phare.agent.tools import undo_action
 from phare.api.deps import (
@@ -83,7 +83,7 @@ def _sse(event: str, data: dict[str, object]) -> str:
 def _planning_label(message: str) -> str:
     """A friendly, instant acknowledgement of the request — a keyword parse (no LLM), so it can be
     shown the moment the connection opens, while the planner model is still thinking."""
-    intent = parse_intent(message, None)
+    intent = keyword_intent(message)
     descriptor = ", ".join(intent.include_genres).lower()
     runtime = f" under {intent.max_runtime} min" if intent.max_runtime else ""
     if descriptor or runtime:

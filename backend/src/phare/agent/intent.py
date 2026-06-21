@@ -1,20 +1,17 @@
-"""Parse a chat message into a structured :class:`ChatIntent`.
+"""Deterministic keyword parser for a chat message → :class:`ChatIntent`.
 
-LLM extraction when configured; otherwise a deterministic keyword parser so the chat flow works
-offline (and is unit-testable without a key). The keyword parser is intentionally small — it
-only needs to catch the common "tired, 90 min, funny" shape, not understand language.
+This is the **offline / no-LLM floor only**. When a model is configured the planner
+(:mod:`phare.agent.planner`) owns intent — it reads the raw message and emits tool calls (genres,
+runtime, rewatch, …) in one call, in any language. So this parser never runs on the LLM path; it
+exists so the chat flow still works with zero model access. It's intentionally small — catch the
+common "tired, 90 min, funny" shape, not understand language.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import re
 
 from phare.agent.schema import ChatIntent
-from phare.providers.types import LLMProvider
-
-logger = logging.getLogger(__name__)
 
 # Mood / genre words -> canonical TMDB genre names used across the catalog.
 _MOOD_TO_GENRE: dict[str, str] = {
@@ -68,7 +65,7 @@ def _parse_runtime(text: str) -> int | None:
 
 
 def keyword_intent(message: str) -> ChatIntent:
-    """Deterministic fallback parser. Never raises; returns an empty intent if nothing matches."""
+    """Parse a message into an intent by keyword. Never raises; empty intent if nothing matches."""
     lowered = message.lower()
     include: list[str] = []
     exclude: list[str] = []
@@ -90,28 +87,3 @@ def keyword_intent(message: str) -> ChatIntent:
         mood=message.strip() or None,
         rewatch=_REWATCH_RE.search(message) is not None,
     )
-
-
-_LLM_PROMPT = """Extract a structured filter from a viewer's request for something to watch.
-
-Output ONLY a JSON object with keys:
-- max_runtime: integer minutes, or null
-- include_genres: array of TMDB genre names they want (e.g. "Comedy", "Science Fiction")
-- exclude_genres: array of genres to avoid
-- mood: short string describing their mood, or null
-
-Request: """
-
-
-def parse_intent(message: str, llm: LLMProvider | None) -> ChatIntent:
-    """LLM extraction when available, else the keyword fallback. Always returns a valid intent."""
-    if llm is not None:
-        try:
-            raw = llm.complete(_LLM_PROMPT + message, max_tokens=150)
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("```", 2)[1].removeprefix("json").strip()
-            return ChatIntent.model_validate(json.loads(text))
-        except Exception:  # noqa: BLE001 - fall back rather than fail the chat turn
-            logger.warning("agent.intent_llm_failed; using keyword fallback")
-    return keyword_intent(message)

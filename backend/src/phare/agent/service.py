@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from phare.agent import planner
-from phare.agent.intent import parse_intent
+from phare.agent.intent import keyword_intent
 from phare.agent.schema import AgentAction, ChatIntent, ChatReply
 from phare.agent.tools import ExecutionResult, ToolContext, execute_plan
 from phare.core.config import get_settings
@@ -125,7 +125,7 @@ class ChatService:
         return self._prepare_with_tools(profile_id, message, now or datetime.now(UTC))
 
     def _prepare_offline(self, profile_id: uuid.UUID, message: str) -> PreparedTurn:
-        intent = parse_intent(message, None)  # keyword parser; no writes without the LLM
+        intent = keyword_intent(message)  # offline floor; no writes without the LLM
         items = self.recommender.recommend(
             profile_id,
             extra_hard_avoids=intent.exclude_genres,
@@ -178,7 +178,7 @@ class ChatService:
             return PreparedTurn(
                 items=[],
                 actions=[],
-                intent=parse_intent(message, None),
+                intent=keyword_intent(message),
                 reply_text=translate(self.recommender.language, "chat.decline"),
                 language=self.recommender.language,
             )
