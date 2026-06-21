@@ -12,6 +12,7 @@ import {
   useConnectedSources,
   useConversion,
   useDeleteMemoryNote,
+  useGenerateTaste,
   useHistory,
   useMemory,
   useTaste,
@@ -48,6 +49,7 @@ export function Profile(): React.JSX.Element {
   const conversion = useConversion(profileId);
   const sources = useConnectedSources(profileId);
   const updateTaste = useUpdateTaste(profileId);
+  const generateTaste = useGenerateTaste(profileId);
   const commitments = useCommitments(profileId);
   const memory = useMemory(profileId);
   const addNote = useAddMemoryNote(profileId);
@@ -132,9 +134,31 @@ export function Profile(): React.JSX.Element {
             )}
           </>
         ) : (
-          <p className="muted" data-testid="taste-empty">
-            {t("taste.empty")}
-          </p>
+          <>
+            <p className="muted" data-testid="taste-empty">
+              {t("taste.empty")}
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary"
+              data-testid="taste-generate"
+              onClick={() => generateTaste.mutate()}
+              disabled={generateTaste.isPending}
+              style={{ marginTop: "var(--sp-3)" }}
+            >
+              {generateTaste.isPending ? t("taste.generating") : t("taste.generate")}
+            </button>
+            {generateTaste.isError && (
+              <p className={styles.errorText} data-testid="taste-generate-error" role="alert">
+                {t("taste.generateError", {
+                  message:
+                    generateTaste.error instanceof Error
+                      ? generateTaste.error.message
+                      : String(generateTaste.error),
+                })}
+              </p>
+            )}
+          </>
         )}
       </section>
 

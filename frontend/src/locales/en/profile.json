@@ -6,7 +6,10 @@
     "loading": "Loading taste…",
     "drawnTo": "Drawn to",
     "avoiding": "Avoiding",
-    "empty": "Your taste profile builds automatically from your watch history, once an LLM is configured."
+    "empty": "Your taste profile builds automatically from your watch history, once an LLM is configured.",
+    "generate": "Generate now",
+    "generating": "Generating…",
+    "generateError": "Couldn't generate taste: {{message}}"
   },
   "sources": {
     "heading": "Connected sources",

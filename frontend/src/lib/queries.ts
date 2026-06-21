@@ -209,6 +209,20 @@ export function useUpdateTaste(profileId: string) {
   });
 }
 
+/** Trigger an on-demand taste generation (the empty-state "Generate now" button). A fresh taste
+ * profile changes what we recommend, so refresh the taste + recommendation queries on success. */
+export function useGenerateTaste(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.generateTaste(profileId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.taste(profileId) });
+      qc.invalidateQueries({ queryKey: keys.recommendations(profileId) });
+      qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
+    },
+  });
+}
+
 export function useSyncTrakt(profileId: string) {
   const qc = useQueryClient();
   return useMutation({

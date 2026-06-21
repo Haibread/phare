@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -26,14 +27,14 @@ from phare.core.config import Settings, get_settings
 from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
-from phare.db.models import Profile, SourceToken, User
+from phare.db.models import Profile, SourceToken, Title, TitleKind, User
 from phare.ingest.service import IngestionService, IngestResult
 from phare.providers.jellyfin import JellyfinSourceProvider
 from phare.providers.plex import PlexSourceProvider
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
 from phare.providers.trakt_oauth import PollStatus, TraktOAuth
-from phare.providers.types import MetadataProvider, RawEvent, SourceProvider
+from phare.providers.types import MetadataProvider, RawEvent, RawMediaType, SourceProvider
 from phare.taste.service import maybe_refresh_taste, optional_llm_provider
 
 router = APIRouter(tags=["Sync"])
@@ -45,6 +46,30 @@ _INTERNAL_SOURCES = {"trakt_refresh"}
 # history is thousands of events resolved one-by-one through TMDB) shows up progressively in the UI
 # and a mid-sync failure keeps everything ingested so far instead of rolling the whole lot back.
 _INGEST_BATCH_SIZE = 100
+# Concurrency for warming the TMDB cache. The slow part of a first sync is resolving each new title
+# through TMDB one HTTP call at a time; fetching a batch's new titles concurrently (read-only, into
+# the shared cache) before the sequential ingest cuts that from minutes to seconds.
+_PREWARM_WORKERS = 8
+
+
+def _prewarm_metadata(session: Session, metadata: MetadataProvider, batch: list[RawEvent]) -> None:
+    """Concurrently fetch TMDB metadata for the batch's not-yet-stored titles, warming the shared
+    cache. Only the read-side HTTP runs in threads — the DB writes stay on the single session."""
+    wanted: dict[int, TitleKind] = {}
+    for event in batch:
+        if event.tmdb_id is not None:
+            kind = TitleKind.movie if event.media_type is RawMediaType.movie else TitleKind.show
+            wanted.setdefault(event.tmdb_id, kind)
+    if not wanted:
+        return
+    # Skip titles already in the catalog — the ingest resolves those from the DB, no HTTP needed.
+    stored = set(session.scalars(select(Title.tmdb_id).where(Title.tmdb_id.in_(wanted))).all())
+    missing = [(tmdb_id, kind) for tmdb_id, kind in wanted.items() if tmdb_id not in stored]
+    if not missing:
+        return
+    with ThreadPoolExecutor(max_workers=_PREWARM_WORKERS) as pool:
+        # Results land in the provider's shared cache; the sequential ingest below hits it.
+        list(pool.map(lambda pair: metadata.get_title(pair[0], pair[1]), missing))
 
 
 class ConnectedSource(ApiModel):
@@ -95,6 +120,7 @@ def ingest_in_batches(
     def flush() -> None:
         if not batch:
             return
+        _prewarm_metadata(session, metadata, batch)
         part = ingester.ingest(profile_id, batch)
         totals.created += part.created
         totals.updated += part.updated
