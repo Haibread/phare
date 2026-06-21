@@ -34,11 +34,26 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    if get_settings().migrate_on_startup:
+    settings = get_settings()
+    if settings.migrate_on_startup:
         from phare.db.migrate import run_migrations
 
         run_migrations()
     logger.info("startup")
+    # Seed the candidate pool in the background if it's empty — a fresh instance otherwise has
+    # nothing to recommend from. Off the request path (a network import), so readiness isn't gated
+    # on it; skipped entirely without TMDB or when disabled.
+    if settings.catalog_autoseed and settings.tmdb_api_key:
+        import threading
+
+        from phare.catalog.bootstrap import seed_catalog_if_empty
+
+        threading.Thread(
+            target=seed_catalog_if_empty,
+            args=(settings,),
+            name="catalog-autoseed",
+            daemon=True,
+        ).start()
     yield
     logger.info("shutdown")
 

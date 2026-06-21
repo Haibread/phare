@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     tmdb_image_base_url: str = "https://image.tmdb.org/t/p/w342"
     # In-process TTL (seconds) for cached TMDB metadata/search reads. 0 disables caching.
     tmdb_cache_ttl_seconds: int = 3600
+    # On startup, if the candidate pool is empty and TMDB is configured, seed popular titles in the
+    # background so a fresh instance has something to recommend from. Disable to manage the catalog
+    # yourself (`phare import-catalog`). No-op without TMDB_API_KEY.
+    catalog_autoseed: bool = True
     trakt_client_id: str | None = None
     trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"

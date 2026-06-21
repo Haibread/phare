@@ -19,6 +19,7 @@ from phare.catalog.sample import seed_sample_catalog
 from phare.db.models import Profile
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
+from phare.providers.fakes import FakeLLMProvider
 from phare.recommend.service import RecommendationService
 from phare.recommend.taste_vector import watched_title_ids
 
@@ -110,6 +111,27 @@ def test_keyword_intent_detects_rewatch() -> None:
     assert keyword_intent("revisit an old favorite").rewatch is True
     assert keyword_intent("I've seen it before but rewatch it").rewatch is True
     assert keyword_intent("something funny and new").rewatch is False
+
+
+def test_empty_result_replies_deterministically_without_the_agent_model(
+    db_session: Session,
+) -> None:
+    # History but no catalog → recommend has nothing new to return. The agent model must NOT be
+    # invoked on an empty grounded list (it would hallucinate titles from memory); the turn falls
+    # back to an honest deterministic reply instead.
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    seed_sample_data(db_session, profile.id)
+    db_session.flush()
+
+    planner = FakeLLMProvider(completion='{"calls": [{"tool": "recommend", "args": {}}]}')
+    service = ChatService(_recommender(db_session), chat_llm=planner)
+    prepared = service.prepare(profile.id, "something new and weird")
+
+    assert prepared.items == []
+    assert prepared.compose_prompt is None  # the agent model is not spent on an empty list
+    assert prepared.reply_text  # a deterministic "no match" reply instead
 
 
 def test_rewatch_draws_from_watched_history_not_the_fresh_catalog(db_session: Session) -> None:

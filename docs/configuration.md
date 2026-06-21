@@ -29,6 +29,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + catalog import (popular + broad) + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
 | `TMDB_CACHE_TTL_SECONDS` | `3600` | In-process TTL for cached TMDB metadata/search reads (see [Rate limits & caching](#rate-limits--caching)). `0` disables the cache. |
+| `CATALOG_AUTOSEED` | `true` | On startup, if the candidate pool is empty and `TMDB_API_KEY` is set, seed TMDB popular titles in the background (see [Seeding the catalog](#seeding-the-catalog)). No-op without a TMDB key. |
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
 | `TRAKT_CLIENT_SECRET` | _(unset)_ | Also required for the Trakt OAuth device-connect flow. |
 | `SEERR_BASE_URL` / `SEERR_API_KEY` | _(unset)_ | Instance-wide Seerr fallback; per-profile creds set in the UI take precedence. |
@@ -55,14 +56,24 @@ first account becomes the admin.
 ## Seeding the catalog
 
 The recommender ranks over whatever titles are in the catalog — vector similarity can only surface
-a title that's been imported and embedded. There are three ways to fill the pool, from smallest to
-broadest:
+a title that's been imported and embedded. A fresh instance has **none** to recommend *from*: the
+`title` table is filled only by your imported watch history, and all of that is excluded as "already
+watched", so recommendations and chat picks come back empty until a candidate pool exists.
 
 | Path | What it adds | How |
 | --- | --- | --- |
+| **Auto-seed** | TMDB popular titles, on first startup | automatic (see below) |
 | **Sample catalog** | A small offline demo pool (no TMDB needed) | `POST /catalog/sample` (dev only) |
 | **Popular import** | TMDB's popular front page (blockbusters) | `POST /catalog/import` or `phare import-catalog` |
 | **Broad import** | A deep genre sweep — the lesser-known long tail | `phare import-catalog --scope broad` |
+
+**Auto-seed (`CATALOG_AUTOSEED`, default on).** On startup, if the candidate pool is thin (fewer
+than ~50 never-watched titles) and `TMDB_API_KEY` is set, Phare pulls a few pages of TMDB's popular
+titles and embeds them — in a background thread, so readiness never waits on the network. It's
+idempotent (upsert by `tmdb_id`) and best-effort: a failure logs and is swallowed, never crashing
+startup. No-op without a TMDB key. This is just enough to make a brand-new instance work; for a real
+catalog with the long tail, still run the **broad** seed below. Set `CATALOG_AUTOSEED=false` to
+manage the catalog yourself.
 
 **Broad seed (the recommended real-world seed).** `--scope broad` pages TMDB's *discover* endpoint
 per genre, sorted by vote count with a quality floor (`--min-vote-count`, default 50, so titles with
