@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -26,19 +27,24 @@ from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
 from phare.db.models import Profile, SourceToken, User
-from phare.ingest.service import IngestionService
+from phare.ingest.service import IngestionService, IngestResult
 from phare.providers.jellyfin import JellyfinSourceProvider
 from phare.providers.plex import PlexSourceProvider
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
 from phare.providers.trakt_oauth import PollStatus, TraktOAuth
-from phare.providers.types import SourceProvider
+from phare.providers.types import MetadataProvider, RawEvent, SourceProvider
 from phare.taste.service import maybe_refresh_taste, optional_llm_provider
 
 router = APIRouter(tags=["Sync"])
 
 # Internal token rows that aren't user-facing "connected sources".
 _INTERNAL_SOURCES = {"trakt_refresh"}
+
+# Commit the ingest in batches rather than once at the end, so a long first sync (a full Trakt
+# history is thousands of events resolved one-by-one through TMDB) shows up progressively in the UI
+# and a mid-sync failure keeps everything ingested so far instead of rolling the whole lot back.
+_INGEST_BATCH_SIZE = 100
 
 
 class ConnectedSource(ApiModel):
@@ -69,6 +75,42 @@ def _require_tmdb(settings: object) -> str:
     return key
 
 
+def ingest_in_batches(
+    session: Session,
+    profile_id: uuid.UUID,
+    metadata: MetadataProvider,
+    events: Iterable[RawEvent],
+    *,
+    batch_size: int = _INGEST_BATCH_SIZE,
+) -> IngestResult:
+    """Ingest a stream of events, committing every ``batch_size`` so progress is durable + visible.
+
+    Each committed batch is independently persisted: a failure partway through keeps the batches
+    already committed (the upsert is idempotent, so a later re-sync just fills in the rest).
+    """
+    ingester = IngestionService(session, metadata)
+    totals = IngestResult()
+    batch: list[RawEvent] = []
+
+    def flush() -> None:
+        if not batch:
+            return
+        part = ingester.ingest(profile_id, batch)
+        totals.created += part.created
+        totals.updated += part.updated
+        totals.skipped += part.skipped
+        totals.titles_created += part.titles_created
+        session.commit()
+        batch.clear()
+
+    for event in events:
+        batch.append(event)
+        if len(batch) >= batch_size:
+            flush()
+    flush()
+    return totals
+
+
 def _ingest_from(
     session: Session,
     profile_id: uuid.UUID,
@@ -77,7 +119,7 @@ def _ingest_from(
     source_name: str,
     since: datetime | None,
 ) -> IngestSummary:
-    """Shared tail for every source: resolve via TMDB, ingest, record the high-water mark."""
+    """Shared tail for each source: resolve via TMDB, batch-ingest, set the watermark."""
     if session.get(Profile, profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     settings = get_settings()
@@ -88,7 +130,7 @@ def _ingest_from(
         base_url=settings.tmdb_base_url,
         cache_ttl=settings.tmdb_cache_ttl_seconds,
     )
-    result = IngestionService(session, metadata).ingest(profile_id, source.pull(since))
+    result = ingest_in_batches(session, profile_id, metadata, source.pull(since))
     set_last_synced(session, profile_id, source_name, started_at)
     # Taste is derived from history; refresh it automatically when the sync changed anything.
     if result.created or result.updated:

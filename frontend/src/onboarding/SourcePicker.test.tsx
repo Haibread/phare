@@ -8,6 +8,8 @@ vi.mock("../api", () => ({
     traktConnectStart: vi.fn(),
     traktConnectPoll: vi.fn(),
     syncTrakt: vi.fn(),
+    syncPlex: vi.fn(),
+    history: vi.fn(),
   },
 }));
 
@@ -49,5 +51,43 @@ describe("SourcePicker Trakt polling", () => {
     // Give it well over a poll interval; without the abort this would fire several more times.
     await new Promise((r) => setTimeout(r, 100));
     expect(mocked.traktConnectPoll.mock.calls.length).toBeLessThanOrEqual(atClose + 1);
+  });
+});
+
+describe("SourcePicker import progress", () => {
+  it("shows the syncing view with a live count while a sync runs", async () => {
+    // Hold the sync open so the syncing view stays mounted while we assert on it.
+    let resolveSync: () => void = () => {};
+    mocked.syncPlex.mockReturnValue(
+      new Promise<never>((resolve) => {
+        resolveSync = resolve as unknown as () => void;
+      }),
+    );
+    // history.total grows across polls, mimicking the backend's incremental commits.
+    let total = 0;
+    mocked.history.mockImplementation(() => {
+      total += 7;
+      return Promise.resolve({ items: [], page: 1, perPage: 100, total });
+    });
+
+    render(tree(true));
+    fireEvent.click(screen.getByTestId("source-plex"));
+    fireEvent.change(screen.getByPlaceholderText("Server URL (https://…)"), {
+      target: { value: "http://plex" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Plex token"), { target: { value: "tok" } });
+    fireEvent.click(screen.getByText("Connect Plex"));
+
+    // The syncing view appears immediately, replacing the source list.
+    await waitFor(() => expect(screen.getByTestId("sync-progress")).toBeInTheDocument());
+    expect(screen.queryByTestId("source-trakt")).not.toBeInTheDocument();
+
+    // The count reflects the polled history total once the 2s interval fires.
+    await waitFor(
+      () => expect(screen.getByTestId("sync-progress-count").textContent).not.toBe("0"),
+      { timeout: 3000 },
+    );
+
+    resolveSync();
   });
 });
