@@ -20,7 +20,7 @@ from typing import Any, Protocol
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
+from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, translate
 from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
@@ -128,14 +128,18 @@ def _template(
     return translate(language, "explain.base", genres=genres, kind=kind, era=era, because=because)
 
 
-def _llm_prompt(rec: Recommendation, taste: Mapping[str, Any]) -> str:
+def _llm_prompt(
+    rec: Recommendation, taste: Mapping[str, Any], language: Language = DEFAULT_LANGUAGE
+) -> str:
     summary = taste.get("summary") or "(no taste summary yet)"
     genres = ", ".join(rec.genres) or "unknown"
     kind = "discovery pick (a stretch)" if rec.is_swing else "a strong match"
+    directive = llm_output_directive(language)
+    tail = f" {directive}" if directive else ""
     return (
         f"{_SYSTEM}\nViewer taste: {summary}\n"
         f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}\n"
-        f"This is {kind}. Write the sentence."
+        f"This is {kind}. Write the sentence.{tail}"
     )
 
 
@@ -213,7 +217,7 @@ class Explainer:
     def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> str:
         try:
             candidate = self.llm.complete(  # type: ignore[union-attr]
-                _llm_prompt(rec, taste), max_tokens=_REASON_MAX_TOKENS
+                _llm_prompt(rec, taste, self.language), max_tokens=_REASON_MAX_TOKENS
             ).strip()
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
             logger.warning("recommend.explain_failed", extra={"title": rec.title})
@@ -258,7 +262,9 @@ def stream_lazy_reason(
         return
     chunks: list[str] = []
     try:
-        for chunk in stream_text(llm, _llm_prompt(rec, taste), max_tokens=_REASON_MAX_TOKENS):
+        for chunk in stream_text(
+            llm, _llm_prompt(rec, taste, language), max_tokens=_REASON_MAX_TOKENS
+        ):
             chunks.append(chunk)
             yield chunk
     except Exception:  # noqa: BLE001 - a flaky model must not sink the request

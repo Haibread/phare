@@ -67,6 +67,19 @@ def test_llm_used_when_available() -> None:
     assert llm.prompts  # the LLM was actually consulted
 
 
+def test_llm_prompt_carries_the_french_directive() -> None:
+    llm = FakeLLMProvider(completion="Un thriller cérébral taillé pour vos goûts.")
+    explain([_rec()], {"summary": "x"}, llm=llm, language="fr")
+    assert "French" in llm.prompts[0]
+
+
+def test_llm_prompt_has_no_directive_in_english() -> None:
+    llm = FakeLLMProvider(completion="A moody sci-fi.")
+    explain([_rec()], {"summary": "x"}, llm=llm)  # default English
+    assert "French" not in llm.prompts[0]
+    assert "Write your response in" not in llm.prompts[0]
+
+
 def test_llm_failure_falls_back_to_template() -> None:
     class _BoomLLM:
         def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:

@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
+from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
 from phare.db.models import TasteProfile, Title, WatchEvent
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
@@ -64,10 +65,17 @@ def _extract_json(raw: str) -> dict[str, Any]:
 class TasteService:
     """Generates and persists a profile's taste profile via the LLM."""
 
-    def __init__(self, session: Session, llm: LLMProvider, model_version: str) -> None:
+    def __init__(
+        self,
+        session: Session,
+        llm: LLMProvider,
+        model_version: str,
+        language: Language = DEFAULT_LANGUAGE,
+    ) -> None:
         self.session = session
         self.llm = llm
         self.model_version = model_version
+        self.language = language
 
     def _history_lines(self, profile_id: uuid.UUID) -> list[str]:
         rows = self.session.execute(
@@ -101,6 +109,13 @@ class TasteService:
         lines = self._history_lines(profile_id)
         history = "\n".join(lines) if lines else "(no history)"
         prompt = _PROMPT_HEADER + history + self._memory_block(profile_id)
+        if self.language != DEFAULT_LANGUAGE:
+            # Only the human-readable summary localises; structured keys stay English because they
+            # key affinity matching against catalog genre names.
+            prompt += (
+                f"\n\nWrite the `summary` field in {LANGUAGE_NAMES[self.language]}. Keep every "
+                "other string value (likes, dislikes, hard_avoids, affinity keys) in English."
+            )
         logger.info("taste.generate", extra={"profile_id": str(profile_id), "events": len(lines)})
 
         raw = self.llm.complete(prompt, max_tokens=_TASTE_MAX_TOKENS)
@@ -179,7 +194,12 @@ def _should_auto_refresh(session: Session, profile_id: uuid.UUID, now: datetime)
     return age >= settings.taste_refresh_min_interval_seconds
 
 
-def maybe_refresh_taste(session: Session, profile_id: uuid.UUID, llm: LLMProvider | None) -> bool:
+def maybe_refresh_taste(
+    session: Session,
+    profile_id: uuid.UUID,
+    llm: LLMProvider | None,
+    language: Language = DEFAULT_LANGUAGE,
+) -> bool:
     """Best-effort: regenerate a profile's taste from its history after its events change.
 
     Taste is a derived artifact (the agent's long-term memory), so it refreshes itself on ingest
@@ -197,7 +217,7 @@ def maybe_refresh_taste(session: Session, profile_id: uuid.UUID, llm: LLMProvide
         logger.debug("taste.auto_refresh_skipped", extra={"profile_id": str(profile_id)})
         return False
     try:
-        TasteService(session, llm, get_settings().llm_chat_model).generate(profile_id)
+        TasteService(session, llm, get_settings().llm_chat_model, language).generate(profile_id)
         return True
     except Exception:  # noqa: BLE001 — taste is best-effort; ingestion must not fail on it
         logger.warning("taste.auto_refresh_failed", extra={"profile_id": str(profile_id)})

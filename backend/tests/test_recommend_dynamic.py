@@ -60,6 +60,14 @@ def test_llm_themes_are_parsed() -> None:
     assert themes[0].include_genres == ["Mystery"]
 
 
+def test_llm_theme_prompt_localises_titles_but_keeps_genres_english() -> None:
+    llm = FakeLLMProvider(completion='[{"title":"X","genres":[]}]')
+    propose_themes({"summary": "x"}, _MARCH, llm=llm, language="fr")
+    prompt = llm.prompts[0]
+    assert "French" in prompt  # titles localised
+    assert "Genre names MUST stay in English" in prompt  # genres key the catalog
+
+
 def test_slug_truncates_long_titles_but_stays_distinct() -> None:
     long_a = (
         "Late-October horror you'd actually tolerate on a quiet school night with the lights on"

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
+from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
 from phare.db.models import ROW_KEY_MAX_LEN
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
@@ -115,8 +115,9 @@ def _fallback_themes(
 
 _LLM_PROMPT = """Propose up to 3 themed movie/TV recommendation rows for today ({date}).
 Consider the season and the viewer's taste. Output ONLY a JSON array of objects with keys:
-- title: a short row label (e.g. "Late-October horror you'd tolerate")
-- genres: array of TMDB genre names to draw from (may be empty for a wildcard discovery row)
+- title: a short row label (e.g. "Late-October horror you'd tolerate"){title_language}
+- genres: array of TMDB genre names to draw from (may be empty for a wildcard discovery row).
+  Genre names MUST stay in English (they key the catalog).
 
 Viewer taste: {summary}
 Avoid: {avoid}
@@ -132,8 +133,12 @@ def propose_themes(
     """LLM-picked themes when available, else the deterministic calendar+taste fallback."""
     if llm is None:
         return _fallback_themes(taste, now, language)
+    title_language = (
+        f" Write each title in {LANGUAGE_NAMES[language]}." if language != DEFAULT_LANGUAGE else ""
+    )
     prompt = _LLM_PROMPT.format(
         date=now.date().isoformat(),
+        title_language=title_language,
         summary=taste.get("summary") or "(unknown)",
         avoid=", ".join(taste.get("hard_avoids") or []) or "(nothing specific)",
     )

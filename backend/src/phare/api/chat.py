@@ -152,12 +152,13 @@ def undo(
     body: UndoRequest,
     session: Annotated[Session, Depends(get_session)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> UndoResponse:
     """Reverse a write the agent made (auto-write + undo). Re-derives taste afterwards."""
     require_profile(session, profile_id)
     undone = undo_action(session, profile_id, body.token)
     if undone:
-        maybe_refresh_taste(session, profile_id, chat_llm)
+        maybe_refresh_taste(session, profile_id, chat_llm, language)
     session.commit()
     return UndoResponse(undone=undone)
 

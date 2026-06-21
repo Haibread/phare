@@ -86,6 +86,37 @@ _MESSAGES: dict[str, dict[Language, str]] = {
             "proposée comme un pari assumé plutôt qu'une valeur sûre."
         ),
     },
+    # Deterministic chat replies (the offline path, and the off-topic steer-back used even with an
+    # LLM). Genre descriptors interpolated in stay in their stored language.
+    "chat.decline": {
+        "en": (
+            "I'm just your movie & TV sidekick — I can't help with that one, but tell me what "
+            "you're in the mood to watch and I'll find something."
+        ),
+        "fr": (
+            "Je ne suis que votre acolyte ciné & séries — je ne peux pas vous aider là-dessus, "
+            "mais dites-moi ce que vous avez envie de regarder et je trouverai quelque chose."
+        ),
+    },
+    "chat.gotIt": {"en": "Got it — {actions}.", "fr": "C'est noté — {actions}."},
+    "chat.herePicks": {
+        "en": "Here are a few picks you might enjoy.",
+        "fr": "Voici quelques suggestions qui pourraient vous plaire.",
+    },
+    "chat.noMatch": {
+        "en": "I couldn't find a good match — try loosening the constraints a little.",
+        "fr": "Je n'ai pas trouvé de bonne correspondance — essayez d'élargir un peu les critères.",
+    },
+    "chat.done": {"en": "Done.", "fr": "C'est fait."},
+    "chat.offlineNoMatch": {
+        "en": "I couldn't find a good match for that — try loosening the constraints a little.",
+        "fr": "Je n'ai rien trouvé de pertinent — essayez d'assouplir un peu les critères.",
+    },
+    "chat.offlinePicks": {
+        "en": "Here are a few {descriptor}picks{runtime} you might enjoy.",
+        "fr": "Voici quelques suggestions {descriptor}{runtime} qui pourraient vous plaire.",
+    },
+    "chat.runtimeUnder": {"en": " under {minutes} minutes", "fr": " de moins de {minutes} minutes"},
     # Dynamic-row fallback theme titles (used offline / when the LLM proposes nothing).
     "theme.februaryRomance": {"en": "February romance", "fr": "Romance de février"},
     "theme.summerBlockbusters": {"en": "Summer blockbusters", "fr": "Blockbusters de l'été"},
@@ -101,3 +132,14 @@ def translate(language: Language, key: str, /, **kwargs: object) -> str:
     variants = _MESSAGES[key]
     template = variants.get(language) or variants[DEFAULT_LANGUAGE]
     return template.format(**kwargs) if kwargs else template
+
+
+def llm_output_directive(language: Language) -> str:
+    """A one-line instruction telling the model which language to write its user-facing text in.
+
+    Empty for the English source language (the prompts are already English). Appended to a prompt
+    rather than translating the whole system prompt, so the carefully-worded scope/guardrail text
+    stays exactly as written and only the output language changes."""
+    if language == DEFAULT_LANGUAGE:
+        return ""
+    return f"Write your response in {LANGUAGE_NAMES[language]}."

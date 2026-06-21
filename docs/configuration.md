@@ -95,12 +95,24 @@ What localises with the request language:
   and the offline explanation templates.
 - **Freshly-fetched TMDB metadata** — search results and the title-detail synopsis/genres are
   fetched from TMDB in the request language (so the detail sheet shows a French synopsis).
-- **LLM-generated text** — explanations, the chat reply, taste summary, and dynamic row themes are
-  written in the request language _(wired in a follow-up; currently English regardless)_.
+- **LLM-generated text** — recommendation explanations, the chat reply, the taste **summary**, and
+  LLM-picked dynamic row themes are written in the request language. The model is _instructed_ in
+  the request language (the English system prompts — which carry the scope/guardrails — are kept and
+  a one-line output-language directive is appended), so behaviour and safety wording don't drift.
 
-What does **not** localise: catalog metadata already stored from a previous import keeps the
-language it was imported in (genre labels in a row can stay English even in a French sentence). Only
-re-fetched TMDB data honours the current language. Titles, people, and years are never translated.
+What does **not** localise:
+
+- **Structured taste keys** (likes/dislikes/affinity keys) and **dynamic-row genres** stay English
+  on purpose — they key affinity/genre matching against the catalog's English genre names. Only the
+  taste _summary_ and the row _titles_ localise.
+- **Catalog metadata already stored** from a previous import keeps the language it was imported in
+  (genre labels in a row can stay English even in a French sentence); only re-fetched TMDB data
+  honours the current language. Titles, people, and years are never translated.
+- **Tool notes** in a chat reply (e.g. "couldn't find 'Zxqyt'") are surfaced verbatim; the framing
+  around them localises.
+
+Because the taste profile is a single stored artifact, its summary is written in whichever language
+last triggered a (re)generation — regenerate from the profile screen to set it to your language.
 
 ## Offline / no-key behavior
 
