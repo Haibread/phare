@@ -52,9 +52,7 @@ _INGEST_BATCH_SIZE = 100
 _PREWARM_WORKERS = 8
 
 
-def _prewarm_metadata(
-    session: Session, metadata: MetadataProvider, batch: list[RawEvent]
-) -> None:
+def _prewarm_metadata(session: Session, metadata: MetadataProvider, batch: list[RawEvent]) -> None:
     """Concurrently fetch TMDB metadata for the batch's not-yet-stored titles, warming the shared
     cache. Only the read-side HTTP runs in threads — the DB writes stay on the single session."""
     wanted: dict[int, TitleKind] = {}
