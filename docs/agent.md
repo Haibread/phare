@@ -16,6 +16,10 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
 - **Tools** ([`agent/tools.py`](../backend/src/phare/agent/tools.py)) — thin wrappers over the
   engine: `recommend`, `log_signal`, `set_commitment`, `resolve_commitment`, `remember`,
   `update_taste`. Title references resolve through the catalog search (local + live TMDB).
+  `recommend` defaults to *new* titles (excludes everything watched); a **rewatch** request ("a
+  comfort rewatch", "something I've seen", "watch again") sets `rewatch=true`, which flips the
+  candidate source to titles you've already watched and reserves no discovery swing slot. The
+  offline keyword parser detects the same intent.
 - **Reply** is written by the model (natural language), grounded in what the tools actually did —
   it never invents titles. Falls back to a deterministic template if the model call fails.
 - **Offline** (no `LLM_API_KEY`): no planner — the turn falls back to the keyword intent → a single

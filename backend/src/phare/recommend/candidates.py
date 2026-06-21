@@ -12,7 +12,7 @@ import re
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, true
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleEmbedding
@@ -51,9 +51,23 @@ def generate_candidates(
     *,
     limit: int = 50,
     hard_avoids: Sequence[str] = (),
+    from_watched: bool = False,
 ) -> list[Candidate]:
-    """Nearest catalog titles to the centroid, excluding watched + hard-avoided ones."""
+    """Nearest titles to the centroid, hard-avoids removed.
+
+    Default: catalog titles the profile has *not* watched (find something new). With
+    ``from_watched=True`` the source flips to titles the profile *has* watched — the candidate pool
+    for a rewatch, ranked the same way (nearest the taste centroid).
+    """
     watched = watched_title_ids(session, profile_id)
+    if from_watched and not watched:
+        return []  # nothing watched yet → nothing to rewatch
+    if from_watched:
+        scope = Title.id.in_(watched)
+    elif watched:
+        scope = Title.id.notin_(watched)
+    else:
+        scope = true()
     distance = TitleEmbedding.embedding.cosine_distance(list(centroid))
     # Over-fetch so the post-filter for hard-avoids can't starve the result below ``limit``.
     pool = limit * 3 + len(hard_avoids) + 10
@@ -62,7 +76,7 @@ def generate_candidates(
         .join(TitleEmbedding, TitleEmbedding.title_id == Title.id)
         .where(
             TitleEmbedding.model_version == model_version,
-            Title.id.notin_(watched) if watched else True,
+            scope,
         )
         .order_by(distance.asc())
         .limit(pool)

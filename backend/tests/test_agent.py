@@ -21,6 +21,7 @@ from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
 from phare.recommend.service import RecommendationService
+from phare.recommend.taste_vector import watched_title_ids
 
 
 def test_composer_prompt_carries_french_directive() -> None:
@@ -116,3 +117,28 @@ def test_respond_empty_history_returns_graceful_message(db_session: Session) -> 
     reply = ChatService(_recommender(db_session), chat_llm=None).respond(profile.id, "funny")
     assert reply.items == []
     assert "couldn't find" in reply.reply_text.lower()
+
+
+def test_keyword_intent_detects_rewatch() -> None:
+    assert keyword_intent("a comfort rewatch").rewatch is True
+    assert keyword_intent("something I want to watch again").rewatch is True
+    assert keyword_intent("revisit an old favorite").rewatch is True
+    assert keyword_intent("I've seen it before but rewatch it").rewatch is True
+    assert keyword_intent("something funny and new").rewatch is False
+
+
+def test_rewatch_draws_from_watched_history_not_the_fresh_catalog(db_session: Session) -> None:
+    profile_id = _seeded_profile(db_session)
+    service = ChatService(_recommender(db_session), chat_llm=None)
+    watched = watched_title_ids(db_session, profile_id)
+
+    # A normal request suggests only titles the profile has NOT seen.
+    fresh = service.respond(profile_id, "something good to watch")
+    assert fresh.items
+    assert all(item.title_id not in watched for item in fresh.items)
+
+    # A rewatch request flips the source: every pick is something they've already watched.
+    again = service.respond(profile_id, "a comfort rewatch")
+    assert again.intent.rewatch is True
+    assert again.items
+    assert all(item.title_id in watched for item in again.items)

@@ -16,6 +16,9 @@ class ChatIntent(BaseModel):
     include_genres: list[str] = []
     exclude_genres: list[str] = []
     mood: str | None = None
+    # A rewatch flips the candidate source: draw from titles the profile has already watched/loved
+    # instead of excluding them. "a comfort rewatch", "something I've seen", "watch again".
+    rewatch: bool = False
 
 
 class ToolCall(BaseModel):

@@ -115,14 +115,17 @@ class RecommendationService:
         candidate_filter: CandidateFilter | None = None,
         k: int | None = None,
         swing_slots: int | None = None,
+        rewatch: bool = False,
         explain_with_llm: bool = True,
         explainer: Explainer | None = None,
     ) -> list[Recommendation]:
         """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain.
 
-        ``explain_with_llm=False`` uses the deterministic template explanations (no per-item LLM
-        call) — the chat agent does this since its natural-language reply already frames the picks.
-        Pass a shared ``explainer`` to pool the LLM-call budget across the rows of one home render.
+        ``rewatch=True`` draws candidates from titles the profile has already watched (a comfort
+        rewatch) instead of excluding them, and reserves no swing slots — a rewatch is never a
+        discovery pick. ``explain_with_llm=False`` uses the deterministic template explanations
+        (no per-item LLM call) — the chat agent does this since its natural-language reply already
+        frames the picks. Pass a shared ``explainer`` to pool the LLM-call budget across rows.
         """
         if taste is None:
             taste = self._load_taste(profile_id)
@@ -139,14 +142,16 @@ class RecommendationService:
             self.embed_model_version,
             limit=k * 4 + 10,
             hard_avoids=avoids,
+            from_watched=rewatch,
         )
         if candidate_filter is not None:
             candidates = candidate_filter(candidates)
+        default_swings = 0 if rewatch else self.swing_slots
         recs = rerank(
             candidates,
             taste,
             k=k,
-            swing_slots=swing_slots if swing_slots is not None else self.swing_slots,
+            swing_slots=swing_slots if swing_slots is not None else default_swings,
         )
         exp = explainer or self._explainer(with_llm=explain_with_llm)
         return exp.explain(recs, taste)

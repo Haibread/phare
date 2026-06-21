@@ -103,6 +103,7 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         include_genres=[str(g) for g in args.get("include_genres", [])],
         exclude_genres=[str(g) for g in args.get("exclude_genres", [])],
         mood=args.get("mood"),
+        rewatch=bool(args.get("rewatch", False)),
     )
     result.intent = intent
     from phare.agent.service import intent_filter  # local import avoids a cycle
@@ -111,7 +112,8 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         ctx.profile_id,
         extra_hard_avoids=intent.exclude_genres,
         candidate_filter=intent_filter(intent),
-        swing_slots=1,
+        rewatch=intent.rewatch,
+        swing_slots=0 if intent.rewatch else 1,
         explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
     )
 

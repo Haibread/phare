@@ -50,6 +50,12 @@ _HOUR_RE = re.compile(r"(\d)\s*(?:h|hr|hrs|hour|hours)\b", re.IGNORECASE)
 # A "short" film is conventionally feature-length-ish; treat the word as a 100-minute ceiling.
 _SHORT_CEILING = 100
 
+# A request to revisit something already seen — flips the candidate source to watched history.
+_REWATCH_RE = re.compile(
+    r"\b(re-?watch\w*|watch\s+again|seen\s+(it\s+)?before|comfort\s+(re-?)?watch|revisit\w*)\b",
+    re.IGNORECASE,
+)
+
 
 def _parse_runtime(text: str) -> int | None:
     if match := _RUNTIME_RE.search(text):
@@ -82,6 +88,7 @@ def keyword_intent(message: str) -> ChatIntent:
         include_genres=include,
         exclude_genres=exclude,
         mood=message.strip() or None,
+        rewatch=_REWATCH_RE.search(message) is not None,
     )
 
 
