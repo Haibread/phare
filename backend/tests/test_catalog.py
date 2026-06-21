@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
-from phare.api.app import create_app
 from phare.api.catalog import ensure_import_allowed
 from phare.catalog.sample import seed_sample_catalog
 from phare.catalog.service import (
@@ -20,9 +18,9 @@ from phare.catalog.service import (
 )
 from phare.cli import app as cli_app
 from phare.core.config import Settings, get_settings
-from phare.db.base import get_session
-from phare.db.models import Profile, Title, TitleKind
+from phare.db.models import Title, TitleKind
 from phare.providers.types import TitleMetadata
+from tests.conftest import authed_client, make_account
 
 
 def _count_titles(session: Session) -> int:
@@ -165,12 +163,6 @@ def test_search_titles_empty_query_returns_nothing(db_session: Session) -> None:
     assert search_titles(db_session, "   ") == []
 
 
-def _client(session: Session) -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    return TestClient(app)
-
-
 def test_import_guard_blocks_dev_without_confirm() -> None:
     with pytest.raises(HTTPException) as exc:
         ensure_import_allowed(Settings(environment="development"), confirm=False)
@@ -197,15 +189,13 @@ def test_cli_import_refuses_dev_without_confirm(monkeypatch: pytest.MonkeyPatch)
 
 def test_search_endpoint_returns_recommendation_items(db_session: Session) -> None:
     seed_sample_catalog(db_session)
-    profile = Profile(display_name="me")
-    db_session.add(profile)
-    db_session.flush()
+    user = make_account(db_session)
     target = db_session.scalars(select(Title)).first()
     assert target is not None
 
     body = (
-        _client(db_session)
-        .post(f"/profiles/{profile.id}/catalog/search", json={"q": target.title})
+        authed_client(db_session, user)
+        .post(f"/profiles/{user.profile.id}/catalog/search", json={"q": target.title})
         .json()
     )
     ids = {item["titleId"] for item in body["results"]}

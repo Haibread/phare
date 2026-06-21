@@ -33,9 +33,10 @@ from phare.api.schemas import (
     UndoRequest,
     UndoResponse,
 )
+from phare.core.auth import get_current_user
 from phare.core.i18n import Language
 from phare.db.base import get_session
-from phare.db.models import Title
+from phare.db.models import Title, User
 from phare.providers.types import LLMProvider
 from phare.taste.service import maybe_refresh_taste
 
@@ -48,12 +49,13 @@ def chat(
     profile_id: uuid.UUID,
     body: ChatRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
     language: Annotated[Language, Depends(get_language)],
 ) -> ChatReplyResponse:
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     # Explanations (high volume) use the workhorse model; the conversational agent uses agent_llm.
     recommender = build_recommender(session, embedder, chat_llm, language)
     reply = ChatService(recommender, agent_llm).respond(profile_id, body.message)
@@ -112,6 +114,7 @@ def chat_stream(
     profile_id: uuid.UUID,
     body: ChatRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
@@ -122,7 +125,7 @@ def chat_stream(
     the planner runs), then ``meta`` with the picks + write-chips as soon as the tools finish, a
     ``status`` while the reply is composed, the reply itself as ``delta`` chunks, then ``done``.
     The DB work (incl. the commit) happens inside the generator; the streamed reply is read-only."""
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     recommender = build_recommender(session, embedder, chat_llm, language)
     service = ChatService(recommender, agent_llm)
 
@@ -151,11 +154,12 @@ def undo(
     profile_id: uuid.UUID,
     body: UndoRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     language: Annotated[Language, Depends(get_language)],
 ) -> UndoResponse:
     """Reverse a write the agent made (auto-write + undo). Re-derives taste afterwards."""
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     undone = undo_action(session, profile_id, body.token)
     if undone:
         maybe_refresh_taste(session, profile_id, chat_llm, language)
@@ -167,9 +171,10 @@ def undo(
 def opening(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> ChatOpeningResponse:
     """A proactive follow-up when the user has open watch plans (the cross-session memory hook)."""
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     pending = commitments_store.pending_commitments(session, profile_id)
     names = [t.title for c in pending if (t := session.get(Title, c.title_id)) is not None]
     if not names:

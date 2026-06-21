@@ -103,12 +103,19 @@ class Settings(BaseSettings):
     # to explain cards nobody opens. Set >0 to eagerly explain that many cards per render instead.
     recommend_explanation_budget: int = 0
 
-    # Auth (opt-in): when AUTH_PASSWORD is unset the API is open (single-user dev posture).
-    # SECRET_KEY signs bearer tokens and derives the source-token encryption key; it falls back
-    # to AUTH_PASSWORD when unset, so the minimal config is just AUTH_PASSWORD.
-    auth_password: str | None = None
+    # Auth (multi-user). SECRET_KEY signs identity-bearing bearer tokens and derives the
+    # source-token encryption key; it is required once any account exists. The API is closed by
+    # default — every data endpoint needs a valid token. See docs/auth.md.
     secret_key: str | None = None
     auth_token_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+    # When true, anyone may self-register a local (email+password) account. Default closed:
+    # local accounts are admin-created; Plex sign-in is gated by server membership instead.
+    registration_open: bool = False
+
+    # Plex "Sign in with Plex" (PIN auth). The client identifier must be stable across restarts so
+    # plex.tv recognises the same client; generated and pinned in config when unset.
+    plex_client_identifier: str | None = None
+    plex_product_name: str = "Phare"
 
     @property
     def agent_chat_model(self) -> str:
@@ -122,12 +129,9 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
     @property
-    def auth_enabled(self) -> bool:
-        return bool(self.auth_password)
-
-    @property
     def signing_secret(self) -> str | None:
-        return self.secret_key or self.auth_password
+        """Secret that signs tokens and derives the source-token encryption key."""
+        return self.secret_key
 
     @field_validator("cors_origins", mode="before")
     @classmethod

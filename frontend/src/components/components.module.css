@@ -1,5 +1,5 @@
 /* Shared component styles (CSS Modules). Imported by Brand, ConfidenceMeter, PosterCard,
- * RecRow, Sheet, states, LoginGate. */
+ * RecRow, Sheet, states, AuthGate. */
 
 .brand {
   display: inline-flex;
@@ -421,5 +421,51 @@
 
 .error {
   color: var(--danger);
+  font-size: 0.85rem;
+}
+
+/* Auth screen (login / first-run setup) ---------------------------------- */
+
+.authForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.authDivider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.authDivider::before,
+.authDivider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.authToggle {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.authToggle:hover {
+  text-decoration: underline;
+}
+
+.authHint {
+  color: var(--text-muted);
   font-size: 0.85rem;
 }

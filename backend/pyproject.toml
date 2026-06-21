@@ -23,6 +23,7 @@ dependencies = [
     "httpx>=0.28.1",
     "pgvector>=0.4.2",
     "cryptography>=49.0.0",
+    "argon2-cffi>=25.1.0",
 ]
 
 [project.urls]

@@ -81,9 +81,12 @@ closed-loop metric in [`evaluation.md`](evaluation.md). Must exist from the firs
 
 ## One account = one user
 
-No shared-account persona modeling. The only concession to a previously-shared Trakt/Plex
-account is a one-time **import cleanup** at onboarding: bulk-exclude mixed history (sets
-`excluded`); excluded events are ignored by taste modeling.
+Literal: a `user` (credentials) owns exactly one `profile` (taste/history), 1:1. How a user
+authenticates lives in `identity` rows — a local password, Plex, … — keyed on `(provider,
+subject)` so new providers add rows, not columns. No shared-account persona modeling. The only
+concession to a previously-shared Trakt/Plex account is a one-time **import cleanup** at
+onboarding: bulk-exclude mixed history (sets `excluded`); excluded events are ignored by taste
+modeling. The auth model (tokens, isolation, Sign in with Plex) is specified in [`auth.md`](auth.md).
 
 ## Embeddings are versioned
 

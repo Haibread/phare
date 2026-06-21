@@ -1,10 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { api, setAuthToken } from "../api";
-import { LoginGate } from "../auth/LoginGate";
+import { AuthGate } from "../auth/AuthGate";
 import { ErrorState, Loading } from "../components/states";
-import { keys, useCreateProfile, useHistory, useMe, useProfiles } from "../lib/queries";
+import { keys, useHistory, useMe, useProfiles } from "../lib/queries";
 import { ColdStart } from "../onboarding/ColdStart";
 import { Browse } from "../routes/Browse";
 import { Chat } from "../routes/Chat";
@@ -15,50 +15,72 @@ import { AppShell } from "./AppShell";
 export function App(): React.JSX.Element {
   const qc = useQueryClient();
   const me = useMe();
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  function onLogin(password: string) {
-    setLoginError(null);
+  function applyToken(token: string) {
+    setAuthError(null);
+    setAuthToken(token);
+    return qc.invalidateQueries({ queryKey: keys.me });
+  }
+
+  function reportError(e: unknown) {
+    setAuthError(e instanceof Error ? e.message : String(e));
+  }
+
+  function onLogin(email: string, password: string) {
+    setAuthError(null);
     api
-      .login(password)
+      .login(email, password)
+      .then((r) => applyToken(r.token))
+      .catch(reportError);
+  }
+
+  function onRegister(email: string, password: string, displayName: string) {
+    setAuthError(null);
+    api
+      .register(email, password, displayName)
       .then((r) => {
-        setAuthToken(r.token);
+        // `token` is non-null only when self-registering (first-run / open registration).
+        if (r.token !== null) {
+          return applyToken(r.token);
+        }
         return qc.invalidateQueries({ queryKey: keys.me });
       })
-      .catch((e: unknown) => setLoginError(e instanceof Error ? e.message : String(e)));
+      .catch(reportError);
+  }
+
+  function onPlexToken(token: string) {
+    applyToken(token);
   }
 
   if (me.isPending) {
     return <Loading />;
   }
-  if (me.data?.authRequired && !me.data.authenticated) {
-    return <LoginGate onLogin={onLogin} error={loginError} />;
+  if (me.data?.needsSetup || me.data?.authenticated !== true) {
+    return (
+      <AuthGate
+        needsSetup={me.data?.needsSetup ?? false}
+        registrationOpen={me.data?.registrationOpen ?? false}
+        onLogin={onLogin}
+        onRegister={onRegister}
+        onPlexToken={onPlexToken}
+        error={authError}
+      />
+    );
   }
 
-  return <Bootstrapped />;
+  return <Bootstrapped profileId={me.data.user?.profileId ?? null} />;
 }
 
-/** Resolves the single active profile (creating a default one on first run), then routes to the
- * onboarding gate or the tabbed shell depending on whether there's any history yet. */
-function Bootstrapped(): React.JSX.Element {
+/** Routes to the onboarding gate or the tabbed shell depending on whether there's any history yet.
+ * The active profile id comes from the authenticated user; if it's somehow missing we fall back to
+ * the caller's single profile from `GET /profiles`. */
+function Bootstrapped({ profileId }: { profileId: string | null }): React.JSX.Element {
   const profiles = useProfiles();
-  const createProfile = useCreateProfile();
+  const resolvedProfileId = profileId ?? profiles.data?.items[0]?.id ?? null;
+  const history = useHistory(resolvedProfileId);
 
-  useEffect(() => {
-    if (
-      profiles.data &&
-      profiles.data.items.length === 0 &&
-      createProfile.isIdle &&
-      !createProfile.isPending
-    ) {
-      createProfile.mutate("Me");
-    }
-  }, [profiles.data, createProfile]);
-
-  const profileId = profiles.data?.items[0]?.id ?? null;
-  const history = useHistory(profileId);
-
-  if (profileId === null || history.isPending) {
+  if (resolvedProfileId === null || history.isPending) {
     return <Loading />;
   }
 
@@ -70,12 +92,12 @@ function Bootstrapped(): React.JSX.Element {
 
   // First run: no events yet → onboarding takeover (no tabs).
   if ((history.data?.items.length ?? 0) === 0) {
-    return <ColdStart profileId={profileId} />;
+    return <ColdStart profileId={resolvedProfileId} />;
   }
 
   return (
     <Routes>
-      <Route element={<AppShell profileId={profileId} />}>
+      <Route element={<AppShell profileId={resolvedProfileId} />}>
         <Route index element={<Browse />} />
         <Route path="search" element={<Search />} />
         <Route path="chat" element={<Chat />} />

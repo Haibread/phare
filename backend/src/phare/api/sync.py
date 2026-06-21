@@ -20,11 +20,12 @@ from phare.api.schemas import (
     TraktConnectStartResponse,
     TraktConnectStatusResponse,
 )
+from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import Settings, get_settings
 from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
-from phare.db.models import Profile, SourceToken
+from phare.db.models import Profile, SourceToken, User
 from phare.ingest.service import IngestionService
 from phare.providers.jellyfin import JellyfinSourceProvider
 from phare.providers.plex import PlexSourceProvider
@@ -183,7 +184,9 @@ def _refresh_trakt_token(session: Session, settings: Settings, profile_id: uuid.
 def sync_trakt(
     body: TraktSyncRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> IngestSummary:
+    require_own_profile(user, body.profile_id)
     settings = get_settings()
     if not settings.trakt_client_id:
         raise HTTPException(status_code=400, detail="TRAKT_CLIENT_ID must be configured to sync")
@@ -231,11 +234,11 @@ def trakt_connect_start(
 def trakt_connect_poll(
     body: TraktConnectPollRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> TraktConnectStatusResponse:
     """Poll once for authorization. On success, store the access token for this profile."""
     settings = get_settings()
-    if session.get(Profile, body.profile_id) is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+    require_own_profile(user, body.profile_id)
     result = _trakt_oauth(settings).poll_token(body.device_code)
     if result.status is PollStatus.connected and result.access_token is not None:
         _store_trakt_tokens(
@@ -249,8 +252,10 @@ def trakt_connect_poll(
 def sync_plex(
     body: PlexSyncRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> IngestSummary:
     """Sync the account owner's own Plex watch history (privacy-safe: single account)."""
+    require_own_profile(user, body.profile_id)
     require_safe_url(body.base_url)
     _require_tmdb(get_settings())
     token = _resolve_token(session, body.profile_id, "plex", body.token)
@@ -263,8 +268,10 @@ def sync_plex(
 def sync_jellyfin(
     body: JellyfinSyncRequest,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> IngestSummary:
     """Sync one Jellyfin user's own played history (privacy-safe: single user)."""
+    require_own_profile(user, body.profile_id)
     require_safe_url(body.base_url)
     _require_tmdb(get_settings())
     token = _resolve_token(session, body.profile_id, "jellyfin", body.api_key)
@@ -277,10 +284,10 @@ def sync_jellyfin(
 def list_connected_sources(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> list[ConnectedSource]:
     """Which external services this profile has connected, and when each last synced."""
-    if session.get(Profile, profile_id) is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+    require_own_profile(user, profile_id)
     rows = session.scalars(
         select(SourceToken).where(SourceToken.profile_id == profile_id).order_by(SourceToken.source)
     ).all()

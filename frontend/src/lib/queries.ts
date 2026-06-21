@@ -97,14 +97,6 @@ export function useConversion(profileId: string | null) {
   });
 }
 
-export function useCreateProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (displayName: string) => api.createProfile(displayName),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
-  });
-}
-
 /** Invalidate everything that depends on a profile's events. */
 function invalidateProfileData(qc: ReturnType<typeof useQueryClient>, profileId: string) {
   qc.invalidateQueries({ queryKey: keys.history(profileId) });

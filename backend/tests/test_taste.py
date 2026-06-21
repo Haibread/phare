@@ -10,11 +10,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
 from phare.api.taste import get_llm_provider
 from phare.core.config import get_settings
-from phare.db.base import get_session
-from phare.db.models import EventType, Profile, TasteProfile, Title, WatchEvent
+from phare.db.models import EventType, Profile, TasteProfile, Title, User, WatchEvent
 from phare.ingest.sample import seed_sample_data
 from phare.providers.fakes import FakeLLMProvider
 from phare.taste.service import (
@@ -23,6 +21,7 @@ from phare.taste.service import (
     maybe_refresh_taste,
     optional_llm_provider,
 )
+from tests.conftest import authed_client, make_account
 
 CANNED = (
     '{"summary":"Likes cerebral sci-fi and prestige drama.",'
@@ -39,6 +38,13 @@ def _profile_with_history(session: Session) -> uuid.UUID:
     seed_sample_data(session, profile.id)
     session.flush()
     return profile.id
+
+
+def _account_with_history(session: Session) -> User:
+    user = make_account(session)
+    seed_sample_data(session, user.profile.id)
+    session.flush()
+    return user
 
 
 def test_generate_builds_profile(db_session: Session) -> None:
@@ -90,22 +96,20 @@ def test_effective_profile_overrides_win(db_session: Session) -> None:
     assert merged["summary"] == "x"
 
 
-def _client(session: Session, *, with_llm: bool = False) -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    if with_llm:
-        app.dependency_overrides[get_llm_provider] = lambda: FakeLLMProvider(completion=CANNED)
-    return TestClient(app)
+def _client(session: Session, user: User, *, with_llm: bool = False) -> TestClient:
+    overrides = {get_llm_provider: lambda: FakeLLMProvider(completion=CANNED)} if with_llm else None
+    return authed_client(session, user, overrides=overrides)
 
 
 def test_taste_api_404_before_generation(db_session: Session) -> None:
-    profile_id = _profile_with_history(db_session)
-    assert _client(db_session).get(f"/profiles/{profile_id}/taste").status_code == 404
+    user = _account_with_history(db_session)
+    assert _client(db_session, user).get(f"/profiles/{user.profile.id}/taste").status_code == 404
 
 
 def test_taste_api_generate_then_get_then_edit(db_session: Session) -> None:
-    profile_id = _profile_with_history(db_session)
-    client = _client(db_session, with_llm=True)
+    user = _account_with_history(db_session)
+    profile_id = user.profile.id
+    client = _client(db_session, user, with_llm=True)
 
     generated = client.post(f"/profiles/{profile_id}/taste/generate")
     assert generated.status_code == 200
@@ -123,9 +127,12 @@ def test_taste_api_generate_then_get_then_edit(db_session: Session) -> None:
 
 
 def test_generate_without_llm_key_400(db_session: Session) -> None:
-    profile_id = _profile_with_history(db_session)
+    user = _account_with_history(db_session)
     # No get_llm_provider override and no LLM_API_KEY configured -> 400.
-    assert _client(db_session).post(f"/profiles/{profile_id}/taste/generate").status_code == 400
+    assert (
+        _client(db_session, user).post(f"/profiles/{user.profile.id}/taste/generate").status_code
+        == 400
+    )
 
 
 # --- automatic taste refresh on ingest --------------------------------------
@@ -236,13 +243,12 @@ def test_sample_data_auto_generates_taste(
         "phare.api.profiles.optional_llm_provider",
         lambda: FakeLLMProvider(completion=CANNED),
     )
-    profile = Profile(display_name="auto")
-    db_session.add(profile)
-    db_session.flush()
-    client = _client(db_session)
+    user = make_account(db_session, display_name="auto")
+    profile_id = user.profile.id
+    client = _client(db_session, user)
 
-    assert client.post(f"/profiles/{profile.id}/sample-data").status_code == 200
+    assert client.post(f"/profiles/{profile_id}/sample-data").status_code == 200
 
-    fetched = client.get(f"/profiles/{profile.id}/taste")
+    fetched = client.get(f"/profiles/{profile_id}/taste")
     assert fetched.status_code == 200
     assert fetched.json()["summary"] is not None

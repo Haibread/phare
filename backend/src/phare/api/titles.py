@@ -22,10 +22,11 @@ from sqlalchemy.orm import Session
 from phare.api.deps import get_language, get_optional_chat_llm
 from phare.api.recommend import _poster_url, require_profile
 from phare.api.schemas import TitleDetail
+from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.i18n import Language
 from phare.db.base import get_session
-from phare.db.models import TasteProfile, Title, TitleKind
+from phare.db.models import TasteProfile, Title, TitleKind, User
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider
 from phare.recommend.explain import (
@@ -106,6 +107,7 @@ def stream_title_explanation(
     profile_id: uuid.UUID,
     title_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     language: Annotated[Language, Depends(get_language)],
 ) -> StreamingResponse:
@@ -113,7 +115,7 @@ def stream_title_explanation(
     opens a card's detail sheet, so we never pay to explain cards nobody opens. Server-Sent Events:
     ``delta`` chunks as the (workhorse) model types, then ``done``. Cached per (title, taste) so a
     re-open returns instantly as one chunk; offline streams the deterministic template."""
-    require_profile(session, profile_id)
+    require_profile(user, profile_id)
     title = session.get(Title, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")

@@ -23,21 +23,57 @@ class HealthResponse(ApiModel):
     version: str
 
 
+class RegisterRequest(ApiModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=200)
+    display_name: str = Field(min_length=1, max_length=100)
+
+
 class LoginRequest(ApiModel):
-    password: str = Field(min_length=1)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=200)
 
 
 class TokenResponse(ApiModel):
     token: str
 
 
+class UserResponse(ApiModel):
+    id: uuid.UUID
+    email: str | None = None
+    display_name: str
+    is_admin: bool
+    profile_id: uuid.UUID
+
+
+class RegisterResponse(ApiModel):
+    # ``token`` is set when self-registering (first-run / open registration); null when an admin
+    # creates an account for someone else.
+    token: str | None = None
+    user: UserResponse
+
+
 class MeResponse(ApiModel):
-    auth_required: bool
+    # ``needs_setup``: no account exists yet — the SPA shows first-run setup. ``user`` is the caller
+    # when authenticated, else null. See docs/auth.md.
+    needs_setup: bool
+    registration_open: bool
     authenticated: bool
+    user: UserResponse | None = None
 
 
-class CreateProfileRequest(ApiModel):
-    display_name: str = Field(min_length=1, max_length=100)
+class PlexStartResponse(ApiModel):
+    challenge_id: str
+    auth_url: str
+
+
+class PlexPollRequest(ApiModel):
+    challenge_id: str = Field(min_length=1)
+
+
+class PlexPollResponse(ApiModel):
+    status: str  # pending | authorized | expired
+    token: str | None = None  # set only when status is "authorized"
 
 
 class ProfileResponse(ApiModel):

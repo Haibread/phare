@@ -26,7 +26,9 @@ export default defineConfig({
       url: "http://localhost:8000/health",
       reuseExistingServer: !isCI,
       timeout: 60_000,
-      env: { MIGRATE_ON_STARTUP: "true" },
+      // SECRET_KEY is required for the now-mandatory multi-user auth (tokens). The specs create the
+      // first account (which becomes admin) and sign in — see tests/helpers.ts.
+      env: { MIGRATE_ON_STARTUP: "true", SECRET_KEY: "e2e-secret-key" },
     },
     {
       command: "npm --prefix ../frontend run dev",

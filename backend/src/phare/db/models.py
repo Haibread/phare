@@ -132,14 +132,80 @@ class Episode(Base):
     season: Mapped[Season] = relationship(back_populates="episodes")
 
 
+class User(Base):
+    """A login identity — one human, one account, 1:1 with a :class:`Profile`.
+
+    Credentials live in :class:`Identity` (a user may prove who they are via several providers:
+    a local password, Plex, …). ``email`` is preferred metadata, filled when a provider supplies
+    one (Plex does; Trakt may not) — it is *never* the identity key. See ``docs/auth.md``.
+    """
+
+    __tablename__ = "phare_user"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # Nullable + unique: not every provider hands us an email, but when present it must be unique.
+    email: Mapped[str | None] = mapped_column(String(320), unique=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    profile: Mapped[Profile] = relationship(back_populates="user", cascade="all, delete-orphan")
+    identities: Mapped[list[Identity]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Identity(Base):
+    """One way a :class:`User` can authenticate. Keyed on ``(provider, subject)``.
+
+    ``provider`` is a free string ("local", "plex", "trakt", …) so new providers add rows, never
+    schema. ``subject`` is the provider's stable id for the user (email for local; Plex account id
+    for plex). ``secret`` holds the argon2id password hash for ``local`` and is ``NULL`` for source
+    providers (the proof is the OAuth grant; the source access token lives in ``SourceToken``).
+    """
+
+    __tablename__ = "identity"
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_identity_provider_subject"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("phare_user.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(50))
+    subject: Mapped[str] = mapped_column(String(320))
+    secret: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[User] = relationship(back_populates="identities")
+
+
+class PlexServerBinding(Base):
+    """A Plex server the owner can access — the membership gate for "Sign in with Plex".
+
+    Set at the owner's first sign-in (one row per accessible server machine identifier). A later
+    Plex sign-in is allowed iff the signing-in account shares at least one of these servers. See
+    ``docs/auth.md``.
+    """
+
+    __tablename__ = "plex_server_binding"
+
+    machine_identifier: Mapped[str] = mapped_column(String(100), primary_key=True)
+    bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Profile(Base):
-    """One human. (One account = one user; auth is added later.)"""
+    """The taste/history container for one human — 1:1 with its :class:`User`."""
 
     __tablename__ = "profile"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
+    # Unique + nullable: every account-created profile has an owner; legacy rows (pre-multi-user)
+    # may be NULL and are simply unreachable until claimed. See ``docs/auth.md``.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("phare_user.id", ondelete="CASCADE"), unique=True
+    )
     display_name: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[User | None] = relationship(back_populates="profile")
 
 
 class WatchEvent(Base):

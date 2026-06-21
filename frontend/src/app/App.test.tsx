@@ -9,8 +9,10 @@ vi.mock("../api", () => ({
     me: vi.fn(),
     listProfiles: vi.fn(),
     history: vi.fn(),
-    createProfile: vi.fn(),
     login: vi.fn(),
+    register: vi.fn(),
+    plexStart: vi.fn(),
+    plexPoll: vi.fn(),
   },
   setAuthToken: vi.fn(),
 }));
@@ -23,6 +25,19 @@ const profilePage = {
   page: 1,
   perPage: 20,
   total: 1,
+};
+const authedUser = {
+  id: "u1",
+  email: "me@example.com",
+  displayName: "Me",
+  isAdmin: true,
+  profileId: "p1",
+};
+const authedMe = {
+  needsSetup: false,
+  registrationOpen: false,
+  authenticated: true,
+  user: authedUser,
 };
 
 function renderApp() {
@@ -38,7 +53,7 @@ function renderApp() {
 
 describe("App onboarding gate", () => {
   it("shows the error state (not onboarding) when history fails — an existing user must not be bounced to cold-start", async () => {
-    mocked.me.mockResolvedValue({ authRequired: false, authenticated: false });
+    mocked.me.mockResolvedValue(authedMe);
     mocked.listProfiles.mockResolvedValue(profilePage);
     mocked.history.mockRejectedValue(new Error("backend down"));
 
@@ -49,7 +64,7 @@ describe("App onboarding gate", () => {
   });
 
   it("shows cold-start onboarding only when history is genuinely empty", async () => {
-    mocked.me.mockResolvedValue({ authRequired: false, authenticated: false });
+    mocked.me.mockResolvedValue(authedMe);
     mocked.listProfiles.mockResolvedValue(profilePage);
     mocked.history.mockResolvedValue({ items: [], page: 1, perPage: 100, total: 0 });
 

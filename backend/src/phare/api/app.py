@@ -23,7 +23,7 @@ from phare.api import (
     taste,
     titles,
 )
-from phare.core.auth import require_auth
+from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.logging import configure_logging
 from phare.core.telemetry import setup_telemetry
@@ -63,8 +63,9 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
 
-    # Data endpoints: gated by require_auth, which is a no-op unless AUTH_PASSWORD is set.
-    guarded = [Depends(require_auth)]
+    # Data endpoints: gated by get_current_user — every request needs a valid token (closed by
+    # default). Endpoints that need the identity re-declare the dependency to read it.
+    guarded = [Depends(get_current_user)]
     app.include_router(profiles.router, dependencies=guarded)
     app.include_router(history.router, dependencies=guarded)
     app.include_router(sync.router, dependencies=guarded)

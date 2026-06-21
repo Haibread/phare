@@ -8,13 +8,12 @@ import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
 from phare.core.config import get_settings
 from phare.core.tokens import get_source_token, store_source_token
-from phare.db.base import get_session
-from phare.db.models import Profile
+from phare.db.models import User
 from phare.providers.trakt import TraktSourceProvider
 from phare.providers.trakt_oauth import PollResult, PollStatus, TraktOAuth
+from tests.conftest import authed_client, make_account
 
 _DEVICE_CODE = {
     "device_code": "dev-123",
@@ -71,24 +70,23 @@ def test_poll_maps_terminal_states() -> None:
 # --- endpoints --------------------------------------------------------------
 
 
-def _client(session: Session, monkeypatch) -> TestClient:
+def _client(session: Session, user: User, monkeypatch) -> TestClient:
     monkeypatch.setenv("TRAKT_CLIENT_ID", "c")
     monkeypatch.setenv("TRAKT_CLIENT_SECRET", "s")
     monkeypatch.setenv("SECRET_KEY", "sign-me")
     get_settings.cache_clear()
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    return TestClient(app)
+    return authed_client(session, user)
 
 
 def test_connect_requires_credentials(db_session: Session, monkeypatch) -> None:
     monkeypatch.delenv("TRAKT_CLIENT_ID", raising=False)
     monkeypatch.delenv("TRAKT_CLIENT_SECRET", raising=False)
     get_settings.cache_clear()
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: db_session
+    user = make_account(db_session)
     try:
-        assert TestClient(app).post("/sources/trakt/connect/start").status_code == 400
+        assert (
+            authed_client(db_session, user).post("/sources/trakt/connect/start").status_code == 400
+        )
     finally:
         get_settings.cache_clear()
 
@@ -103,12 +101,10 @@ def test_connect_poll_stores_token(db_session: Session, monkeypatch) -> None:
         )
 
     monkeypatch.setattr(TraktOAuth, "poll_token", fake_poll)
-    client = _client(db_session, monkeypatch)
+    user = make_account(db_session)
+    profile = user.profile
+    client = _client(db_session, user, monkeypatch)
     try:
-        profile = Profile(display_name="me")
-        db_session.add(profile)
-        db_session.flush()
-
         response = client.post(
             "/sources/trakt/connect/poll",
             json={"profileId": str(profile.id), "deviceCode": "dev-123"},
@@ -145,9 +141,8 @@ def test_sync_auto_refreshes_expired_token(db_session: Session, monkeypatch) -> 
     get_settings.cache_clear()
     settings = get_settings()
     try:
-        profile = Profile(display_name="me")
-        db_session.add(profile)
-        db_session.flush()
+        user = make_account(db_session)
+        profile = user.profile
         # A stale access token + a usable refresh token.
         store_source_token(db_session, settings, profile.id, "trakt", "expired-acc")
         store_source_token(db_session, settings, profile.id, "trakt_refresh", "ref-1")
@@ -172,9 +167,9 @@ def test_sync_auto_refreshes_expired_token(db_session: Session, monkeypatch) -> 
             ),
         )
 
-        app = create_app()
-        app.dependency_overrides[get_session] = lambda: db_session
-        response = TestClient(app).post("/sources/trakt/sync", json={"profileId": str(profile.id)})
+        response = authed_client(db_session, user).post(
+            "/sources/trakt/sync", json={"profileId": str(profile.id)}
+        )
 
         assert response.status_code == 200
         assert calls["pull"] == 2  # retried after the refresh
@@ -192,9 +187,8 @@ def test_sync_without_refresh_token_asks_to_reconnect(db_session: Session, monke
     get_settings.cache_clear()
     settings = get_settings()
     try:
-        profile = Profile(display_name="me")
-        db_session.add(profile)
-        db_session.flush()
+        user = make_account(db_session)
+        profile = user.profile
         store_source_token(db_session, settings, profile.id, "trakt", "expired-acc")  # no refresh
 
         def fake_pull(self: TraktSourceProvider, since=None):  # noqa: ANN001, ANN202
@@ -205,9 +199,9 @@ def test_sync_without_refresh_token_asks_to_reconnect(db_session: Session, monke
 
         monkeypatch.setattr(TraktSourceProvider, "pull", fake_pull)
 
-        app = create_app()
-        app.dependency_overrides[get_session] = lambda: db_session
-        response = TestClient(app).post("/sources/trakt/sync", json={"profileId": str(profile.id)})
+        response = authed_client(db_session, user).post(
+            "/sources/trakt/sync", json={"profileId": str(profile.id)}
+        )
         assert response.status_code == 401
         assert "reconnect" in response.json()["detail"].lower()
     finally:

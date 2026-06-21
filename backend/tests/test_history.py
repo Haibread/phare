@@ -2,33 +2,17 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
-from phare.db.base import get_session
-from phare.db.models import EventType, Profile, TitleKind
+from phare.db.models import EventType, TitleKind
 from phare.ingest.service import IngestionService
 from phare.providers.fakes import FakeMetadataProvider
 from phare.providers.types import RawEvent, RawMediaType, TitleMetadata
+from tests.conftest import authed_client, make_account
 
 MOVIE = TitleMetadata(kind=TitleKind.movie, tmdb_id=438631, title="Dune", year=2021)
-
-
-def _client(session: Session) -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    return TestClient(app)
-
-
-def _profile(session: Session, name: str) -> uuid.UUID:
-    profile = Profile(display_name=name)
-    session.add(profile)
-    session.flush()
-    return profile.id
 
 
 def _movie_event(ref: str, when: datetime) -> RawEvent:
@@ -43,14 +27,15 @@ def _movie_event(ref: str, when: datetime) -> RawEvent:
 
 
 def test_history_pagination(db_session: Session) -> None:
-    profile_id = _profile(db_session, "me")
+    user = make_account(db_session)
+    profile_id = user.profile.id
     events = [_movie_event(f"history:{i}", datetime(2024, 1, i, tzinfo=UTC)) for i in range(1, 4)]
     IngestionService(
         db_session, FakeMetadataProvider(titles={(438631, TitleKind.movie): MOVIE})
     ).ingest(profile_id, events)
     db_session.flush()
 
-    response = _client(db_session).get(
+    response = authed_client(db_session, user).get(
         "/history", params={"profileId": str(profile_id), "perPage": 2}
     )
     assert response.status_code == 200
@@ -65,18 +50,21 @@ def test_history_pagination(db_session: Session) -> None:
 
 def test_history_is_isolated_per_profile(db_session: Session) -> None:
     metadata = FakeMetadataProvider(titles={(438631, TitleKind.movie): MOVIE})
-    mine = _profile(db_session, "me")
-    other = _profile(db_session, "other")
+    mine = make_account(db_session, display_name="me", email="me@example.test")
+    other = make_account(db_session, display_name="other", email="other@example.test")
     IngestionService(db_session, metadata).ingest(
-        mine, [_movie_event("history:1", datetime(2024, 1, 1, tzinfo=UTC))]
+        mine.profile.id, [_movie_event("history:1", datetime(2024, 1, 1, tzinfo=UTC))]
     )
     IngestionService(db_session, metadata).ingest(
-        other, [_movie_event("history:2", datetime(2024, 2, 1, tzinfo=UTC))]
+        other.profile.id, [_movie_event("history:2", datetime(2024, 2, 1, tzinfo=UTC))]
     )
     db_session.flush()
 
-    body = _client(db_session).get("/history", params={"profileId": str(mine)}).json()
+    client = authed_client(db_session, mine)
+    body = client.get("/history", params={"profileId": str(mine.profile.id)}).json()
     assert body["total"] == 1
     assert all(item["source"] == "trakt" for item in body["items"])
-    # The other profile's event must not leak in.
     assert len(body["items"]) == 1
+    # Another user's profile is invisible — a 404, not a filtered 200.
+    leak = client.get("/history", params={"profileId": str(other.profile.id)})
+    assert leak.status_code == 404

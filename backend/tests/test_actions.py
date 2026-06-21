@@ -6,20 +6,12 @@ import uuid
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
-from phare.db.base import get_session
-from phare.db.models import Profile, Title, TitleKind
+from phare.db.models import Title, TitleKind, User
 from phare.providers.seerr import SeerrProvider, availability_from_media_info
 from phare.providers.types import MediaAvailability
-
-
-def _client(session: Session) -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: session
-    return TestClient(app)
+from tests.conftest import authed_client, make_account
 
 
 def _seerr_client(handler: object) -> httpx.Client:
@@ -100,19 +92,19 @@ class _FakeAction:
         return True
 
 
-def _profile_and_title(session: Session) -> tuple[uuid.UUID, uuid.UUID]:
-    profile = Profile(display_name="me")
+def _account_and_title(session: Session) -> tuple[User, uuid.UUID]:
+    user = make_account(session)
     title = Title(kind=TitleKind.movie, tmdb_id=603, title="The Matrix")
-    session.add_all([profile, title])
+    session.add(title)
     session.flush()
-    return profile.id, title.id
+    return user, title.id
 
 
 def test_availability_unconfigured_reports_off(db_session: Session) -> None:
-    profile_id, title_id = _profile_and_title(db_session)
+    user, title_id = _account_and_title(db_session)
     body = (
-        _client(db_session)
-        .post(f"/profiles/{profile_id}/availability", json={"titleIds": [str(title_id)]})
+        authed_client(db_session, user)
+        .post(f"/profiles/{user.profile.id}/availability", json={"titleIds": [str(title_id)]})
         .json()
     )
     assert body == {"configured": False, "results": {}}
@@ -121,11 +113,11 @@ def test_availability_unconfigured_reports_off(db_session: Session) -> None:
 def test_availability_configured_returns_status(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    profile_id, title_id = _profile_and_title(db_session)
+    user, title_id = _account_and_title(db_session)
     monkeypatch.setattr("phare.api.actions.seerr_provider", lambda s, p: _FakeAction())
     body = (
-        _client(db_session)
-        .post(f"/profiles/{profile_id}/availability", json={"titleIds": [str(title_id)]})
+        authed_client(db_session, user)
+        .post(f"/profiles/{user.profile.id}/availability", json={"titleIds": [str(title_id)]})
         .json()
     )
     assert body["configured"] is True
@@ -133,27 +125,27 @@ def test_availability_configured_returns_status(
 
 
 def test_request_unconfigured_400(db_session: Session) -> None:
-    profile_id, title_id = _profile_and_title(db_session)
-    resp = _client(db_session).post(
-        f"/profiles/{profile_id}/requests", json={"titleId": str(title_id)}
+    user, title_id = _account_and_title(db_session)
+    resp = authed_client(db_session, user).post(
+        f"/profiles/{user.profile.id}/requests", json={"titleId": str(title_id)}
     )
     assert resp.status_code == 400
 
 
 def test_request_hands_off_and_queues(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    profile_id, title_id = _profile_and_title(db_session)
+    user, title_id = _account_and_title(db_session)
     monkeypatch.setattr("phare.api.actions.seerr_provider", lambda s, p: _FakeAction())
-    resp = _client(db_session).post(
-        f"/profiles/{profile_id}/requests", json={"titleId": str(title_id)}
+    resp = authed_client(db_session, user).post(
+        f"/profiles/{user.profile.id}/requests", json={"titleId": str(title_id)}
     )
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "availability": "queued"}
 
 
 def test_connect_seerr_rejects_ssrf_base_url(db_session: Session) -> None:
-    profile_id, _ = _profile_and_title(db_session)
-    resp = _client(db_session).post(
-        f"/profiles/{profile_id}/sources/seerr/connect",
+    user, _ = _account_and_title(db_session)
+    resp = authed_client(db_session, user).post(
+        f"/profiles/{user.profile.id}/sources/seerr/connect",
         json={"baseUrl": "http://127.0.0.1:5055", "apiKey": "k"},
     )
     assert resp.status_code == 400

@@ -6,14 +6,11 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.api.app import create_app
 from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
 from phare.catalog.sample import seed_sample_catalog
-from phare.db.base import get_session
 from phare.db.models import ROW_KEY_MAX_LEN, Profile, RecommendationLog
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
@@ -21,6 +18,7 @@ from phare.providers.fakes import FakeLLMProvider
 from phare.providers.http import TTLCache
 from phare.recommend.dynamic import _slug, dynamic_rows, propose_themes
 from phare.recommend.service import RecommendationService
+from tests.conftest import authed_client, make_account
 
 _OCTOBER = datetime(2026, 10, 15, tzinfo=UTC)
 _MARCH = datetime(2026, 3, 15, tzinfo=UTC)
@@ -160,15 +158,16 @@ def test_dynamic_rows_long_llm_theme_logs_fitting_key(db_session: Session) -> No
 
 
 def test_dynamic_endpoint(db_session: Session) -> None:
-    app = create_app()
-    app.dependency_overrides[get_session] = lambda: db_session
-    app.dependency_overrides[get_embedder] = lambda: Embedder(
-        provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
-    )
-    app.dependency_overrides[get_optional_chat_llm] = lambda: None
-    client = TestClient(app)
+    user = make_account(db_session)
+    overrides = {
+        get_embedder: lambda: Embedder(
+            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        ),
+        get_optional_chat_llm: lambda: None,
+    }
+    client = authed_client(db_session, user, overrides=overrides)
 
-    profile_id = client.post("/profiles", json={"displayName": "me"}).json()["id"]
+    profile_id = str(user.profile.id)
     client.post(f"/profiles/{profile_id}/sample-data")
     client.post("/catalog/sample")
 
