@@ -38,9 +38,7 @@ def _metadata(n: int) -> FakeMetadataProvider:
 def test_ingest_commits_every_batch(db_session: Session) -> None:
     user = make_account(db_session)
     events = [_event(i) for i in range(25)]
-    result = ingest_in_batches(
-        db_session, user.profile.id, _metadata(25), events, batch_size=10
-    )
+    result = ingest_in_batches(db_session, user.profile.id, _metadata(25), events, batch_size=10)
     assert result.created == 25
     count = db_session.scalar(
         select(func.count()).select_from(WatchEvent).where(WatchEvent.profile_id == user.profile.id)
