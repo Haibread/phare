@@ -11,6 +11,7 @@ import logging
 from collections.abc import Sequence
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleEmbedding
@@ -53,7 +54,7 @@ class EmbeddingService:
         return self.session.scalars(stmt).all()
 
     def embed_missing(self, batch_size: int = 64, limit: int | None = None) -> int:
-        """Embed titles lacking a vector for the current model version. Returns count embedded.
+        """Embed titles lacking a vector for the current model version. Returns titles processed.
 
         ``limit`` bounds how many are embedded in one pass (the lazy read-path top-up uses it so a
         big import can't hang a request); ``None`` embeds the whole backlog (authoritative path).
@@ -67,14 +68,19 @@ class EmbeddingService:
         for start in range(0, len(titles), batch_size):
             batch = titles[start : start + batch_size]
             vectors = self.llm.embed([build_embedding_text(t) for t in batch])
-            for title, vector in zip(batch, vectors, strict=True):
-                self.session.add(
-                    TitleEmbedding(
-                        title_id=title.id,
-                        embedding=vector,
-                        model_version=self.model_version,
-                    )
-                )
+            rows = [
+                {"title_id": title.id, "model_version": self.model_version, "embedding": vector}
+                for title, vector in zip(batch, vectors, strict=True)
+            ]
+            # ON CONFLICT DO NOTHING: a concurrent read-path top-up can embed the same titles
+            # between our SELECT and this INSERT (both lazy passes snapshot the same "missing" set).
+            # Converge silently instead of raising a duplicate-key IntegrityError that poisons the
+            # transaction. The vector is identical either way, so the race's loser loses nothing.
+            self.session.execute(
+                pg_insert(TitleEmbedding)
+                .values(rows)
+                .on_conflict_do_nothing(index_elements=["title_id", "model_version"])
+            )
             self.session.flush()
         logger.info(
             "embeddings.done",
