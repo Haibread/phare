@@ -32,6 +32,20 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 - `you_might_like` — the full pipeline. **This is the actual product**; most value/risk is here.
 - `popular` — global popularity.
 - `continue_watching` / `next_up` — in-progress shows, next episodes (TV roll-up).
+
+Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
+chip (never a number — see *honesty over engagement*). Only `you_might_like` derives it from the
+taste-vector match; the heuristic rows expose an honest signal of their *own* kind, not a fake
+taste score:
+
+- `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally
+  your top-rated titles, sorted best-first.
+- `continue_watching` → recency decay on the last episode you watched (half-life ~6 weeks): a fresh
+  thread reads strong, an abandoned one cools off.
+- `popular` → popularity magnitude on a log scale (a runaway hit reads stronger than a mild one).
+
+A row with genuinely no opinion would pass `confidence = null`; the UI then shows the lowest
+neutral chip. (Today every row computes a real value, so that path is just the graceful fallback.)
 - **Dynamic LLM-generated rows** — an agent picks the day's rows from profile + mood + calendar
   ("late October → horror you'd tolerate"; "finished Dune → the Villeneuve rabbit-hole"). Cheap
   differentiator.
