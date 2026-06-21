@@ -71,6 +71,19 @@ def test_embed_missing_is_idempotent(db_session: Session) -> None:
     assert db_session.scalar(select(func.count()).select_from(TitleEmbedding)) == 1
 
 
+def test_embed_missing_tolerates_a_concurrent_insert(db_session: Session) -> None:
+    title = _title(db_session)
+    service = EmbeddingService(db_session, FakeLLMProvider(dim=EMBEDDING_DIM), "test-model")
+    assert service.embed_missing() == 1
+
+    # Simulate a racing pass that snapshotted this title as "missing" before the first insert
+    # committed: force it back into the to-embed set. ON CONFLICT DO NOTHING must swallow the
+    # duplicate rather than raise IntegrityError, and must not write a second row.
+    service._titles_missing_embedding = lambda limit=None: [title]  # type: ignore[method-assign]
+    service.embed_missing()  # must not raise
+    assert db_session.scalar(select(func.count()).select_from(TitleEmbedding)) == 1
+
+
 def test_embed_missing_respects_limit(db_session: Session) -> None:
     for n in range(5):
         _title(db_session, tmdb_id=n, title=f"Film {n}")
