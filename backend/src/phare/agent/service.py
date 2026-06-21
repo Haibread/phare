@@ -138,6 +138,7 @@ class ChatService:
             TMDBMetadataProvider(
                 api_key=settings.tmdb_api_key,
                 base_url=settings.tmdb_base_url,
+                language=self.recommender.language,
                 cache_ttl=settings.tmdb_cache_ttl_seconds,
             )
             if settings.tmdb_api_key

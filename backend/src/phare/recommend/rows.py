@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Float, cast, func, select
 from sqlalchemy.orm import Session
 
+from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import EventType, Title, TitleKind, WatchEvent
 from phare.recommend.schema import Recommendation, Row
 
@@ -70,7 +71,13 @@ def _rec(
     )
 
 
-def watch_again_row(session: Session, profile_id: uuid.UUID, *, limit: int = 12) -> Row:
+def watch_again_row(
+    session: Session,
+    profile_id: uuid.UUID,
+    *,
+    limit: int = 12,
+    language: Language = DEFAULT_LANGUAGE,
+) -> Row:
     """Titles the profile clearly liked — highest rating / liked / rewatched, deduped by title."""
     best_rating = func.max(cast(WatchEvent.rating, Float))
     rows = session.execute(
@@ -96,14 +103,20 @@ def watch_again_row(session: Session, profile_id: uuid.UUID, *, limit: int = 12)
             title,
             score=float(rating) if rating is not None else 0.0,
             confidence=min((float(rating) / 10.0) if rating is not None else 0.6, 1.0),
-            explanation="You rated this highly — worth another night.",
+            explanation=translate(language, "explain.watchAgain"),
         )
         for title, rating in rows
     ]
-    return Row(key="watch_again", title="Watch again", items=items)
+    return Row(key="watch_again", title=translate(language, "row.watchAgain"), items=items)
 
 
-def popular_row(session: Session, profile_id: uuid.UUID, *, limit: int = 12) -> Row:
+def popular_row(
+    session: Session,
+    profile_id: uuid.UUID,
+    *,
+    limit: int = 12,
+    language: Language = DEFAULT_LANGUAGE,
+) -> Row:
     """Global popularity over the catalog, excluding what the profile has already seen."""
     watched = (
         select(WatchEvent.title_id).where(WatchEvent.profile_id == profile_id).scalar_subquery()
@@ -116,14 +129,23 @@ def popular_row(session: Session, profile_id: uuid.UUID, *, limit: int = 12) -> 
     ).all()
     items = [
         _rec(
-            title, score=title.popularity or 0.0, confidence=None, explanation="Popular right now."
+            title,
+            score=title.popularity or 0.0,
+            confidence=None,
+            explanation=translate(language, "explain.popular"),
         )
         for title in rows
     ]
-    return Row(key="popular", title="Popular", items=items)
+    return Row(key="popular", title=translate(language, "row.popular"), items=items)
 
 
-def continue_watching_row(session: Session, profile_id: uuid.UUID, *, limit: int = 12) -> Row:
+def continue_watching_row(
+    session: Session,
+    profile_id: uuid.UUID,
+    *,
+    limit: int = 12,
+    language: Language = DEFAULT_LANGUAGE,
+) -> Row:
     """Shows the profile is partway through (has episode-level history for), most recent first."""
     last_activity = func.max(WatchEvent.occurred_at)
     rows = session.execute(
@@ -140,7 +162,14 @@ def continue_watching_row(session: Session, profile_id: uuid.UUID, *, limit: int
         .limit(limit)
     ).all()
     items = [
-        _rec(title, score=1.0, confidence=None, explanation="Pick up where you left off.")
+        _rec(
+            title,
+            score=1.0,
+            confidence=None,
+            explanation=translate(language, "explain.continueWatching"),
+        )
         for title, _ in rows
     ]
-    return Row(key="continue_watching", title="Continue watching", items=items)
+    return Row(
+        key="continue_watching", title=translate(language, "row.continueWatching"), items=items
+    )

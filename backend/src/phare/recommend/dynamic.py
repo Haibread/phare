@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import ROW_KEY_MAX_LEN
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
@@ -46,14 +47,16 @@ class Theme(BaseModel):
     swing_slots: int = 1
 
 
-# Seasonal lens by month (Northern-hemisphere calendar; a reasonable default for v1).
-_SEASONAL: dict[int, tuple[str, list[str]]] = {
-    2: ("February romance", ["Romance"]),
-    6: ("Summer blockbusters", ["Action", "Adventure"]),
-    7: ("Summer blockbusters", ["Action", "Adventure"]),
-    8: ("Summer blockbusters", ["Action", "Adventure"]),
-    10: ("Spooky season", ["Horror"]),
-    12: ("Holiday viewing", ["Family", "Fantasy"]),
+# Seasonal lens by month (Northern-hemisphere calendar; a reasonable default for v1). Each entry is
+# (stable row key, catalog message key, genres) — the key stays language-independent so logs/dedup
+# don't fork per language, while the displayed title is localised.
+_SEASONAL: dict[int, tuple[str, str, list[str]]] = {
+    2: ("february-romance", "theme.februaryRomance", ["Romance"]),
+    6: ("summer-blockbusters", "theme.summerBlockbusters", ["Action", "Adventure"]),
+    7: ("summer-blockbusters", "theme.summerBlockbusters", ["Action", "Adventure"]),
+    8: ("summer-blockbusters", "theme.summerBlockbusters", ["Action", "Adventure"]),
+    10: ("spooky-season", "theme.spookySeason", ["Horror"]),
+    12: ("holiday-viewing", "theme.holidayViewing", ["Family", "Fantasy"]),
 }
 
 
@@ -79,17 +82,31 @@ def _top_affinity_genre(taste: Mapping[str, Any]) -> str | None:
     return max(positive, key=positive.get) if positive else None  # type: ignore[arg-type]
 
 
-def _fallback_themes(taste: Mapping[str, Any], now: datetime) -> list[Theme]:
+def _fallback_themes(
+    taste: Mapping[str, Any], now: datetime, language: Language = DEFAULT_LANGUAGE
+) -> list[Theme]:
     themes: list[Theme] = []
     if seasonal := _SEASONAL.get(now.month):
-        title, genres = seasonal
-        themes.append(Theme(key=_slug(title), title=title, include_genres=genres))
+        key, message_key, genres = seasonal
+        themes.append(
+            Theme(key=_slug(key), title=translate(language, message_key), include_genres=genres)
+        )
     if (genre := _top_affinity_genre(taste)) is not None:
         themes.append(
-            Theme(key=_slug(f"more {genre}"), title=f"More {genre} for you", include_genres=[genre])
+            Theme(
+                key=_slug(f"more {genre}"),
+                title=translate(language, "theme.moreGenre", genre=genre),
+                include_genres=[genre],
+            )
         )
     # Always reserve a discovery row — swing-heavy, no genre lens.
-    themes.append(Theme(key="dyn:something-different", title="Something different", swing_slots=3))
+    themes.append(
+        Theme(
+            key="dyn:something-different",
+            title=translate(language, "theme.somethingDifferent"),
+            swing_slots=3,
+        )
+    )
     # Dedup by key, keep at most three.
     seen: set[str] = set()
     unique = [t for t in themes if not (t.key in seen or seen.add(t.key))]
@@ -106,10 +123,15 @@ Avoid: {avoid}
 """
 
 
-def propose_themes(taste: Mapping[str, Any], now: datetime, llm: LLMProvider | None) -> list[Theme]:
+def propose_themes(
+    taste: Mapping[str, Any],
+    now: datetime,
+    llm: LLMProvider | None,
+    language: Language = DEFAULT_LANGUAGE,
+) -> list[Theme]:
     """LLM-picked themes when available, else the deterministic calendar+taste fallback."""
     if llm is None:
-        return _fallback_themes(taste, now)
+        return _fallback_themes(taste, now, language)
     prompt = _LLM_PROMPT.format(
         date=now.date().isoformat(),
         summary=taste.get("summary") or "(unknown)",
@@ -129,10 +151,10 @@ def propose_themes(taste: Mapping[str, Any], now: datetime, llm: LLMProvider | N
             for item in parsed
             if item.get("title")
         ]
-        return themes[:3] if themes else _fallback_themes(taste, now)
+        return themes[:3] if themes else _fallback_themes(taste, now, language)
     except Exception:  # noqa: BLE001 - never let a flaky LLM kill the row set
         logger.warning("recommend.dynamic_llm_failed; using fallback themes")
-        return _fallback_themes(taste, now)
+        return _fallback_themes(taste, now, language)
 
 
 def _genre_filter(genres: Sequence[str]):
@@ -159,9 +181,12 @@ def dynamic_rows(
     service.ensure_embeddings()
     taste = service.load_taste(profile_id)
     when = now or datetime.now(UTC)
-    # Stable for the day per taste — see _THEME_CACHE. Stamps the recurring LLM theme call out.
-    theme_key = (_taste_fingerprint(taste), when.date().isoformat())
-    themes = _THEME_CACHE.get_or_set(theme_key, lambda: propose_themes(taste, when, llm))
+    # Stable for the day per taste + language — see _THEME_CACHE. Stamps the recurring LLM theme
+    # call out; the language is in the key so an EN render can't serve FR its cached themes.
+    theme_key = (_taste_fingerprint(taste), when.date().isoformat(), service.language)
+    themes = _THEME_CACHE.get_or_set(
+        theme_key, lambda: propose_themes(taste, when, llm, service.language)
+    )
 
     # One bounded explainer pooled across the themed rows — same discipline as the static home
     # rows. Without it each theme's recommend() would build its own *unbounded* explainer and fan

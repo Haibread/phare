@@ -19,6 +19,7 @@ from phare.agent.tools import undo_action
 from phare.api.deps import (
     Embedder,
     get_embedder,
+    get_language,
     get_optional_agent_llm,
     get_optional_chat_llm,
 )
@@ -32,6 +33,7 @@ from phare.api.schemas import (
     UndoRequest,
     UndoResponse,
 )
+from phare.core.i18n import Language
 from phare.db.base import get_session
 from phare.db.models import Title
 from phare.providers.types import LLMProvider
@@ -49,10 +51,11 @@ def chat(
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> ChatReplyResponse:
     require_profile(session, profile_id)
     # Explanations (high volume) use the workhorse model; the conversational agent uses agent_llm.
-    recommender = build_recommender(session, embedder, chat_llm)
+    recommender = build_recommender(session, embedder, chat_llm, language)
     reply = ChatService(recommender, agent_llm).respond(profile_id, body.message)
     session.commit()
     return ChatReplyResponse(
@@ -112,6 +115,7 @@ def chat_stream(
     embedder: Annotated[Embedder, Depends(get_embedder)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     agent_llm: Annotated[LLMProvider | None, Depends(get_optional_agent_llm)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> StreamingResponse:
     """The chat turn as Server-Sent Events, surfacing each step the moment it's ready so the screen
     is never blank: a ``status`` event right away (an instant keyword-based acknowledgement, while
@@ -119,7 +123,7 @@ def chat_stream(
     ``status`` while the reply is composed, the reply itself as ``delta`` chunks, then ``done``.
     The DB work (incl. the commit) happens inside the generator; the streamed reply is read-only."""
     require_profile(session, profile_id)
-    recommender = build_recommender(session, embedder, chat_llm)
+    recommender = build_recommender(session, embedder, chat_llm, language)
     service = ChatService(recommender, agent_llm)
 
     def events() -> Iterator[str]:

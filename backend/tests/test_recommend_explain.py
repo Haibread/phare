@@ -51,6 +51,15 @@ def test_swing_explanation_frames_it_as_a_stretch() -> None:
     assert "discovery" in out.explanation.lower() or "stretch" in out.explanation.lower()
 
 
+def test_template_is_localised_to_french() -> None:
+    taste = {"affinities": {"Science Fiction": 0.9}}
+    [out] = explain([_rec()], taste, llm=None, language="fr")
+    assert out.explanation is not None
+    assert out.explanation.startswith("Film")  # localised kind, not "A ... movie"
+    assert "votre goût pour Science Fiction" in out.explanation  # localised affinity clause
+    assert "2016" in out.explanation  # year still interpolated
+
+
 def test_llm_used_when_available() -> None:
     llm = FakeLLMProvider(completion="A moody sci-fi that matches your taste.")
     [out] = explain([_rec()], {"summary": "x"}, llm=llm)

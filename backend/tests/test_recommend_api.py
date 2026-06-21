@@ -68,6 +68,24 @@ def test_full_recommendations_journey(db_session: Session) -> None:
     assert "isSwing" in items[0]
 
 
+def test_recommendations_localise_row_titles_via_accept_language(db_session: Session) -> None:
+    client = _client(db_session)
+    profile_id = _profile_with_data(client)
+
+    english = client.get(f"/profiles/{profile_id}/recommendations").json()["rows"]
+    french = client.get(
+        f"/profiles/{profile_id}/recommendations", headers={"Accept-Language": "fr"}
+    ).json()["rows"]
+
+    en_titles = {row["key"]: row["title"] for row in english}
+    fr_titles = {row["key"]: row["title"] for row in french}
+    assert en_titles["you_might_like"] == "You might like"
+    assert fr_titles["you_might_like"] == "Pourrait vous plaire"
+    # Offline path: explanations are templated, so they localise too.
+    fr_items = next(row["items"] for row in french if row["key"] == "you_might_like")
+    assert all(item["explanation"] for item in fr_items)
+
+
 def test_recommendations_404_for_unknown_profile(db_session: Session) -> None:
     client = _client(db_session)
     missing = "00000000-0000-0000-0000-000000000000"
