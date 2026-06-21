@@ -79,7 +79,11 @@ class TMDBMetadataProvider:
         return response.json()
 
     def _get(self, path: str, **params: str) -> dict[str, Any]:
-        # Cache key excludes the api_key so it stays stable; reads are idempotent.
+        return self._get_params(path, params)
+
+    def _get_params(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+        # Cache key excludes the api_key so it stays stable; reads are idempotent. Takes a dict so
+        # callers can pass TMDB's dotted params (e.g. ``vote_count.gte``) that aren't kwarg names.
         key = (path, tuple(sorted(params.items())))
         return self._cache.get_or_set(key, lambda: self._fetch(path, params))
 
@@ -104,6 +108,44 @@ class TMDBMetadataProvider:
             if tmdb_id is None:
                 continue
             meta = self.get_title(tmdb_id, kind)
+            if meta is not None:
+                out.append(meta)
+        return out
+
+    def genres(self, kind: TitleKind) -> dict[int, str]:
+        """TMDB's genre id -> name map for a kind (cached). Used both to resolve ``discover``
+        results and to enumerate the genres a broad catalog seed sweeps over."""
+        path = "/genre/movie/list" if kind is TitleKind.movie else "/genre/tv/list"
+        data = self._get(path)
+        return {g["id"]: g["name"] for g in data.get("genres", []) if g.get("id") and g.get("name")}
+
+    def discover(
+        self,
+        kind: TitleKind,
+        *,
+        genre_id: int | None = None,
+        min_vote_count: int = 0,
+        sort_by: str = "vote_count.desc",
+        page: int = 1,
+    ) -> list[TitleMetadata]:
+        """Page TMDB's discover endpoint for a broad catalog seed.
+
+        Thin parse (genres resolved from ids, but no keywords/runtime — same depth as ``search``),
+        so seeding tens of thousands of titles avoids the per-title ``get_title`` fan-out
+        ``popular`` does. Sorting by vote count with a floor surfaces the well-known-but-not-
+        blockbuster long tail rather than only the popular front page.
+        """
+        path = "/discover/movie" if kind is TitleKind.movie else "/discover/tv"
+        params = {"page": str(page), "sort_by": sort_by, "include_adult": "false"}
+        if min_vote_count > 0:
+            params["vote_count.gte"] = str(min_vote_count)
+        if genre_id is not None:
+            params["with_genres"] = str(genre_id)
+        data = self._get_params(path, params)
+        genre_map = self.genres(kind)
+        out: list[TitleMetadata] = []
+        for result in data.get("results", []):
+            meta = self._parse_discover(result, kind, genre_map)
             if meta is not None:
                 out.append(meta)
         return out
@@ -141,6 +183,33 @@ class TMDBMetadataProvider:
             year=year,
             overview=result.get("overview"),
             poster_path=result.get("poster_path"),
+            popularity=result.get("popularity"),
+        )
+
+    @staticmethod
+    def _parse_discover(
+        result: dict[str, Any], kind: TitleKind, genre_map: dict[int, str]
+    ) -> TitleMetadata | None:
+        tmdb_id = result.get("id")
+        if tmdb_id is None:
+            return None
+        if kind is TitleKind.movie:
+            title = result.get("title") or result.get("original_title") or ""
+            year = _year(result.get("release_date"))
+        else:
+            title = result.get("name") or result.get("original_name") or ""
+            year = _year(result.get("first_air_date"))
+        if not title:
+            return None
+        genres = [genre_map[g] for g in result.get("genre_ids", []) if g in genre_map]
+        return TitleMetadata(
+            kind=kind,
+            tmdb_id=tmdb_id,
+            title=title,
+            year=year,
+            overview=result.get("overview"),
+            poster_path=result.get("poster_path"),
+            genres=genres,
             popularity=result.get("popularity"),
         )
 

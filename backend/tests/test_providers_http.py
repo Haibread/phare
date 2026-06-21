@@ -80,6 +80,39 @@ def test_tmdb_get_movie() -> None:
     assert meta.poster_path == "/dune.jpg"
 
 
+def test_tmdb_discover_resolves_genres_and_passes_filters() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/genre/movie/list":
+            return httpx.Response(200, json={"genres": [{"id": 28, "name": "Action"}]})
+        assert request.url.path == "/discover/movie"
+        params = request.url.params
+        assert params["with_genres"] == "28"
+        assert params["vote_count.gte"] == "100"
+        assert params["sort_by"] == "vote_count.desc"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": 13183,
+                        "title": "Equilibrium",
+                        "release_date": "2002-12-06",
+                        "overview": "Emotion is a crime.",
+                        "genre_ids": [28, 999],  # 999 is unknown -> dropped
+                        "popularity": 21.0,
+                    }
+                ]
+            },
+        )
+
+    metas = _tmdb(handler).discover(TitleKind.movie, genre_id=28, min_vote_count=100)
+
+    assert len(metas) == 1
+    assert metas[0].title == "Equilibrium"
+    assert metas[0].year == 2002
+    assert metas[0].genres == ["Action"]  # resolved id->name, unknown id ignored
+
+
 def test_tmdb_search_movies_and_shows() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/search/movie":

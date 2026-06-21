@@ -34,6 +34,21 @@ class CatalogSearchSource(Protocol):
     def search(self, query: str, *, limit: int = ...) -> list[TitleMetadata]: ...
 
 
+class CatalogDiscoverSource(Protocol):
+    """A provider that can enumerate genres and page a discover endpoint (e.g. TMDB)."""
+
+    def genres(self, kind: TitleKind) -> dict[int, str]: ...
+
+    def discover(
+        self,
+        kind: TitleKind,
+        *,
+        genre_id: int | None = ...,
+        min_vote_count: int = ...,
+        page: int = ...,
+    ) -> list[TitleMetadata]: ...
+
+
 def search_titles(
     session: Session,
     query: str,
@@ -124,3 +139,44 @@ def import_from_tmdb(
         for page in range(1, pages + 1):
             metas.extend(metadata.popular(kind, page))
     return upsert_titles(session, metas)
+
+
+def broad_import_from_tmdb(
+    session: Session,
+    source: CatalogDiscoverSource,
+    *,
+    kinds: Sequence[TitleKind] = (TitleKind.movie, TitleKind.show),
+    pages_per_genre: int = 20,
+    min_vote_count: int = 50,
+) -> int:
+    """Seed a *broad* catalog by paging TMDB's discover endpoint per genre, far past the popular
+    front page — so similarity search can surface the lesser-known long tail (a Matrix fan's
+    Equilibrium), not just blockbusters. Returns count created.
+
+    Sorted by vote count with a floor (``min_vote_count``) for quality; dedupes across genres (a
+    title carries several) and drops titles with no overview, since that's the embedding input.
+    Stops a genre early once discover runs dry rather than walking all ``pages_per_genre``.
+    """
+    by_tmdb_id: dict[int, TitleMetadata] = {}
+    for kind in kinds:
+        for genre_id in source.genres(kind):
+            for page in range(1, pages_per_genre + 1):
+                metas = source.discover(
+                    kind, genre_id=genre_id, min_vote_count=min_vote_count, page=page
+                )
+                if not metas:
+                    break  # past the last page of results for this genre
+                for meta in metas:
+                    if meta.tmdb_id is None or not (meta.overview or "").strip():
+                        continue
+                    by_tmdb_id.setdefault(meta.tmdb_id, meta)
+    created = upsert_titles(session, list(by_tmdb_id.values()))
+    logger.info(
+        "catalog.broad_import",
+        extra={
+            "created_count": created,
+            "unique_count": len(by_tmdb_id),
+            "min_vote_count": min_vote_count,
+        },
+    )
+    return created

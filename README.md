@@ -22,8 +22,9 @@ snapshot of what's built is in [`docs/status.md`](docs/status.md).
 - **Runs fully offline** — with no `LLM_API_KEY`, a local hash embedder powers retrieval and
   explanations/chat fall back to deterministic templates, so the whole pipeline works (and is
   tested) with zero credentials.
-- **Sources** — Trakt, Plex, and Jellyfin (your own history only); TMDB for metadata + a popular-
-  titles catalog import. A built-in **sample catalog** lets you try it with no accounts.
+- **Sources** — Trakt, Plex, and Jellyfin (your own history only); TMDB for metadata + a catalog
+  import (`phare import-catalog --scope broad` seeds the lesser-known long tail, not just
+  blockbusters). A built-in **sample catalog** lets you try it with no accounts.
 - **Opt-in auth** — set `AUTH_PASSWORD` to gate the instance; per-profile source tokens are
   encrypted at rest. Unset = open (single-user dev posture).
 - **Evaluation** — persona guardrails + anti-degeneracy metrics (`phare evaluate`), gating CI.
