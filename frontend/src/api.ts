@@ -5,6 +5,17 @@ import { logger } from "./logger";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
+/** An HTTP error from the backend, carrying the status so callers can distinguish a terminal
+ * rejection (4xx) from a transient blip worth retrying. Network/parse failures stay plain `Error`. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, detail: string) {
+    super(detail);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export const profileSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -300,7 +311,7 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
       // non-JSON error body; keep the status text
     }
     logger.warn("api.error", { url, status: response.status, detail });
-    throw new Error(detail);
+    throw new ApiError(response.status, detail);
   }
   logger.debug("api.ok", { url, status: response.status });
   // 204 No Content (e.g. DELETE) has no body to parse — validate against null.

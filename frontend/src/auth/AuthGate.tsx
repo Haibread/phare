@@ -53,9 +53,11 @@ export function AuthGate({
       ? t("plexExpired")
       : plex.status === "timeout"
         ? t("plexTimeout")
-        : plex.status === "error"
-          ? t("plexFailed")
-          : null;
+        : plex.status === "denied"
+          ? (plex.error ?? t("plexFailed"))
+          : plex.status === "error"
+            ? t("plexFailed")
+            : null;
 
   return (
     <main className={styles.gate} data-testid={needsSetup ? "setup-gate" : "login-gate"}>
