@@ -1,0 +1,9 @@
+{
+  "loading": "Chargement des recommandations…",
+  "askChip": "Demandez une ambiance à Phare…",
+  "empty": "Aucune recommandation pour l'instant — chargez des données d'exemple ou connectez une source.",
+  "todaysPicks": "Les choix du jour",
+  "hero": {
+    "topPick": "Le choix de la soirée"
+  }
+}

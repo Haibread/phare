@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
@@ -18,6 +19,7 @@ export function TitleDetailSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
+  const { t } = useTranslation("title");
   const profileId = useProfileId();
   const detail = useTitleDetail(item.titleId, open);
   const [streamedWhy, setStreamedWhy] = useState("");
@@ -71,19 +73,19 @@ export function TitleDetailSheet({
           {meta && <p className={`muted ${styles.detailMeta}`}>{meta}</p>}
           {why && (
             <p className={styles.detailWhy} data-testid="detail-why">
-              <span className={styles.detailLabel}>Why this</span>
+              <span className={styles.detailLabel}>{t("detail.whyThis")}</span>
               {why}
               {whyStreaming && <span className={styles.whyCaret} aria-hidden="true" />}
             </p>
           )}
           <div className={styles.detailSynopsis}>
-            <span className={styles.detailLabel}>Synopsis</span>
+            <span className={styles.detailLabel}>{t("detail.synopsis")}</span>
             {detail.isLoading ? (
-              <span className="muted">Loading…</span>
+              <span className="muted">{t("detail.loading")}</span>
             ) : detail.data?.overview ? (
               <p style={{ margin: 0 }}>{detail.data.overview}</p>
             ) : (
-              <span className="muted">No synopsis available.</span>
+              <span className="muted">{t("detail.noSynopsis")}</span>
             )}
           </div>
           {(detail.data?.tmdbUrl || detail.data?.imdbUrl) && (

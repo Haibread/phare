@@ -6,6 +6,12 @@
   padding: var(--sp-3) var(--sp-4);
 }
 
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
 .searchLink {
   display: inline-flex;
   align-items: center;

@@ -1,0 +1,17 @@
+{
+  "detail": {
+    "whyThis": "Why this",
+    "synopsis": "Synopsis",
+    "loading": "Loading…",
+    "noSynopsis": "No synopsis available."
+  },
+  "availability": {
+    "available": "Available",
+    "queued": "Queued",
+    "requesting": "Requesting…",
+    "request": "Request"
+  },
+  "badge": {
+    "swing": "swing"
+  }
+}

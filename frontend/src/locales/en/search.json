@@ -1,0 +1,8 @@
+{
+  "heading": "Search",
+  "inputLabel": "Search movies and shows",
+  "placeholder": "Search movies & shows…",
+  "prompt": "Type to find a title — search your library and, if TMDB is connected, anything to request.",
+  "searching": "Searching…",
+  "noMatches": "No matches for \"{{query}}\"."
+}

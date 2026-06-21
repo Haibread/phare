@@ -25,6 +25,9 @@ snapshot of what's built is in [`docs/status.md`](docs/status.md).
 - **Sources** — Trakt, Plex, and Jellyfin (your own history only); TMDB for metadata + a catalog
   import (`phare import-catalog --scope broad` seeds the lesser-known long tail, not just
   blockbusters). A built-in **sample catalog** lets you try it with no accounts.
+- **Bilingual UI** — English + French, defaulting to the browser language, with a switcher in the
+  top-right header (choice saved per browser). The UI also sends its language via `Accept-Language`,
+  so backend-generated text (TMDB metadata, LLM explanations/chat) can localise too (in progress).
 - **Opt-in auth** — set `AUTH_PASSWORD` to gate the instance; per-profile source tokens are
   encrypted at rest. Unset = open (single-user dev posture).
 - **Evaluation** — persona guardrails + anti-degeneracy metrics (`phare evaluate`), gating CI.

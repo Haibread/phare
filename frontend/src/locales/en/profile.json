@@ -1,0 +1,51 @@
+{
+  "title": "Profile",
+  "taste": {
+    "heading": "Your taste",
+    "updatesAuto": "updates automatically",
+    "loading": "Loading taste…",
+    "drawnTo": "Drawn to",
+    "avoiding": "Avoiding",
+    "empty": "Your taste profile builds automatically from your watch history, once an LLM is configured."
+  },
+  "sources": {
+    "heading": "Connected sources",
+    "add": "Add",
+    "loading": "Loading sources…",
+    "connected": "connected",
+    "synced": "synced {{when}}",
+    "empty": "No sources connected yet — add one to keep your taste fresh.",
+    "conversionPending": "Conversion (top-{{topK}}, {{withinDays}}d): not enough history yet.",
+    "conversion": "Conversion: {{rate}}% of {{shown}} shown were watched."
+  },
+  "plans": {
+    "heading": "Watch plans",
+    "loading": "Loading plans…",
+    "toWatch": "to watch",
+    "empty": "Tell the chat agent \"I'll watch X\" and it'll remember to ask how it went."
+  },
+  "memory": {
+    "heading": "Memory",
+    "subtitle": "what the agent remembers",
+    "inputLabel": "Add a memory note",
+    "inputPlaceholder": "e.g. no gore, watching with my kid this month…",
+    "remember": "Remember",
+    "forget": "Forget: {{text}}",
+    "empty": "Nothing yet — notes you add (or tell the chat) steer your recommendations."
+  },
+  "history": {
+    "heading": "History",
+    "loading": "Loading history…",
+    "empty": "No history yet.",
+    "columns": {
+      "title": "Title",
+      "event": "Event",
+      "rating": "Rating",
+      "when": "When"
+    }
+  },
+  "chips": {
+    "add": "+ add",
+    "remove": "Remove {{value}}"
+  }
+}

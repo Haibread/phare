@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { api } from "../api";
 import { Sheet } from "../components/Sheet";
 import { keys } from "../lib/queries";
@@ -23,6 +24,7 @@ export function SourcePicker({
   onOpenChange: (open: boolean) => void;
   onConnected: () => void;
 }): React.JSX.Element {
+  const { t } = useTranslation("onboarding");
   const qc = useQueryClient();
   const [active, setActive] = useState<Active>(null);
   const [busy, setBusy] = useState(false);
@@ -86,7 +88,7 @@ export function SourcePicker({
           return;
         }
         if (poll.status === "expired" || poll.status === "denied") {
-          setError(`Trakt connection ${poll.status}.`);
+          setError(t("sources.trakt.connectionFailed", { status: poll.status }));
           break;
         }
       }
@@ -117,10 +119,10 @@ export function SourcePicker({
     <Sheet
       open={open}
       onOpenChange={onOpenChange}
-      title="Connect a source"
-      description="Phare reads your own watch history — never anyone else's."
+      title={t("sources.title")}
+      description={t("sources.description")}
     >
-      <div className={styles.group}>Watch history</div>
+      <div className={styles.group}>{t("sources.groups.watchHistory")}</div>
 
       <button
         type="button"
@@ -131,16 +133,24 @@ export function SourcePicker({
       >
         <div className={styles.sourceBody}>
           <div className={styles.sourceName}>Trakt</div>
-          <div className={styles.sourceHint}>Ratings, history &amp; watchlist</div>
+          <div className={styles.sourceHint}>{t("sources.trakt.hint")}</div>
         </div>
       </button>
       {active === "trakt" && trakt && (
         <p className={styles.notice} data-testid="trakt-connect-notice">
-          Go to{" "}
-          <a href={trakt.verificationUrl} target="_blank" rel="noreferrer">
-            {trakt.verificationUrl}
-          </a>{" "}
-          and enter <strong>{trakt.userCode}</strong>. Waiting for authorization…
+          <Trans
+            t={t}
+            i18nKey="sources.trakt.notice"
+            values={{ url: trakt.verificationUrl, code: trakt.userCode }}
+            components={{
+              lnk: (
+                <a href={trakt.verificationUrl} target="_blank" rel="noreferrer">
+                  {trakt.verificationUrl}
+                </a>
+              ),
+              b: <strong />,
+            }}
+          />
         </p>
       )}
 
@@ -153,20 +163,20 @@ export function SourcePicker({
       >
         <div className={styles.sourceBody}>
           <div className={styles.sourceName}>Plex</div>
-          <div className={styles.sourceHint}>Your server's watch history</div>
+          <div className={styles.sourceHint}>{t("sources.plex.hint")}</div>
         </div>
       </button>
       {active === "plex" && (
         <div className={styles.form}>
           <input
             className="field"
-            placeholder="Server URL (https://…)"
+            placeholder={t("sources.form.serverUrl")}
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
           />
           <input
             className="field"
-            placeholder="Plex token"
+            placeholder={t("sources.plex.token")}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
@@ -176,7 +186,7 @@ export function SourcePicker({
             disabled={busy || baseUrl === "" || token === ""}
             onClick={() => submit(() => api.syncPlex(profileId, baseUrl, token))}
           >
-            Connect Plex
+            {t("sources.plex.connect")}
           </button>
         </div>
       )}
@@ -190,26 +200,26 @@ export function SourcePicker({
       >
         <div className={styles.sourceBody}>
           <div className={styles.sourceName}>Jellyfin</div>
-          <div className={styles.sourceHint}>Your server's watch history</div>
+          <div className={styles.sourceHint}>{t("sources.jellyfin.hint")}</div>
         </div>
       </button>
       {active === "jellyfin" && (
         <div className={styles.form}>
           <input
             className="field"
-            placeholder="Server URL (https://…)"
+            placeholder={t("sources.form.serverUrl")}
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
           />
           <input
             className="field"
-            placeholder="User ID"
+            placeholder={t("sources.form.userId")}
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
           />
           <input
             className="field"
-            placeholder="API key"
+            placeholder={t("sources.form.apiKey")}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
@@ -219,12 +229,12 @@ export function SourcePicker({
             disabled={busy || baseUrl === "" || userId === "" || token === ""}
             onClick={() => submit(() => api.syncJellyfin(profileId, baseUrl, userId, token))}
           >
-            Connect Jellyfin
+            {t("sources.jellyfin.connect")}
           </button>
         </div>
       )}
 
-      <div className={styles.group}>Requests &amp; availability</div>
+      <div className={styles.group}>{t("sources.groups.requests")}</div>
 
       <button
         type="button"
@@ -235,20 +245,20 @@ export function SourcePicker({
       >
         <div className={styles.sourceBody}>
           <div className={styles.sourceName}>Seerr</div>
-          <div className={styles.sourceHint}>Request picks straight to your library</div>
+          <div className={styles.sourceHint}>{t("sources.seerr.hint")}</div>
         </div>
       </button>
       {active === "seerr" && (
         <div className={styles.form}>
           <input
             className="field"
-            placeholder="Server URL (https://…)"
+            placeholder={t("sources.form.serverUrl")}
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
           />
           <input
             className="field"
-            placeholder="API key"
+            placeholder={t("sources.form.apiKey")}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
@@ -259,7 +269,7 @@ export function SourcePicker({
             disabled={busy || baseUrl === "" || token === ""}
             onClick={() => submit(() => api.connectSeerr(profileId, baseUrl, token))}
           >
-            Connect Seerr
+            {t("sources.seerr.connect")}
           </button>
         </div>
       )}

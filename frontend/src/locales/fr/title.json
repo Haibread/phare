@@ -1,0 +1,17 @@
+{
+  "detail": {
+    "whyThis": "Pourquoi ce titre",
+    "synopsis": "Synopsis",
+    "loading": "Chargement…",
+    "noSynopsis": "Aucun synopsis disponible."
+  },
+  "availability": {
+    "available": "Disponible",
+    "queued": "En file d’attente",
+    "requesting": "Demande en cours…",
+    "request": "Demander"
+  },
+  "badge": {
+    "swing": "audace"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "coldStart": {
+    "title": "Trouvons vos goûts",
+    "lede": "Connectez l'outil où vous suivez déjà ce que vous regardez, et Phare construit votre profil à partir de là.",
+    "connectLibrary": "Connecter votre bibliothèque",
+    "or": "ou",
+    "exploreSample": "Explorer avec des données d'exemple",
+    "loadingSample": "Chargement des données d'exemple…",
+    "sampleHint": "Voyez d'abord comment ça marche — aucun compte requis."
+  },
+  "sources": {
+    "title": "Connecter une source",
+    "description": "Phare lit votre propre historique de visionnage — jamais celui de quelqu'un d'autre.",
+    "groups": {
+      "watchHistory": "Historique de visionnage",
+      "requests": "Demandes et disponibilité"
+    },
+    "form": {
+      "serverUrl": "URL du serveur (https://…)",
+      "userId": "Identifiant utilisateur",
+      "apiKey": "Clé API"
+    },
+    "trakt": {
+      "hint": "Notes, historique et liste à voir",
+      "notice": "Rendez-vous sur <lnk>{{url}}</lnk> et saisissez <b>{{code}}</b>. En attente de l'autorisation…",
+      "connectionFailed": "Connexion Trakt {{status}}."
+    },
+    "plex": {
+      "hint": "L'historique de visionnage de votre serveur",
+      "token": "Jeton Plex",
+      "connect": "Connecter Plex"
+    },
+    "jellyfin": {
+      "hint": "L'historique de visionnage de votre serveur",
+      "connect": "Connecter Jellyfin"
+    },
+    "seerr": {
+      "hint": "Demandez vos suggestions directement dans votre bibliothèque",
+      "connect": "Connecter Seerr"
+    }
+  }
+}

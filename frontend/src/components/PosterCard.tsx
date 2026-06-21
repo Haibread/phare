@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { RecommendationItem } from "../api";
 import { posterTint } from "../lib/poster";
 import { TitleAction } from "./Availability";
@@ -13,6 +14,7 @@ export function PosterCard({
   item: RecommendationItem;
   showFit?: boolean;
 }): React.JSX.Element {
+  const { t } = useTranslation("title");
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const showPoster = item.posterUrl !== null && !imgFailed;
@@ -31,7 +33,7 @@ export function PosterCard({
         >
           {item.isSwing && (
             <span className={styles.swingBadge} data-testid="swing-badge">
-              swing
+              {t("badge.swing")}
             </span>
           )}
           {showPoster ? (

@@ -1,0 +1,8 @@
+{
+  "heading": "Rechercher",
+  "inputLabel": "Rechercher des films et séries",
+  "placeholder": "Rechercher des films et séries…",
+  "prompt": "Saisissez un titre — on cherche dans votre bibliothèque et, si TMDB est connecté, tout ce que vous pouvez demander.",
+  "searching": "Recherche…",
+  "noMatches": "Aucun résultat pour « {{query}} »."
+}

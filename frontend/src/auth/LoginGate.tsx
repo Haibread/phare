@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Brand } from "../components/Brand";
 import styles from "../components/components.module.css";
 
@@ -9,18 +10,19 @@ export function LoginGate({
   onLogin: (password: string) => void;
   error: string | null;
 }): React.JSX.Element {
+  const { t } = useTranslation("auth");
   const [password, setPassword] = useState("");
   return (
     <main className={styles.gate} data-testid="login-gate">
       <Brand size={1.4} />
-      <p className="muted">This instance is protected. Enter the password to continue.</p>
+      <p className="muted">{t("prompt")}</p>
       <div className={styles.gateRow}>
         <input
           type="password"
           className="field"
           data-testid="login-password"
-          aria-label="Password"
-          placeholder="Password"
+          aria-label={t("password")}
+          placeholder={t("password")}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && onLogin(password)}
@@ -32,7 +34,7 @@ export function LoginGate({
           onClick={() => onLogin(password)}
           disabled={password === ""}
         >
-          Log in
+          {t("logIn")}
         </button>
       </div>
       {error !== null && (

@@ -1,0 +1,15 @@
+{
+  "loading": "Chargement…",
+  "error": "Une erreur est survenue : {{message}}",
+  "tryAgain": "Réessayer",
+  "language": {
+    "label": "Langue"
+  },
+  "fit": {
+    "stretch": "Un pari",
+    "worthALook": "À jeter un œil",
+    "strong": "Forte affinité",
+    "worthATry": "À tenter",
+    "longShot": "Peu probable"
+  }
+}
