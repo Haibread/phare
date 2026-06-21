@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from typer.testing import CliRunner
 
 from phare.api.app import create_app
+from phare.api.catalog import ensure_import_allowed
 from phare.catalog.sample import seed_sample_catalog
-from phare.catalog.service import import_from_tmdb, search_titles, upsert_titles
+from phare.catalog.service import (
+    broad_import_from_tmdb,
+    import_from_tmdb,
+    search_titles,
+    upsert_titles,
+)
+from phare.cli import app as cli_app
+from phare.core.config import Settings, get_settings
 from phare.db.base import get_session
 from phare.db.models import Profile, Title, TitleKind
 from phare.providers.types import TitleMetadata
@@ -69,6 +80,55 @@ def test_import_from_tmdb_pulls_each_kind_and_page(db_session: Session) -> None:
     assert (TitleKind.show, 2) in source.calls
 
 
+class _FakeDiscoverSource:
+    """Genres + paged discover results (the ``CatalogDiscoverSource`` protocol)."""
+
+    _GENRES = {
+        TitleKind.movie: {28: "Action", 18: "Drama"},
+        TitleKind.show: {18: "Drama"},
+    }
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[TitleKind, int | None, int]] = []
+
+    def genres(self, kind: TitleKind) -> dict[int, str]:
+        return dict(self._GENRES[kind])
+
+    def discover(
+        self,
+        kind: TitleKind,
+        *,
+        genre_id: int | None = None,
+        min_vote_count: int = 0,
+        page: int = 1,
+    ) -> list[TitleMetadata]:
+        self.calls.append((kind, genre_id, page))
+        if page > 1:
+            return []  # one page of results per genre, then dry
+        if kind is TitleKind.movie:
+            return [
+                # Shared across every movie genre -> must dedupe to one row.
+                TitleMetadata(kind=kind, tmdb_id=7000, title="Shared", overview="o"),
+                TitleMetadata(kind=kind, tmdb_id=8000 + (genre_id or 0), title="M", overview="p"),
+                # No overview -> dropped (empty embedding input).
+                TitleMetadata(kind=kind, tmdb_id=9000 + (genre_id or 0), title="Empty"),
+            ]
+        return [TitleMetadata(kind=kind, tmdb_id=6000, title="Show", overview="s")]
+
+
+def test_broad_import_dedupes_filters_and_stops_when_dry(db_session: Session) -> None:
+    source = _FakeDiscoverSource()
+    created = broad_import_from_tmdb(db_session, source)
+
+    # movie: shared(7000) + M8028 + M8018 ; show: 6000 -> the no-overview rows are dropped.
+    assert created == 4
+    assert db_session.scalar(select(Title).where(Title.tmdb_id == 7000)) is not None
+    assert db_session.scalar(select(Title).where(Title.tmdb_id == 9028)) is None
+    # Walked to the first empty page per genre, not all 20.
+    assert (TitleKind.movie, 28, 2) in source.calls
+    assert (TitleKind.movie, 28, 3) not in source.calls
+
+
 class _FakeSearchSource:
     """Returns canned search matches (the ``CatalogSearchSource`` protocol)."""
 
@@ -109,6 +169,30 @@ def _client(session: Session) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_session] = lambda: session
     return TestClient(app)
+
+
+def test_import_guard_blocks_dev_without_confirm() -> None:
+    with pytest.raises(HTTPException) as exc:
+        ensure_import_allowed(Settings(environment="development"), confirm=False)
+    assert exc.value.status_code == 403
+
+
+def test_import_guard_allows_with_confirm_or_production() -> None:
+    # No raise in either case.
+    ensure_import_allowed(Settings(environment="development"), confirm=True)
+    ensure_import_allowed(Settings(environment="production"), confirm=False)
+
+
+def test_cli_import_refuses_dev_without_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("TMDB_API_KEY", "x")
+    get_settings.cache_clear()
+    try:
+        result = CliRunner().invoke(cli_app, ["import-catalog", "--scope", "broad"])
+        assert result.exit_code == 2
+        assert "Refusing to import" in result.output
+    finally:
+        get_settings.cache_clear()
 
 
 def test_search_endpoint_returns_recommendation_items(db_session: Session) -> None:

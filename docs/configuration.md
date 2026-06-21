@@ -25,7 +25,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `LLM_EMBEDDING_DIM` | `1536` | Vector dimension. Fixed by the DB schema — changing it needs a migration + full re-embed. |
 | `LLM_EMBEDDING_REQUEST_DIMENSIONS` | `false` | Send `LLM_EMBEDDING_DIM` as the `dimensions` request param. Enable for models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed; leave off for models that reject the param. |
 | **Metadata + sources** (live syncs/imports only; not needed for the sample-data path) | | |
-| `TMDB_API_KEY` | _(unset)_ | TMDB metadata + popular-catalog import + poster art. |
+| `TMDB_API_KEY` | _(unset)_ | TMDB metadata + catalog import (popular + broad) + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
 | `TMDB_CACHE_TTL_SECONDS` | `3600` | In-process TTL for cached TMDB metadata/search reads (see [Rate limits & caching](#rate-limits--caching)). `0` disables the cache. |
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
@@ -43,6 +43,43 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `AUTH_PASSWORD` | _(unset)_ | Set to gate the instance. Unset = open (single-user dev posture). |
 | `SECRET_KEY` | falls back to `AUTH_PASSWORD` | Signs bearer tokens **and** derives the source-token encryption key. |
 | `AUTH_TOKEN_TTL_SECONDS` | `2592000` (30 days) | Bearer token lifetime. |
+
+## Seeding the catalog
+
+The recommender ranks over whatever titles are in the catalog — vector similarity can only surface
+a title that's been imported and embedded. There are three ways to fill the pool, from smallest to
+broadest:
+
+| Path | What it adds | How |
+| --- | --- | --- |
+| **Sample catalog** | A small offline demo pool (no TMDB needed) | `POST /catalog/sample` (dev only) |
+| **Popular import** | TMDB's popular front page (blockbusters) | `POST /catalog/import` or `phare import-catalog` |
+| **Broad import** | A deep genre sweep — the lesser-known long tail | `phare import-catalog --scope broad` |
+
+**Broad seed (the recommended real-world seed).** `--scope broad` pages TMDB's *discover* endpoint
+per genre, sorted by vote count with a quality floor (`--min-vote-count`, default 50, so titles with
+a synopsis and real audience get in while micro-obscure noise stays out). This is what lets a Matrix
+fan get *Equilibrium* and not just more blockbusters. At the default depth it pulls **tens of
+thousands** of titles in a few minutes; raise `--pages-per-genre` to go deeper. It uses *discover*
+(one call per ~20 titles) rather than `popular`'s per-title metadata fan-out, so the request count
+stays modest. The command embeds the new titles afterwards by default (`--embed`).
+
+**Guard — won't run in dev by accident.** Both the import endpoint and the CLI refuse to run unless
+`ENVIRONMENT=production`, **or** you explicitly override (`confirm=true` on the endpoint,
+`--confirm` on the CLI). This stops a dev box from fanning out thousands of TMDB requests during a
+casual test. The deep `broad` seed lives only on the CLI: a minutes-long import is a job, not a
+request, so it belongs off the request path.
+
+```bash
+# Deep one-time seed on a production box (imports + embeds):
+phare import-catalog --scope broad
+
+# Same on a dev box, deliberately:
+ENVIRONMENT=production phare import-catalog --scope broad   # or: --confirm
+```
+
+After any import, embeddings are topped up lazily on the read path (bounded) and authoritatively by
+`POST /catalog/embed` — see [Switching on a real model](#switching-on-a-real-model).
 
 ## Offline / no-key behavior
 

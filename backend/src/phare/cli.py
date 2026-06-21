@@ -31,6 +31,65 @@ def migrate() -> None:
     run_migrations()
 
 
+@app.command(name="import-catalog")
+def import_catalog(
+    scope: Annotated[
+        str, typer.Option(help="'popular' (light page top-up) or 'broad' (deep genre sweep)")
+    ] = "popular",
+    pages: Annotated[int, typer.Option(help="popular: pages per kind")] = 1,
+    pages_per_genre: Annotated[int, typer.Option(help="broad: discover pages per genre")] = 20,
+    min_vote_count: Annotated[int, typer.Option(help="broad: TMDB vote-count floor")] = 50,
+    embed: Annotated[bool, typer.Option(help="Embed missing titles after import")] = True,
+    confirm: Annotated[bool, typer.Option(help="Allow running outside production")] = False,
+) -> None:
+    """Import the TMDB catalog into the candidate pool, then embed it.
+
+    'broad' sweeps discover per genre (vote-count sorted) to seed the lesser-known long tail, far
+    past the popular front page — this is the deep one-time seed and can run for minutes.
+
+    Refuses to run unless ENVIRONMENT=production or --confirm is given, so a dev box can't fan out
+    thousands of TMDB requests by accident.
+    """
+    from phare.catalog.service import broad_import_from_tmdb, import_from_tmdb
+    from phare.db.base import get_session_factory
+    from phare.embeddings.service import EmbeddingService
+    from phare.embeddings.version import embedding_model_version, get_embedding_provider
+    from phare.providers.tmdb import TMDBMetadataProvider
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    if scope not in ("popular", "broad"):
+        typer.echo(f"Unknown scope {scope!r} (use 'popular' or 'broad').", err=True)
+        raise typer.Exit(code=2)
+    if not settings.is_production and not confirm:
+        typer.echo("Refusing to import outside production without --confirm.", err=True)
+        raise typer.Exit(code=2)
+    if not settings.tmdb_api_key:
+        typer.echo("TMDB_API_KEY must be set to import.", err=True)
+        raise typer.Exit(code=2)
+
+    provider = TMDBMetadataProvider(
+        api_key=settings.tmdb_api_key,
+        base_url=settings.tmdb_base_url,
+        cache_ttl=settings.tmdb_cache_ttl_seconds,
+    )
+    with get_session_factory()() as session:
+        if scope == "broad":
+            created = broad_import_from_tmdb(
+                session, provider, pages_per_genre=pages_per_genre, min_vote_count=min_vote_count
+            )
+        else:
+            created = import_from_tmdb(session, provider, pages=pages)
+        session.commit()
+        typer.echo(f"Imported {created} new titles.")
+        if embed:
+            embedded = EmbeddingService(
+                session, get_embedding_provider(settings), embedding_model_version(settings)
+            ).embed_missing()
+            session.commit()
+            typer.echo(f"Embedded {embedded} titles.")
+
+
 @app.command()
 def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] = 20) -> None:
     """Run the persona guardrail suite + anti-degeneracy metrics. Exits non-zero on a violation.

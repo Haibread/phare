@@ -110,6 +110,12 @@ class Settings(BaseSettings):
         return self.llm_agent_model or self.llm_chat_model
 
     @property
+    def is_production(self) -> bool:
+        """Whether this is a production deployment. Gates heavy/destructive operations (e.g. the
+        broad catalog import) so a dev box can't fan out thousands of TMDB requests by accident."""
+        return self.environment == "production"
+
+    @property
     def auth_enabled(self) -> bool:
         return bool(self.auth_password)
 

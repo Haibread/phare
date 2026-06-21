@@ -13,7 +13,7 @@ from phare.api.recommend import _poster_url
 from phare.api.schemas import ApiModel, CatalogSummary, EmbedSummary, RecommendationItem
 from phare.catalog.sample import seed_sample_catalog
 from phare.catalog.service import import_from_tmdb, search_titles
-from phare.core.config import get_settings
+from phare.core.config import Settings, get_settings
 from phare.db.base import get_session
 from phare.db.models import Profile, Title
 from phare.embeddings.service import EmbeddingService
@@ -80,15 +80,31 @@ def seed_catalog(session: Annotated[Session, Depends(get_session)]) -> CatalogSu
     return CatalogSummary(created=created)
 
 
+def ensure_import_allowed(settings: Settings, confirm: bool) -> None:
+    """Refuse a TMDB catalog import outside production unless explicitly confirmed, so a dev box
+    can't fan out a large fetch by accident. The deep ``broad`` seed runs from the CLI."""
+    if not settings.is_production and not confirm:
+        raise HTTPException(
+            status_code=403,
+            detail="Catalog import is disabled outside production; pass confirm=true to override.",
+        )
+
+
 @router.post("/catalog/import", response_model=CatalogSummary)
 def import_catalog(
     session: Annotated[Session, Depends(get_session)],
     pages: int = 1,
+    confirm: bool = False,
 ) -> CatalogSummary:
-    """Import TMDB's popular movies + shows into the candidate pool."""
+    """Import TMDB's popular movies + shows into the candidate pool.
+
+    Light, page-bounded top-up. For a broad genre-sweep seed, use ``phare import-catalog
+    --scope broad`` (a longer-running job, better off the request path).
+    """
     settings = get_settings()
     if not settings.tmdb_api_key:
         raise HTTPException(status_code=400, detail="TMDB_API_KEY must be configured to import")
+    ensure_import_allowed(settings, confirm)
     metadata = TMDBMetadataProvider(
         api_key=settings.tmdb_api_key,
         base_url=settings.tmdb_base_url,
