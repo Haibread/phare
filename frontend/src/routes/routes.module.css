@@ -339,3 +339,9 @@
   padding: 0.4rem 0.5rem;
   border-bottom: 1px solid var(--border);
 }
+
+.errorText {
+  color: var(--danger);
+  font-size: 0.82rem;
+  margin-top: var(--sp-2);
+}

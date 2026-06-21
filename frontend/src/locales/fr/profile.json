@@ -6,7 +6,10 @@
     "loading": "Chargement des goûts…",
     "drawnTo": "Attiré par",
     "avoiding": "À éviter",
-    "empty": "Votre profil de goûts se construit automatiquement à partir de votre historique, une fois qu'un LLM est configuré."
+    "empty": "Votre profil de goûts se construit automatiquement à partir de votre historique, une fois qu'un LLM est configuré.",
+    "generate": "Générer maintenant",
+    "generating": "Génération…",
+    "generateError": "Impossible de générer les goûts : {{message}}"
   },
   "sources": {
     "heading": "Sources connectées",
