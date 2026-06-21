@@ -194,6 +194,20 @@ class ChatService:
                 "item_count": len(result.items),
             },
         )
+        # Nothing to present and nothing done (e.g. an empty candidate pool): answer
+        # deterministically instead of spending the agent model. Handed an empty grounded title
+        # list, it tends to free-associate and invent titles from memory — which both breaks "the
+        # LLM never picks from memory" and yields no clickable cards. The template replies honestly.
+        if not result.items and not result.actions:
+            return PreparedTurn(
+                items=result.items,
+                actions=result.actions,
+                intent=result.intent,
+                notes=result.notes,
+                reply_text=_compose_reply_template(result, self.recommender.language),
+                result=result,
+                language=self.recommender.language,
+            )
         return PreparedTurn(
             items=result.items,
             actions=result.actions,

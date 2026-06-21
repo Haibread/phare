@@ -21,7 +21,11 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
   candidate source to titles you've already watched and reserves no discovery swing slot. The
   offline keyword parser detects the same intent.
 - **Reply** is written by the model (natural language), grounded in what the tools actually did —
-  it never invents titles. Falls back to a deterministic template if the model call fails.
+  it never invents titles. Falls back to a deterministic template if the model call fails. When a
+  turn produces **no picks and no actions** (e.g. an empty candidate pool), the model is skipped
+  entirely and that template answers — handed an empty title list the model tends to free-associate
+  and name titles from memory, which both violates "the LLM never picks from memory" and yields no
+  clickable cards.
 - **Offline** (no `LLM_API_KEY`): no planner — the turn falls back to the keyword intent → a single
   `recommend` (read-only), since resolving "I saw <something>" to a catalog title needs the model.
 
