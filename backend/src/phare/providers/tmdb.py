@@ -190,6 +190,7 @@ class TMDBMetadataProvider:
             overview=result.get("overview"),
             poster_path=result.get("poster_path"),
             popularity=result.get("popularity"),
+            vote_count=result.get("vote_count"),
         )
 
     @staticmethod
@@ -217,6 +218,7 @@ class TMDBMetadataProvider:
             poster_path=result.get("poster_path"),
             genres=genres,
             popularity=result.get("popularity"),
+            vote_count=result.get("vote_count"),
         )
 
     def find_by_imdb(self, imdb_id: str) -> ExternalMatch | None:
@@ -246,6 +248,7 @@ class TMDBMetadataProvider:
             genres=TMDBMetadataProvider._genres(data),
             keywords=[k["name"] for k in keywords if k.get("name")],
             popularity=data.get("popularity"),
+            vote_count=data.get("vote_count"),
         )
 
     @staticmethod
@@ -264,4 +267,5 @@ class TMDBMetadataProvider:
             genres=TMDBMetadataProvider._genres(data),
             keywords=[k["name"] for k in keywords if k.get("name")],
             popularity=data.get("popularity"),
+            vote_count=data.get("vote_count"),
         )

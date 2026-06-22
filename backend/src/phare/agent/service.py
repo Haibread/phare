@@ -131,7 +131,7 @@ class ChatService:
             extra_hard_avoids=intent.exclude_genres,
             candidate_filter=intent_filter(intent),
             rewatch=intent.rewatch,
-            swing_slots=0 if intent.rewatch else 1,
+            vote_mix=True,  # chat slates mix by vote count, ordered most-voted-first
         )
         log_chat(self.recommender.session, profile_id, items)
         language = self.recommender.language

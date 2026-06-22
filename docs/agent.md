@@ -20,6 +20,11 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
   comfort rewatch", "something I've seen", "watch again") sets `rewatch=true`, which flips the
   candidate source to titles you've already watched and reserves no discovery swing slot. The
   offline keyword parser detects the same intent.
+- **Chat slate ordering.** Unlike the Browse rows, chat recommendations use a **vote-count mix**
+  instead of reserved swing slots: the slate is composed as ~50% well-known / ~35% lesser-known /
+  ~15% low-vote (TMDB rating count tiers), then ordered most-voted-first. So chat reads as a
+  sensible "best-known first" list with a small discovery tail, rather than a similarity ranking
+  that surfaces obscure trending titles. Vote counts come from the catalog import.
 - **Reply** is written by the model (natural language), grounded in what the tools actually did —
   it never invents titles. Falls back to a deterministic template if the model call fails. When a
   turn produces **no picks and no actions** (e.g. an empty candidate pool), the model is skipped

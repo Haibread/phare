@@ -19,6 +19,7 @@ def _cand(
     genres: list[str] | None = None,
     keywords: list[str] | None = None,
     popularity: float | None = None,
+    vote_count: int | None = None,
 ) -> Candidate:
     return Candidate(
         title_id=uuid.uuid4(),
@@ -29,6 +30,7 @@ def _cand(
         keywords=keywords or [],
         runtime_minutes=120,
         popularity=popularity,
+        vote_count=vote_count,
         overview=None,
         similarity=sim,
     )
@@ -93,3 +95,39 @@ def test_score_components_are_transparent() -> None:
     assert set(components) == {"similarity", "affinity", "popularity_penalty", "score"}
     assert components["similarity"] == 0.5  # sim 0.0 -> normalised 0.5
     assert components["popularity_penalty"] == 0.5  # 40 / cap(80)
+
+
+# --- vote-mix (the chat slate): mix by vote count, ordered most-voted-first ------------------
+
+
+def test_vote_mix_orders_the_slate_by_vote_count() -> None:
+    cands = [
+        _cand(title="obscure", sim=0.9, vote_count=50),
+        _cand(title="megahit", sim=0.1, vote_count=30_000),
+        _cand(title="midsize", sim=0.5, vote_count=900),
+    ]
+    out = rerank(cands, {}, k=3, vote_mix=True)
+    # Despite "obscure" having the best similarity, the slate reads most-voted-first.
+    assert [r.title for r in out] == ["megahit", "midsize", "obscure"]
+
+
+def test_vote_mix_composes_a_mix_not_just_the_most_popular() -> None:
+    # 10 well-known, 10 lesser-known, 10 low-vote candidates; a k=10 slate should pull from all
+    # three tiers (~5 / ~3-4 / ~1-2), not just the top-voted ten.
+    cands = (
+        [_cand(title=f"hit{i}", sim=0.5, vote_count=5_000 + i) for i in range(10)]
+        + [_cand(title=f"mid{i}", sim=0.5, vote_count=800 + i) for i in range(10)]
+        + [_cand(title=f"low{i}", sim=0.5, vote_count=50 + i) for i in range(10)]
+    )
+    out = rerank(cands, {}, k=10, vote_mix=True)
+    titles = [r.title for r in out]
+    assert sum(t.startswith("hit") for t in titles) == 5  # ~50%
+    assert sum(t.startswith("mid") for t in titles) == 4  # ~35% (largest-remainder rounding)
+    assert sum(t.startswith("low") for t in titles) == 1  # ~15%
+
+
+def test_vote_mix_backfills_when_a_tier_is_empty() -> None:
+    # No well-known titles at all (thin catalog): the slate still fills to k from what's available.
+    cands = [_cand(title=f"low{i}", sim=0.5, vote_count=20 + i) for i in range(6)]
+    out = rerank(cands, {}, k=5, vote_mix=True)
+    assert len(out) == 5
