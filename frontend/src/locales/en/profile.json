@@ -8,6 +8,7 @@
     "avoiding": "Avoiding",
     "empty": "Your taste profile builds automatically from your watch history, once an LLM is configured.",
     "generate": "Generate now",
+    "regenerate": "Regenerate",
     "generating": "Generating…",
     "generateError": "Couldn't generate taste: {{message}}"
   },

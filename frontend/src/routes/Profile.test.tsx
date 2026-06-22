@@ -70,4 +70,21 @@ describe("Profile taste generation", () => {
     const error = await screen.findByTestId("taste-generate-error");
     expect(error).toHaveTextContent("LLM is not configured (set LLM_API_KEY)");
   });
+
+  it("offers Regenerate even when a taste profile already exists", async () => {
+    // The bug: the button only showed in the empty state, so a user with taste had no way to
+    // recompute it. It must always be available — labelled "Regenerate" once taste exists.
+    mocked.getTaste.mockResolvedValueOnce({
+      summary: "Loves cerebral sci-fi and tense thrillers",
+      structured: { likes: ["Science Fiction"], hard_avoids: [] },
+      confidence: 0.7,
+      userOverrides: {},
+    } as never);
+
+    renderProfile();
+
+    expect(await screen.findByTestId("taste-summary")).toBeInTheDocument();
+    const button = await screen.findByTestId("taste-generate");
+    expect(button).toHaveTextContent("Regenerate");
+  });
 });
