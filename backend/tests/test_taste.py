@@ -126,6 +126,21 @@ def test_taste_api_generate_then_get_then_edit(db_session: Session) -> None:
     assert edited.json()["structured"]["hard_avoids"] == ["musicals"]
 
 
+def test_generate_is_rate_limited_after_a_recent_generation(db_session: Session) -> None:
+    user = _account_with_history(db_session)
+    profile_id = user.profile.id
+    client = _client(db_session, user, with_llm=True)
+
+    first = client.post(f"/profiles/{profile_id}/taste/generate")
+    assert first.status_code == 200
+
+    # A second click right away must not spend another LLM call — it's on cooldown.
+    second = client.post(f"/profiles/{profile_id}/taste/generate")
+    assert second.status_code == 429
+    assert "Retry-After" in second.headers
+    assert int(second.headers["Retry-After"]) > 0
+
+
 def test_generate_without_llm_key_400(db_session: Session) -> None:
     user = _account_with_history(db_session)
     # No get_llm_provider override and no LLM_API_KEY configured -> 400.

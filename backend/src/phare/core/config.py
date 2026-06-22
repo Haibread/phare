@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     taste_refresh_min_events: int = 8
     taste_refresh_min_interval_seconds: int = 6 * 60 * 60  # 6 hours
     taste_max_events: int = 150
+    # The explicit POST /taste/generate is a force-regenerate (it ignores the gate above), so it's
+    # rate-limited per profile to stop repeated button clicks each spending a workhorse LLM call.
+    taste_generate_cooldown_seconds: int = 10 * 60  # 10 minutes
 
     # Recommendation engine tuning (safe defaults; rarely need changing).
     recommend_row_size: int = 12

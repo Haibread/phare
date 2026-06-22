@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -74,8 +75,23 @@ def generate_taste(
     language: Annotated[Language, Depends(get_language)],
 ) -> TasteResponse:
     require_own_profile(user, profile_id)
-    model_version = get_settings().llm_chat_model
-    taste = TasteService(session, llm, model_version, language).generate(profile_id)
+    settings = get_settings()
+    # Force-regenerate, but rate-limited per profile: a workhorse LLM call is spent each time, so
+    # repeated button clicks must not each trigger one. The auto-refresh on ingest keeps taste fresh
+    # between manual regenerations.
+    existing = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
+    if existing is not None and existing.generated_at is not None:
+        elapsed = (datetime.now(UTC) - existing.generated_at).total_seconds()
+        retry_after = int(settings.taste_generate_cooldown_seconds - elapsed)
+        if retry_after > 0:
+            minutes, seconds = divmod(retry_after, 60)
+            human = f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
+            raise HTTPException(
+                status_code=429,
+                detail=f"Taste was just regenerated — try again in {human}.",
+                headers={"Retry-After": str(retry_after)},
+            )
+    taste = TasteService(session, llm, settings.llm_chat_model, language).generate(profile_id)
     session.commit()
     return _to_response(taste)
 
