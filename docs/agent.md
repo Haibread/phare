@@ -14,8 +14,11 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
   context (taste summary, open commitments, active memory notes) and emits a JSON list of tool
   calls. It never picks titles itself.
 - **Tools** ([`agent/tools.py`](../backend/src/phare/agent/tools.py)) — thin wrappers over the
-  engine: `recommend`, `log_signal`, `set_commitment`, `resolve_commitment`, `remember`,
-  `update_taste`. Title references resolve through the catalog search (local + live TMDB).
+  engine: `recommend`, `explain_picks`, `log_signal`, `set_commitment`, `resolve_commitment`,
+  `remember`, `update_taste`. Title references resolve through the catalog search (local + live
+  TMDB). `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
+  recommendation log — never from the model's memory — so the reply explains the titles actually
+  shown; it sets no new picks, so the slate isn't re-logged.
   `recommend` defaults to *new* titles (excludes everything watched); a **rewatch** request ("a
   comfort rewatch", "something I've seen", "watch again") sets `rewatch=true`, which flips the
   candidate source to titles you've already watched and reserves no discovery swing slot. The

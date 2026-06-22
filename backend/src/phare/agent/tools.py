@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.agent import commitments as commitments_store
@@ -23,6 +24,7 @@ from phare.db.models import (
     CommitmentStatus,
     EventType,
     MemoryKind,
+    RecommendationLog,
     Title,
     WatchCommitment,
     WatchEvent,
@@ -66,6 +68,9 @@ class ExecutionResult:
     notes: list[str] = field(default_factory=list)  # e.g. "couldn't find 'Zxqyt'"
     intent: ChatIntent = field(default_factory=ChatIntent)
     taste_dirty: bool = False
+    # Items re-surfaced for an explanation ("why these?") are already-logged picks, not new ones —
+    # don't log them again.
+    suppress_logging: bool = False
 
 
 def _resolve_title(ctx: ToolContext, query: str) -> Title | None:
@@ -272,8 +277,48 @@ def tool_update_taste(ctx: ToolContext, args: dict, result: ExecutionResult) -> 
     )
 
 
+def tool_explain_picks(ctx: ToolContext, args: dict, result: ExecutionResult) -> None:
+    """Re-surface the profile's most recent chat slate so the reply can explain *why* those titles
+    were picked. The picks come from the recommendation log — what was actually shown — never from
+    the model's memory. Sets no new recommendations, so the slate isn't re-logged."""
+    latest = ctx.session.scalar(
+        select(func.max(RecommendationLog.shown_at)).where(
+            RecommendationLog.profile_id == ctx.profile_id,
+            RecommendationLog.source == "chat",
+        )
+    )
+    if latest is None:
+        result.notes.append("there are no earlier picks to explain yet")
+        return
+    rows = ctx.session.execute(
+        select(Title, RecommendationLog.score, RecommendationLog.is_swing)
+        .join(RecommendationLog, RecommendationLog.title_id == Title.id)
+        .where(
+            RecommendationLog.profile_id == ctx.profile_id,
+            RecommendationLog.source == "chat",
+            RecommendationLog.shown_at == latest,
+        )
+        .order_by(RecommendationLog.rank)
+    ).all()
+    result.items = [
+        Recommendation(
+            title_id=title.id,
+            title=title.title,
+            kind=title.kind.value,
+            year=title.year,
+            genres=list(title.genres),
+            score=float(score) if score is not None else 0.0,
+            is_swing=is_swing,
+            poster_path=title.poster_path,
+        )
+        for title, score, is_swing in rows
+    ]
+    result.suppress_logging = True
+
+
 _TOOLS = {
     "recommend": tool_recommend,
+    "explain_picks": tool_explain_picks,
     "log_signal": tool_log_signal,
     "set_commitment": tool_set_commitment,
     "resolve_commitment": tool_resolve_commitment,
