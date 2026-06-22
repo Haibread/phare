@@ -33,6 +33,19 @@ def _watch(*, episode_id: uuid.UUID | None, days_ago: int) -> WatchEvent:
 # --- derivation logic (pure) -------------------------------------------------
 
 
+def test_recency_is_a_gentle_tilt_not_a_cliff() -> None:
+    from phare.recommend.taste_vector import _RECENCY_FLOOR, recency_factor
+
+    fresh = recency_factor(_NOW, now=_NOW)
+    three_years = recency_factor(_NOW - timedelta(days=365 * 3), now=_NOW)
+    ancient = recency_factor(_NOW - timedelta(days=365 * 15), now=_NOW)
+
+    assert fresh == 1.0
+    assert three_years > 0.7  # a film loved 3 years ago still counts strongly, not ~12%
+    assert ancient == _RECENCY_FLOOR  # floored — an old favourite is never erased
+    assert recency_factor(None, now=_NOW) == _RECENCY_FLOOR  # undated events get the floor
+
+
 def test_single_movie_watch_is_ordinary_engagement() -> None:
     weight = collapsed_watch_weight(
         [_watch(episode_id=None, days_ago=10)], has_rating=False, now=_NOW
