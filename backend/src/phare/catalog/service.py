@@ -90,9 +90,10 @@ def search_titles(
 def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
     """Insert any titles not already present (by ``tmdb_id``); refresh popularity on the rest.
 
-    Returns the number of newly created titles. Metadata refresh is limited to ``popularity``
-    so a re-import keeps the global popularity signal current without clobbering anything an
-    embed already depends on (a content change would need a re-embed; out of scope here).
+    Returns the number of newly created titles. Metadata refresh is limited to ``popularity`` and
+    ``vote_count`` so a re-import keeps the global popularity/known-ness signals current without
+    clobbering anything an embed already depends on (a content change would need a re-embed; out of
+    scope here).
     """
     created = 0
     for meta in metas:
@@ -102,6 +103,8 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
         if existing is not None:
             if meta.popularity is not None:
                 existing.popularity = meta.popularity
+            if meta.vote_count is not None:
+                existing.vote_count = meta.vote_count
             # Backfill a poster when we didn't have one; it doesn't affect embeddings.
             if existing.poster_path is None and meta.poster_path is not None:
                 existing.poster_path = meta.poster_path
@@ -119,6 +122,7 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
                 genres=meta.genres,
                 keywords=meta.keywords,
                 popularity=meta.popularity,
+                vote_count=meta.vote_count,
             )
         )
         created += 1

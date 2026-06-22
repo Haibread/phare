@@ -94,6 +94,8 @@ class Title(Base):
     genres: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     keywords: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     popularity: Mapped[float | None] = mapped_column(Float)
+    # TMDB rating count — proxy for how well-known a title is; used to tier chat recommendations.
+    vote_count: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

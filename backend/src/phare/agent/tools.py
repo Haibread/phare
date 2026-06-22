@@ -113,7 +113,7 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         extra_hard_avoids=intent.exclude_genres,
         candidate_filter=intent_filter(intent),
         rewatch=intent.rewatch,
-        swing_slots=0 if intent.rewatch else 1,
+        vote_mix=True,  # chat slates mix well-known/lesser-known/low-vote, ordered by votes
         explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
     )
 

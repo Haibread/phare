@@ -116,6 +116,7 @@ class RecommendationService:
         k: int | None = None,
         swing_slots: int | None = None,
         rewatch: bool = False,
+        vote_mix: bool = False,
         explain_with_llm: bool = True,
         explainer: Explainer | None = None,
     ) -> list[Recommendation]:
@@ -152,6 +153,7 @@ class RecommendationService:
             taste,
             k=k,
             swing_slots=swing_slots if swing_slots is not None else default_swings,
+            vote_mix=vote_mix,
         )
         exp = explainer or self._explainer(with_llm=explain_with_llm)
         return exp.explain(recs, taste)

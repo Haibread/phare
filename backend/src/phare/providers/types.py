@@ -63,6 +63,7 @@ class TitleMetadata(_Frozen):
     genres: list[str] = []
     keywords: list[str] = []
     popularity: float | None = None
+    vote_count: int | None = None  # TMDB rating count — a proxy for how well-known a title is
 
 
 class ExternalMatch(_Frozen):
