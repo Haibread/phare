@@ -52,9 +52,16 @@ _REASON_MAX_TOKENS = 80
 # TTL is fine; the key carries correctness, the TTL only bounds memory.
 _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 
+# Bump when the explanation *prompt* changes. It's folded into the cache fingerprint so a wording
+# change invalidates every previously-cached blurb (in-process and the durable Postgres rows)
+# without a manual purge — otherwise a deploy keeps serving the old phrasing until taste happens to
+# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite.
+_PROMPT_VERSION = "2"
+
 
 def _taste_fingerprint(taste: Mapping[str, Any]) -> str:
-    return hashlib.sha256(str(taste.get("summary") or "").encode()).hexdigest()[:16]
+    raw = f"{_PROMPT_VERSION}|{taste.get('summary') or ''}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 # Inputs to the LLM are already spoiler-safe (we never pass the overview), but the *output* is the

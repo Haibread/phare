@@ -233,9 +233,11 @@ to explain cards nobody opens**:
   **caches** it (keyed by `(title, taste summary)`) so re-opening is free. The cache is two-tier: an
   in-process layer over a durable `title_explanation` Postgres row, so an accepted reason **survives
   restarts and replicas** — it's generated once per taste version, not re-spent every time the
-  process recycles. It self-invalidates when taste changes (new fingerprint → new row). Offline, it
-  returns the template. The sheet shows the template immediately and swaps in the richer reason when
-  it arrives.
+  process recycles. It self-invalidates when taste changes (new fingerprint → new row) **and when
+  the explanation prompt itself changes** (a prompt-version constant is folded into the fingerprint,
+  so a wording change re-generates fresh blurbs on the next open instead of serving stale cached
+  ones). Offline, it returns the template. The sheet shows the template immediately and swaps in the
+  richer reason when it arrives.
 - **The reason is personalised, not a synopsis.** The prompt is fed the viewer's own taste — their
   stated likes and the specific genre affinity this title shares (the concrete reason it scored) —
   and is told to address them as "you" and open from that connection ("Since you lean toward …").

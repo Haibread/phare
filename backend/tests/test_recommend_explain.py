@@ -85,6 +85,23 @@ def test_llm_prompt_anchors_on_concrete_taste_hooks() -> None:
     assert "as you" in prompt  # and it's told to address the viewer directly
 
 
+def test_prompt_version_is_folded_into_the_cache_fingerprint() -> None:
+    # A prompt-wording change must invalidate previously cached blurbs (in-process + Postgres),
+    # otherwise a deploy keeps serving stale phrasing until taste happens to change. The version is
+    # part of the fingerprint, so two versions of the same taste hash differently.
+    import phare.recommend.explain as explain_mod
+
+    taste = {"summary": "loves cerebral sci-fi"}
+    before = explain_mod._taste_fingerprint(taste)
+    monkey = "999-different"
+    original = explain_mod._PROMPT_VERSION
+    try:
+        explain_mod._PROMPT_VERSION = monkey
+        assert explain_mod._taste_fingerprint(taste) != before
+    finally:
+        explain_mod._PROMPT_VERSION = original
+
+
 def test_matched_affinity_ignores_disliked_and_unshared_genres() -> None:
     rec = _rec(genres=["Comedy", "Drama"])
     # Comedy is disliked (negative), Drama isn't in affinities -> no positive shared genre.
