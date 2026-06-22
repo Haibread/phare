@@ -37,6 +37,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `TASTE_MAX_EVENTS` | `150` | Most recent events fed into a taste extraction. Bounds prompt (input-token) size; recency-weighted, so the tail rarely changes the profile. |
 | `TASTE_REFRESH_MIN_EVENTS` | `8` | New events since the last generation that force an automatic taste refresh. See [Taste auto-refresh gate](#taste-auto-refresh-gate). |
 | `TASTE_REFRESH_MIN_INTERVAL_SECONDS` | `21600` (6 h) | Once the profile is older than this **and** something changed, a smaller trickle of events gets folded in. |
+| `TASTE_GENERATE_COOLDOWN_SECONDS` | `600` (10 min) | Per-profile rate limit on the manual `POST /taste/generate` (the "Regenerate" button). It force-regenerates (ignoring the auto-refresh gate) and each run spends a workhorse LLM call, so repeated clicks within the cooldown get `429` + `Retry-After` instead. |
 | **Recommendation tuning** (safe defaults, rarely changed) | | |
 | `RECOMMEND_ROW_SIZE` | `12` | Items per row. |
 | `RECOMMEND_SWING_SLOTS` | `2` | Reserved high-novelty "swing" picks per slate. |
