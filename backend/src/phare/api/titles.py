@@ -26,7 +26,7 @@ from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.i18n import Language
 from phare.db.base import get_session
-from phare.db.models import TasteProfile, Title, TitleKind, User
+from phare.db.models import TasteProfile, Title, TitleKind, User, WatchEvent
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider
 from phare.recommend.explain import (
@@ -34,7 +34,7 @@ from phare.recommend.explain import (
     PersistentReasonCache,
     stream_lazy_reason,
 )
-from phare.recommend.schema import Recommendation
+from phare.recommend.schema import Anchor, Recommendation
 from phare.taste.service import effective_profile
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,28 @@ def _sse(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+def _load_anchor(
+    session: Session, profile_id: uuid.UUID, because: uuid.UUID | None
+) -> Anchor | None:
+    """The "because you watched X" seed, honoured **only** if the viewer actually has history with
+    it — which it always does for a real "because" row, since those are built from their own loved
+    titles. The history check keeps the param from being used to probe arbitrary title-to-title
+    links. Returns ``None`` (taste-only explanation) for an absent / unknown / unwatched anchor."""
+    if because is None:
+        return None
+    watched = session.scalar(
+        select(WatchEvent.id)
+        .where(WatchEvent.profile_id == profile_id, WatchEvent.title_id == because)
+        .limit(1)
+    )
+    if watched is None:
+        return None
+    seed = session.get(Title, because)
+    if seed is None:
+        return None
+    return Anchor(title_id=seed.id, title=seed.title, genres=list(seed.genres))
+
+
 @router.get("/profiles/{profile_id}/titles/{title_id}/explanation")
 def stream_title_explanation(
     profile_id: uuid.UUID,
@@ -110,17 +132,22 @@ def stream_title_explanation(
     user: Annotated[User, Depends(get_current_user)],
     chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
     language: Annotated[Language, Depends(get_language)],
+    because: uuid.UUID | None = None,
 ) -> StreamingResponse:
     """The LLM "why this fits you" reason, generated **lazily and streamed** — only when the user
     opens a card's detail sheet, so we never pay to explain cards nobody opens. Server-Sent Events:
-    ``delta`` chunks as the (workhorse) model types, then ``done``. Cached per (title, taste) so a
-    re-open returns instantly as one chunk; offline streams the deterministic template."""
+    ``delta`` chunks as the (workhorse) model types, then ``done``. Cached per (title, taste,
+    anchor) so a re-open returns instantly as one chunk; offline streams the deterministic template.
+
+    ``because`` is the seed title of a "because you watched X" row (optional): when present and the
+    viewer has watched it, the reason opens from that concrete link, not the abstract taste."""
     require_profile(user, profile_id)
     title = session.get(Title, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
     taste_row = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
     taste = effective_profile(taste_row) if taste_row is not None else {}
+    anchor = _load_anchor(session, profile_id, because)
     rec = Recommendation(
         title_id=title.id,
         title=title.title,
@@ -135,7 +162,7 @@ def stream_title_explanation(
     cache = PersistentReasonCache(session, _EXPLANATION_CACHE)
 
     def events() -> Iterator[str]:
-        for chunk in stream_lazy_reason(rec, taste, chat_llm, cache, language):
+        for chunk in stream_lazy_reason(rec, taste, chat_llm, cache, language, anchor):
             yield _sse("delta", {"text": chunk})
         yield _sse("done", {})
 

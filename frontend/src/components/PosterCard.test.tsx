@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type RenderResult, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import type { RecommendationItem } from "../api";
+import { type RenderResult, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { type RecommendationItem, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
 import { PosterCard } from "./PosterCard";
 import { RecRow } from "./RecRow";
@@ -84,5 +84,30 @@ describe("RecRow", () => {
       <RecRow row={{ key: "popular", title: "Popular", items: [] }} />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  describe("because-you-watched anchor", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function openFirstCardOf(rowKey: string): ReturnType<typeof vi.spyOn> {
+      const spy = vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      renderCard(
+        <RecRow row={{ key: rowKey, title: "row", items: [recItem({ title: "Arrival" })] }} />,
+      );
+      fireEvent.click(screen.getByTestId("rec-card-open"));
+      return spy;
+    }
+
+    it("passes the seed title id from a `because:<id>` row key to the explanation call", () => {
+      const seed = crypto.randomUUID();
+      const spy = openFirstCardOf(`because:${seed}`);
+      // 5th arg of streamTitleExplanation is the `because` anchor.
+      expect(spy.mock.calls[0][4]).toBe(seed);
+    });
+
+    it("passes no anchor for a non-because row", () => {
+      const spy = openFirstCardOf("you_might_like");
+      expect(spy.mock.calls[0][4]).toBeNull();
+    });
   });
 });

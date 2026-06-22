@@ -12,13 +12,15 @@ from phare.providers.http import TTLCache
 from phare.recommend.explain import (
     Explainer,
     PersistentReasonCache,
+    _llm_prompt,
     _matched_affinity,
+    _taste_fingerprint,
     coerce_safe,
     explain,
     is_spoiler_safe,
     stream_lazy_reason,
 )
-from phare.recommend.schema import Recommendation
+from phare.recommend.schema import Anchor, Recommendation
 
 _OVERVIEW_LEAK = "the protagonist secretly dies at the end"
 
@@ -83,6 +85,23 @@ def test_llm_prompt_anchors_on_concrete_taste_hooks() -> None:
     assert "Science Fiction" in prompt  # the shared liked genre is surfaced as the anchor
     assert "slow-burn sci-fi" in prompt  # stated likes reach the model
     assert "as you" in prompt  # and it's told to address the viewer directly
+
+
+def test_anchor_sharpens_the_prompt_and_gets_its_own_cache_bucket() -> None:
+    # A card opened from a "because you watched Dune" row must (a) tell the model to open from that
+    # link, and (b) cache separately from the same title's un-anchored / other-anchor reason.
+    taste = {"summary": "loves epic sci-fi"}
+    dune = Anchor(title_id=uuid.uuid4(), title="Dune", genres=["Science Fiction"])
+    her = Anchor(title_id=uuid.uuid4(), title="Her", genres=["Drama", "Romance"])
+
+    prompt = _llm_prompt(_rec(), taste, anchor=dune)
+    assert "Dune" in prompt  # the seed title is named so the model can anchor on it
+    assert "watched and loved" in prompt
+
+    bare = _taste_fingerprint(taste)
+    assert _taste_fingerprint(taste, dune) != bare  # anchored reason is a distinct cache entry...
+    assert _taste_fingerprint(taste, dune) != _taste_fingerprint(taste, her)  # ...per anchor...
+    assert _taste_fingerprint(taste) == bare  # ...while the un-anchored key is unchanged
 
 
 def test_prompt_version_is_folded_into_the_cache_fingerprint() -> None:

@@ -243,6 +243,13 @@ to explain cards nobody opens**:
   and is told to address them as "you" and open from that connection ("Since you lean toward …").
   A title two viewers both see gets a different sentence each; a generic back-of-the-box blurb is a
   prompt failure, not the intended output.
+- **Cards opened from a "because you watched X" row anchor on that title.** The frontend passes the
+  row's seed (`?because=<titleId>`); when the viewer has actually watched it, the reason opens from
+  that concrete link ("Since you loved Dune, …") instead of the abstract taste, and is cached
+  separately per anchor. The seed is honoured only if it's in the viewer's own history (so the
+  param can't probe arbitrary title-to-title links), and only its name + genres reach the prompt —
+  never its plot. Cards from other rows (the hero, you-might-like, chat) carry no anchor and use the
+  taste-only reason.
 - **Chat** is unaffected: it always templates its picks (the agent's reply already frames them).
 
 Prefer the old behaviour (eagerly explain the top cards on every home render, concurrently, cached)?

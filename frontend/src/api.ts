@@ -400,11 +400,18 @@ async function streamTitleExplanation(
   titleId: string,
   handlers: { onDelta?: (text: string) => void; onDone?: () => void },
   signal?: AbortSignal,
+  // The "because you watched X" seed title id, when the card was opened from such a row — sharpens
+  // the reason to that concrete link instead of the abstract taste.
+  because?: string | null,
 ): Promise<void> {
-  const response = await fetch(`${API_BASE}/profiles/${profileId}/titles/${titleId}/explanation`, {
-    headers: authHeaders(),
-    signal: signal ?? null,
-  });
+  const query = because ? `?because=${encodeURIComponent(because)}` : "";
+  const response = await fetch(
+    `${API_BASE}/profiles/${profileId}/titles/${titleId}/explanation${query}`,
+    {
+      headers: authHeaders(),
+      signal: signal ?? null,
+    },
+  );
   await readEventStream(response, (event, parsed) => {
     if (event === "delta") {
       handlers.onDelta?.(String((parsed as { text: string }).text));

@@ -24,7 +24,7 @@ from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, tr
 from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
-from phare.recommend.schema import Recommendation
+from phare.recommend.schema import Anchor, Recommendation
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,13 @@ _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 _PROMPT_VERSION = "2"
 
 
-def _taste_fingerprint(taste: Mapping[str, Any]) -> str:
+def _taste_fingerprint(taste: Mapping[str, Any], anchor: Anchor | None = None) -> str:
+    # The anchor segment is appended only when present, so an un-anchored reason keeps the exact
+    # same fingerprint it had before anchors existed — only anchored reasons get their own cache
+    # bucket (the same title explained "because you watched Dune" vs "...Her" must differ).
     raw = f"{_PROMPT_VERSION}|{taste.get('summary') or ''}"
+    if anchor is not None:
+        raw = f"{raw}|anchor={anchor.title_id}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -163,17 +168,28 @@ def _taste_hooks(rec: Recommendation, taste: Mapping[str, Any]) -> str:
 
 
 def _llm_prompt(
-    rec: Recommendation, taste: Mapping[str, Any], language: Language = DEFAULT_LANGUAGE
+    rec: Recommendation,
+    taste: Mapping[str, Any],
+    language: Language = DEFAULT_LANGUAGE,
+    anchor: Anchor | None = None,
 ) -> str:
     summary = taste.get("summary") or "(no taste summary yet)"
     genres = ", ".join(rec.genres) or "unknown"
     kind = "discovery pick (a stretch)" if rec.is_swing else "a strong match"
     hooks = _taste_hooks(rec, taste)
     hook_line = f"\nAnchor the sentence on this connection: {hooks}." if hooks else ""
+    anchor_line = ""
+    if anchor is not None:
+        anchor_genres = ", ".join(anchor.genres) if anchor.genres else "a title they loved"
+        anchor_line = (
+            f"\nThis is being recommended because they watched and loved {anchor.title} "
+            f"({anchor_genres}). Open the sentence from that link — name what {anchor.title} and "
+            f"this share (tone, themes, mood). {anchor.title} is a title, not a person."
+        )
     directive = llm_output_directive(language)
     tail = f" {directive}" if directive else ""
     return (
-        f"{_SYSTEM}\nViewer taste: {summary}{hook_line}\n"
+        f"{_SYSTEM}\nViewer taste: {summary}{hook_line}{anchor_line}\n"
         f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}\n"
         f"This is {kind}. Write the one sentence, addressed to the viewer as you.{tail}"
     )
@@ -283,13 +299,18 @@ def stream_lazy_reason(
     llm: LLMProvider | None,
     cache: ReasonCache | None,
     language: Language = DEFAULT_LANGUAGE,
+    anchor: Anchor | None = None,
 ) -> Iterator[str]:
     """Streaming variant of :func:`lazy_reason`: yields the reason chunk-by-chunk so the detail
     sheet fills in as the model types, instead of waiting for the whole blob. A cached reason comes
     back as one chunk (instant re-open); offline yields the template. Like the chat reply, this
     relies on the prompt for spoiler-safety (it streams before the full text exists) and only caches
-    a completed, marker-free result."""
-    key = ("reason", str(rec.title_id), _taste_fingerprint(taste))
+    a completed, marker-free result.
+
+    ``anchor`` (the "because you watched X" seed, when the card was opened from such a row) is
+    folded into both the prompt and the cache key, so the same title gets a distinct, sharper
+    reason per anchor — and the template fallback stays anchor-agnostic (it can't leak plot)."""
+    key = ("reason", str(rec.title_id), _taste_fingerprint(taste, anchor))
     if cache is not None and (hit := cache.get(key)) is not None:
         yield str(hit)
         return
@@ -299,7 +320,7 @@ def stream_lazy_reason(
     chunks: list[str] = []
     try:
         for chunk in stream_text(
-            llm, _llm_prompt(rec, taste, language), max_tokens=_REASON_MAX_TOKENS
+            llm, _llm_prompt(rec, taste, language, anchor), max_tokens=_REASON_MAX_TOKENS
         ):
             chunks.append(chunk)
             yield chunk

@@ -157,6 +157,47 @@ def test_title_explanation_streams_the_workhorse_when_available(db_session: Sess
     )
 
 
+def test_title_explanation_anchors_on_a_because_you_watched_seed(db_session: Session) -> None:
+    import uuid
+
+    from sqlalchemy import select
+
+    from phare.db.models import Title, WatchEvent
+
+    user = make_account(db_session)
+    # One shared fake so we can inspect the exact prompt the endpoint built.
+    fake = FakeLLMProvider(completion="Because it shares that film's epic scope, it's your kind.")
+    overrides = {
+        get_embedder: lambda: Embedder(
+            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        ),
+        get_optional_chat_llm: lambda: fake,
+    }
+    client = authed_client(db_session, user, overrides=overrides)
+    profile_id = _profile_with_data(client, user)
+
+    # A title the viewer actually watched — the only kind of anchor the endpoint will honour.
+    seed = db_session.execute(
+        select(Title)
+        .join(WatchEvent, WatchEvent.title_id == Title.id)
+        .where(WatchEvent.profile_id == user.profile.id)
+        .limit(1)
+    ).scalar_one()
+    rec_title_id = client.get(f"/profiles/{profile_id}/recommendations").json()["rows"][0]["items"][
+        0
+    ]["titleId"]
+
+    client.get(f"/profiles/{profile_id}/titles/{rec_title_id}/explanation?because={seed.id}")
+    anchored = fake.prompts[-1]
+    assert "watched and loved" in anchored  # the reason opens from the seed...
+    assert seed.title in anchored  # ...and names it
+
+    # An anchor the viewer never watched is ignored — falls back to the taste-only prompt.
+    fake.prompts.clear()
+    client.get(f"/profiles/{profile_id}/titles/{rec_title_id}/explanation?because={uuid.uuid4()}")
+    assert "watched and loved" not in fake.prompts[-1]
+
+
 def test_chat_journey(db_session: Session) -> None:
     user = make_account(db_session)
     client = _client(db_session, user)

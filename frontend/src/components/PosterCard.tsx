@@ -10,9 +10,13 @@ import styles from "./components.module.css";
 export function PosterCard({
   item,
   showFit = true,
+  anchorTitleId = null,
 }: {
   item: RecommendationItem;
   showFit?: boolean;
+  // Seed title of a "because you watched X" row, when this card lives in one — passed to the detail
+  // sheet so the "why this" reason can open from that concrete link.
+  anchorTitleId?: string | null;
 }): React.JSX.Element {
   const { t } = useTranslation("title");
   const [imgFailed, setImgFailed] = useState(false);
@@ -55,7 +59,12 @@ export function PosterCard({
       </button>
       {showFit && <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />}
       <TitleAction titleId={item.titleId} />
-      <TitleDetailSheet item={item} open={detailOpen} onOpenChange={setDetailOpen} />
+      <TitleDetailSheet
+        item={item}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        anchorTitleId={anchorTitleId}
+      />
     </article>
   );
 }

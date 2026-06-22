@@ -26,6 +26,19 @@ class Candidate(BaseModel):
     similarity: float  # cosine similarity to the taste centroid, in [-1, 1]
 
 
+class Anchor(BaseModel):
+    """A loved title a recommendation is being shown *because of* — the seed of a "because you
+    watched X" row. Carried into the explanation so the reason can open from that concrete link
+    ("Because you loved Dune, ...") instead of only the abstract taste summary. Genres only, never
+    the overview — the same spoiler rule the rest of the explain path follows."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title_id: uuid.UUID
+    title: str
+    genres: list[str] = []
+
+
 class Recommendation(BaseModel):
     """A re-ranked, optionally-explained recommendation. The unit the rows are built from."""
 

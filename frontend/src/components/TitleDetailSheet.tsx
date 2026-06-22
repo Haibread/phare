@@ -14,10 +14,13 @@ export function TitleDetailSheet({
   item,
   open,
   onOpenChange,
+  anchorTitleId = null,
 }: {
   item: RecommendationItem;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // Seed of a "because you watched X" row, when opened from one — sharpens the "why this" reason.
+  anchorTitleId?: string | null;
 }): React.JSX.Element {
   const { t } = useTranslation("title");
   const profileId = useProfileId();
@@ -44,10 +47,11 @@ export function TitleDetailSheet({
           onDone: () => setWhyStreaming(false),
         },
         controller.signal,
+        anchorTitleId,
       )
       .catch(() => setWhyStreaming(false)); // aborted on close, or a transient error
     return () => controller.abort();
-  }, [open, profileId, item.titleId]);
+  }, [open, profileId, item.titleId, anchorTitleId]);
 
   // Show the instant template until the streamed reason starts arriving, then the richer one.
   const why = streamedWhy || item.explanation;
