@@ -134,19 +134,26 @@ export function Profile(): React.JSX.Element {
             )}
           </>
         ) : (
-          <>
-            <p className="muted" data-testid="taste-empty">
-              {t("taste.empty")}
-            </p>
+          <p className="muted" data-testid="taste-empty">
+            {t("taste.empty")}
+          </p>
+        )}
+
+        {/* Always offer (re)generation — taste already built? let the user recompute it. */}
+        {!taste.isPending && (
+          <div style={{ marginTop: "var(--sp-3)" }}>
             <button
               type="button"
               className="btn btn-primary"
               data-testid="taste-generate"
               onClick={() => generateTaste.mutate()}
               disabled={generateTaste.isPending}
-              style={{ marginTop: "var(--sp-3)" }}
             >
-              {generateTaste.isPending ? t("taste.generating") : t("taste.generate")}
+              {generateTaste.isPending
+                ? t("taste.generating")
+                : taste.data?.summary
+                  ? t("taste.regenerate")
+                  : t("taste.generate")}
             </button>
             {generateTaste.isError && (
               <p className={styles.errorText} data-testid="taste-generate-error" role="alert">
@@ -158,7 +165,7 @@ export function Profile(): React.JSX.Element {
                 })}
               </p>
             )}
-          </>
+          </div>
         )}
       </section>
 

@@ -8,6 +8,7 @@
     "avoiding": "À éviter",
     "empty": "Votre profil de goûts se construit automatiquement à partir de votre historique, une fois qu'un LLM est configuré.",
     "generate": "Générer maintenant",
+    "regenerate": "Régénérer",
     "generating": "Génération…",
     "generateError": "Impossible de générer les goûts : {{message}}"
   },
