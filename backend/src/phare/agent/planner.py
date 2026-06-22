@@ -48,6 +48,9 @@ Tools (emit a JSON array under "calls", each {"tool","args"}):
   to watch. Set rewatch=true when the user wants to REVISIT something they've already seen (a
   rewatch, "comfort watch", "something I've seen before", "watch again") — it draws from their own
   history instead of new titles.
+- explain_picks {} — the user asks WHY you recommended the previous titles ("why these?", "why
+  those?", "why did you pick these?", "explain your picks"). Re-surfaces the last slate so the
+  reply can explain the fit. This is in scope — never decline it.
 - log_signal {title, signal, note?, rating?} — the user states they watched/liked/disliked/etc a
   title. signal ∈ watched|loved|liked|disliked|abandoned|rewatched|watchlist.
 - set_commitment {title, note?} — the user says they WILL watch something.

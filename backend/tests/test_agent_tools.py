@@ -351,3 +351,33 @@ def test_service_tool_turn_logs_signal_and_confirms(db_session: Session) -> None
         e.source == "chat"
         for e in db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id))
     )
+
+
+def test_explain_picks_resurfaces_the_last_chat_slate(db_session: Session) -> None:
+    from phare.recommend.log import log_chat
+    from phare.recommend.schema import Recommendation
+
+    profile_id = _seed(db_session)
+    titles = db_session.scalars(select(Title).order_by(Title.title)).all()[:2]
+    log_chat(
+        db_session,
+        profile_id,
+        [
+            Recommendation(
+                title_id=t.id, title=t.title, kind=t.kind.value, year=2020, genres=[], score=1.0
+            )
+            for t in titles
+        ],
+    )
+
+    result = _run(db_session, profile_id, "explain_picks", {})
+
+    assert {i.title for i in result.items} == {t.title for t in titles}
+    assert result.suppress_logging is True  # already-logged picks aren't re-logged
+
+
+def test_explain_picks_with_no_prior_slate_notes_it(db_session: Session) -> None:
+    profile_id = _seed(db_session)
+    result = _run(db_session, profile_id, "explain_picks", {})
+    assert result.items == []
+    assert any("no earlier picks" in note for note in result.notes)

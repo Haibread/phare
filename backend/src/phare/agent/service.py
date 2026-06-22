@@ -183,7 +183,7 @@ class ChatService:
                 language=self.recommender.language,
             )
         result = execute_plan(ctx, agent_plan)
-        if result.items:
+        if result.items and not result.suppress_logging:
             log_chat(session, profile_id, result.items)
         logger.info(
             "agent.respond",
