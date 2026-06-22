@@ -92,13 +92,17 @@ def coerce_safe(text: str) -> str | None:
     return sentence if sentence and len(sentence) <= _MAX_EXPLANATION_LEN else None
 
 
-_SYSTEM = """You write one-sentence, spoiler-safe reasons a viewer might enjoy a title.
+_SYSTEM = """You tell one specific viewer why THEY in particular might enjoy a title — one sentence.
 
 Rules:
-- Describe appeal only: tone, themes, mood, why it fits their taste. NEVER mention plot events.
+- Address the viewer as you and anchor the sentence to THEIR taste: name the genre, theme, or
+  mood of theirs it connects to. A reader with different taste must get a different sentence — if
+  yours would fit any viewer, it's wrong. Prefer opening with the connection — start from what
+  they like, then the title (e.g. Since you lean toward X, this ...).
+- Describe appeal only: tone, themes, mood, the taste fit. NEVER mention plot events.
 - Never mention other people or users.
 - Be honest about confidence; for a "discovery pick" frame it as a stretch worth trying.
-- Output ONLY the sentence, no preamble.
+- Output ONLY the sentence as plain text: no quotation marks around it, no markdown, no preamble.
 """
 
 
@@ -128,18 +132,43 @@ def _template(
     return translate(language, "explain.base", genres=genres, kind=kind, era=era, because=because)
 
 
+def _matched_affinity(rec: Recommendation, taste: Mapping[str, Any]) -> str | None:
+    """The viewer's strongest liked genre that this title actually shares — the concrete reason it
+    scored. ``None`` when nothing overlaps (a swing / off-axis pick)."""
+    affinities = taste.get("affinities") or {}
+    liked = {key.lower(): float(value) for key, value in affinities.items() if float(value) > 0}
+    matches = [g for g in rec.genres if g.lower() in liked]
+    if not matches:
+        return None
+    return max(matches, key=lambda g: liked[g.lower()])
+
+
+def _taste_hooks(rec: Recommendation, taste: Mapping[str, Any]) -> str:
+    """Concrete handles for the model to anchor on — the shared genre affinity and a few stated
+    likes — so a weak model has something specific to latch onto instead of describing the film."""
+    parts: list[str] = []
+    if matched := _matched_affinity(rec, taste):
+        parts.append(f"shares their liked genre {matched}")
+    likes = [str(x) for x in (taste.get("likes") or []) if str(x).strip()][:3]
+    if likes:
+        parts.append("they like: " + ", ".join(likes))
+    return "; ".join(parts)
+
+
 def _llm_prompt(
     rec: Recommendation, taste: Mapping[str, Any], language: Language = DEFAULT_LANGUAGE
 ) -> str:
     summary = taste.get("summary") or "(no taste summary yet)"
     genres = ", ".join(rec.genres) or "unknown"
     kind = "discovery pick (a stretch)" if rec.is_swing else "a strong match"
+    hooks = _taste_hooks(rec, taste)
+    hook_line = f"\nAnchor the sentence on this connection: {hooks}." if hooks else ""
     directive = llm_output_directive(language)
     tail = f" {directive}" if directive else ""
     return (
-        f"{_SYSTEM}\nViewer taste: {summary}\n"
+        f"{_SYSTEM}\nViewer taste: {summary}{hook_line}\n"
         f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}\n"
-        f"This is {kind}. Write the sentence.{tail}"
+        f"This is {kind}. Write the one sentence, addressed to the viewer as you.{tail}"
     )
 
 

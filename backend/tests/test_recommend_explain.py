@@ -12,6 +12,7 @@ from phare.providers.http import TTLCache
 from phare.recommend.explain import (
     Explainer,
     PersistentReasonCache,
+    _matched_affinity,
     coerce_safe,
     explain,
     is_spoiler_safe,
@@ -65,6 +66,30 @@ def test_llm_used_when_available() -> None:
     [out] = explain([_rec()], {"summary": "x"}, llm=llm)
     assert out.explanation == "A moody sci-fi that matches your taste."
     assert llm.prompts  # the LLM was actually consulted
+
+
+def test_llm_prompt_anchors_on_concrete_taste_hooks() -> None:
+    # The prompt must hand the model specifics to latch onto — the shared genre affinity and the
+    # viewer's stated likes — and demand a second-person sentence, so it can't return back-of-box
+    # copy that mentions neither "you" nor anything the viewer actually likes.
+    llm = FakeLLMProvider(completion="Right up your alley.")
+    taste = {
+        "summary": "loves cerebral sci-fi",
+        "likes": ["slow-burn sci-fi", "moral ambiguity"],
+        "affinities": {"Science Fiction": 0.9, "Comedy": -0.4},
+    }
+    explain([_rec()], taste, llm=llm)  # _rec genres include "Science Fiction"
+    prompt = llm.prompts[0]
+    assert "Science Fiction" in prompt  # the shared liked genre is surfaced as the anchor
+    assert "slow-burn sci-fi" in prompt  # stated likes reach the model
+    assert "as you" in prompt  # and it's told to address the viewer directly
+
+
+def test_matched_affinity_ignores_disliked_and_unshared_genres() -> None:
+    rec = _rec(genres=["Comedy", "Drama"])
+    # Comedy is disliked (negative), Drama isn't in affinities -> no positive shared genre.
+    assert _matched_affinity(rec, {"affinities": {"Comedy": -0.5, "Science Fiction": 0.8}}) is None
+    assert _matched_affinity(rec, {"affinities": {"Drama": 0.6}}) == "Drama"
 
 
 def test_llm_prompt_carries_the_french_directive() -> None:

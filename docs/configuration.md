@@ -236,6 +236,11 @@ to explain cards nobody opens**:
   process recycles. It self-invalidates when taste changes (new fingerprint → new row). Offline, it
   returns the template. The sheet shows the template immediately and swaps in the richer reason when
   it arrives.
+- **The reason is personalised, not a synopsis.** The prompt is fed the viewer's own taste — their
+  stated likes and the specific genre affinity this title shares (the concrete reason it scored) —
+  and is told to address them as "you" and open from that connection ("Since you lean toward …").
+  A title two viewers both see gets a different sentence each; a generic back-of-the-box blurb is a
+  prompt failure, not the intended output.
 - **Chat** is unaffected: it always templates its picks (the agent's reply already frames them).
 
 Prefer the old behaviour (eagerly explain the top cards on every home render, concurrently, cached)?
