@@ -1,9 +1,10 @@
 """Build the *query vector* for candidate generation from a profile's own signal.
 
-"Embeddings rank": the taste centroid is a recency-weighted blend of the embeddings of titles
-the profile engaged with — pulled toward what they liked/rewatched, pushed away from what they
-abandoned or rated low. No LLM, no cross-user data. The structured taste profile steers later,
-in the re-ranker; here we only need a point in embedding space to search around.
+"Embeddings rank": the taste centroid is a signed blend of the embeddings of titles the profile
+engaged with — pulled toward what they liked/rewatched, pushed away from what they abandoned or
+rated low — with only a *gentle* recency tilt, since this is stable taste (an old favourite still
+counts). No LLM, no cross-user data. The structured taste profile steers later, in the re-ranker;
+here we only need a point in embedding space to search around.
 """
 
 from __future__ import annotations
@@ -30,8 +31,12 @@ _EVENT_WEIGHT: dict[EventType, float] = {
     EventType.abandoned: -1.2,
 }
 
-# Half-life for recency decay: a year-old event counts half as much as a fresh one.
-_RECENCY_HALF_LIFE_DAYS = 365.0
+# Recency is a *gentle tilt*, not a cliff. The centroid is STABLE taste — who you are — so a film
+# you loved three years ago (Interstellar) must still pull hard; "what I'm into this week" lives in
+# the chat layer, not here. Decay is therefore very slow (8-year half-life) and floored, so an old
+# favourite never fades below `_RECENCY_FLOOR` of its weight.
+_RECENCY_HALF_LIFE_DAYS = 2920.0
+_RECENCY_FLOOR = 0.6
 
 # How long after the last episode a started-but-unrated show is treated as abandoned. We have no
 # total-episode count, so "abandoned" can't be proven — this is a deliberately conservative proxy.
@@ -80,11 +85,12 @@ def collapsed_watch_weight(watched: list[WatchEvent], *, has_rating: bool, now: 
 
 
 def recency_factor(occurred_at: datetime | None, now: datetime) -> float:
-    """Exponential decay in [~0, 1]. Undated events get a mild 0.5 so they still count a little."""
+    """Gentle recency tilt in [`_RECENCY_FLOOR`, 1]. Fresh engagement counts fully; an old one keeps
+    at least the floor, so a long-ago favourite is never erased. Undated events get the floor."""
     if occurred_at is None:
-        return 0.5
+        return _RECENCY_FLOOR
     age_days = max((now - occurred_at).total_seconds() / 86400.0, 0.0)
-    return 0.5 ** (age_days / _RECENCY_HALF_LIFE_DAYS)
+    return max(_RECENCY_FLOOR, 0.5 ** (age_days / _RECENCY_HALF_LIFE_DAYS))
 
 
 def watched_title_ids(session: Session, profile_id: uuid.UUID) -> set[uuid.UUID]:
