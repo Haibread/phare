@@ -106,7 +106,10 @@ def plan(
     context = _context_block(session, profile_id, now)
     prompt = f"{_SYSTEM}\nContext:\n{context}\n\nUser message: {message}\n"
     try:
-        parsed = extract_json(llm.complete(prompt, max_tokens=_PLAN_MAX_TOKENS))
+        # temperature=0: picking tools from a fixed contract is mechanical, not creative. Without
+        # pinning it, a reasoning model samples a different plan for the same message — the genre
+        # filter lands one turn and vanishes the next. Determinism here is the whole point.
+        parsed = extract_json(llm.complete(prompt, max_tokens=_PLAN_MAX_TOKENS, temperature=0.0))
         if not isinstance(parsed, dict) or "calls" not in parsed:
             return AgentPlan(calls=[ToolCall(tool="recommend")], degraded=True)
         calls = [

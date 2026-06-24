@@ -101,12 +101,18 @@ class FakeLLMProvider:
         # Records the ``max_tokens`` passed to each complete/stream call, so cost-cap tests can
         # assert the call sites actually bound the response length.
         self.max_tokens: list[int | None] = []
+        # Records the ``temperature`` passed to each ``complete`` call, so determinism tests can
+        # assert the mechanical-JSON call sites pin it to 0.
+        self.temperatures: list[float | None] = []
 
-    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str:
         if self.complete_delay:
             time.sleep(self.complete_delay)
         self.prompts.append(prompt)
         self.max_tokens.append(max_tokens)
+        self.temperatures.append(temperature)
         return self.completion
 
     def stream(self, prompt: str, *, max_tokens: int | None = None) -> Iterable[str]:

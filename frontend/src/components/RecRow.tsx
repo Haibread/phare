@@ -5,6 +5,9 @@ import styles from "./components.module.css";
 // "because you watched X" rows carry their seed title id in the key (`because:<uuid>`); pull it out
 // so the detail sheet can anchor the "why this" reason on that title. Other rows have no anchor.
 const BECAUSE_PREFIX = "because:";
+// "Continue watching" is something you're already partway through — a taste-affinity meter there is
+// the wrong question (and its confidence is recency warmth, not fit), so the card hides it.
+const NO_FIT_ROWS = new Set(["continue_watching"]);
 
 export function RecRow({ row }: { row: RecommendationRow }): React.JSX.Element | null {
   if (row.items.length === 0) {
@@ -13,6 +16,7 @@ export function RecRow({ row }: { row: RecommendationRow }): React.JSX.Element |
   const anchorTitleId = row.key.startsWith(BECAUSE_PREFIX)
     ? row.key.slice(BECAUSE_PREFIX.length)
     : null;
+  const showFit = !NO_FIT_ROWS.has(row.key);
   return (
     <section className={styles.row} data-testid="rec-row" data-row-key={row.key}>
       <div className={styles.rowHead}>
@@ -20,7 +24,12 @@ export function RecRow({ row }: { row: RecommendationRow }): React.JSX.Element |
       </div>
       <div className={styles.strip}>
         {row.items.map((item) => (
-          <PosterCard key={item.titleId} item={item} anchorTitleId={anchorTitleId} />
+          <PosterCard
+            key={item.titleId}
+            item={item}
+            showFit={showFit}
+            anchorTitleId={anchorTitleId}
+          />
         ))}
       </div>
     </section>

@@ -100,7 +100,9 @@ def test_generate_propagates_when_llm_call_raises(db_session: Session) -> None:
     profile_id = _profile_with_history(db_session)
 
     class _Boom:
-        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+        def complete(
+            self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+        ) -> str:
             raise RuntimeError("llm down")
 
         def embed(self, texts: list[str]) -> list[list[float]]:
@@ -119,6 +121,17 @@ def test_generate_localises_only_the_summary(db_session: Session) -> None:
     prompt = llm.prompts[0]
     assert "summary` field in French" in prompt  # the human-readable summary localises
     assert "in English" in prompt  # structured keys stay English so affinity matching holds
+
+
+def test_maybe_refresh_taste_threads_request_language(db_session: Session) -> None:
+    # The ingest paths (sample-data / source sync) auto-refresh taste with the *request* language.
+    # Regression: they used to drop it, so a French user always got an English taste summary until
+    # they hit "Regenerate" by hand.
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion=CANNED)
+
+    assert maybe_refresh_taste(db_session, profile_id, llm, "fr") is True
+    assert any("summary` field in French" in prompt for prompt in llm.prompts)
 
 
 def test_generate_preserves_user_overrides(db_session: Session) -> None:
@@ -224,7 +237,9 @@ def test_maybe_refresh_taste_swallows_llm_failure(db_session: Session) -> None:
     profile_id = _profile_with_history(db_session)
 
     class _Boom:
-        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+        def complete(
+            self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+        ) -> str:
             raise RuntimeError("llm down")
 
         def embed(self, texts: list[str]) -> list[list[float]]:

@@ -86,6 +86,24 @@ describe("RecRow", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("shows a fit label on a taste-driven row", () => {
+    renderCard(
+      <RecRow row={{ key: "you_might_like", title: "You might like", items: [recItem({})] }} />,
+    );
+    expect(screen.getByTestId("fit")).toBeInTheDocument();
+  });
+
+  it("hides the fit label on the continue-watching row", () => {
+    // Affinity isn't the question for something you're already partway through (and its confidence
+    // is recency warmth, not fit) — so no worded fit meter there.
+    renderCard(
+      <RecRow
+        row={{ key: "continue_watching", title: "Continue watching", items: [recItem({})] }}
+      />,
+    );
+    expect(screen.queryByTestId("fit")).toBeNull();
+  });
+
   describe("because-you-watched anchor", () => {
     afterEach(() => vi.restoreAllMocks());
 

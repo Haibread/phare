@@ -75,7 +75,9 @@ class OpenAILLMProvider:
         response.raise_for_status()
         return response.json()
 
-    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str:
         logger.debug("llm.complete", extra={"model": self._chat_model})
         payload: dict[str, object] = {
             "model": self._chat_model,
@@ -83,6 +85,11 @@ class OpenAILLMProvider:
         }
         if (budget := self._budget(max_tokens)) is not None:
             payload["max_tokens"] = budget
+        # Mechanical-JSON callers (planner, taste) pin temperature to 0 so the same message parses
+        # the same way every time — without it a reasoning model's sampling makes the parse a coin
+        # flip. Left unset (provider default) for the creative callers (reply, blurbs, themes).
+        if temperature is not None:
+            payload["temperature"] = temperature
         data = self._post("/chat/completions", payload)
         # An OpenAI-compatible ``content`` is null when the model refuses or burns its token budget
         # on reasoning before emitting an answer; honour the ``-> str`` contract so callers never

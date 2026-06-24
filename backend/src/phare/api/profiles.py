@@ -12,9 +12,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from phare.api.deps import get_language
 from phare.api.schemas import IngestSummary, ProfilePage, ProfileResponse
 from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import get_settings
+from phare.core.i18n import Language
 from phare.db.base import get_session
 from phare.db.models import Profile, User
 from phare.ingest.sample import seed_sample_data
@@ -47,6 +49,7 @@ def load_sample_data(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(get_current_user)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> IngestSummary:
     """Seed a small demo history (dev only). Lets you try the UI without TMDB/Trakt."""
     settings = get_settings()
@@ -55,7 +58,7 @@ def load_sample_data(
     require_own_profile(user, profile_id)
     result = seed_sample_data(session, profile_id)
     if result.created or result.updated:
-        maybe_refresh_taste(session, profile_id, optional_llm_provider())
+        maybe_refresh_taste(session, profile_id, optional_llm_provider(), language)
     session.commit()
     return IngestSummary(
         created=result.created,

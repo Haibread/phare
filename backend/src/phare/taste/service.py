@@ -139,7 +139,9 @@ class TasteService:
             )
         logger.info("taste.generate", extra={"profile_id": str(profile_id), "events": len(lines)})
 
-        raw = self.llm.complete(prompt, max_tokens=_TASTE_MAX_TOKENS)
+        # temperature=0: taste extraction is structured JSON, not prose — the same history should
+        # always distil to the same profile (and the same parse), so don't let sampling wobble it.
+        raw = self.llm.complete(prompt, max_tokens=_TASTE_MAX_TOKENS, temperature=0.0)
         try:
             data = TasteProfileData.model_validate(extract_json(raw))
         except (ValueError, ValidationError):

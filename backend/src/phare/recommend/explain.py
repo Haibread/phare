@@ -125,22 +125,28 @@ def _template(
 
     Localised via the catalog; genre names stay as stored (their import language), so a French
     sentence can still carry English genre labels until the catalog is re-fetched localised."""
-    genres = (
-        ", ".join(rec.genres[:2]) if rec.genres else translate(language, "explain.genreSpanning")
-    )
+    spanning = translate(language, "explain.genreSpanning")
     kind = translate(language, f"explain.kind.{rec.kind}")
     era = translate(language, "explain.era", year=rec.year) if rec.year else ""
     if rec.is_swing:
+        genres = ", ".join(rec.genres[:2]) if rec.genres else spanning
         return translate(language, "explain.swing", genres=genres, kind=kind, era=era)
-    affinities = taste.get("affinities") or {}
-    matched = next(
-        (key for key in affinities if key.lower() in {g.lower() for g in rec.genres}), None
-    )
-    because = (
-        translate(language, "explain.becauseAffinity", matched=matched)
-        if matched
-        else translate(language, "explain.becauseProfile")
-    )
+    matched = _matched_affinity(rec, taste)
+    if matched is not None:
+        # Name the matched genre once — in the "because" hook — and list only the *other* genres in
+        # the descriptor, so we don't read "Sci-Fi, Mystery movie that leans into your taste for
+        # Sci-Fi". When it's the only genre, keep it as the descriptor and use the generic profile
+        # tail instead of repeating it.
+        others = [g for g in rec.genres if g.lower() != matched.lower()][:2]
+        if others:
+            genres = ", ".join(others)
+            because = translate(language, "explain.becauseAffinity", matched=matched)
+        else:
+            genres = matched
+            because = translate(language, "explain.becauseProfile")
+    else:
+        genres = ", ".join(rec.genres[:2]) if rec.genres else spanning
+        because = translate(language, "explain.becauseProfile")
     return translate(language, "explain.base", genres=genres, kind=kind, era=era, because=because)
 
 

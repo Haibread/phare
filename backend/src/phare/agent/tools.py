@@ -29,6 +29,7 @@ from phare.db.models import (
     WatchCommitment,
     WatchEvent,
 )
+from phare.llm_json import as_str_list
 from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 from phare.taste.service import maybe_refresh_taste
@@ -103,10 +104,12 @@ def _write_event(
 
 
 def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> None:
+    # ChatIntent's validators coerce the LLM's loose arg shapes (a bare-string genre, a mood handed
+    # back as a list, "90 minutes") so a mis-typed field can't raise and sink the recommend turn.
     intent = ChatIntent(
         max_runtime=args.get("max_runtime"),
-        include_genres=[str(g) for g in args.get("include_genres", [])],
-        exclude_genres=[str(g) for g in args.get("exclude_genres", [])],
+        include_genres=args.get("include_genres"),
+        exclude_genres=args.get("exclude_genres"),
         mood=args.get("mood"),
         rewatch=bool(args.get("rewatch", False)),
     )
@@ -257,7 +260,7 @@ def tool_update_taste(ctx: ToolContext, args: dict, result: ExecutionResult) -> 
     overrides = dict(taste.user_overrides)
     tokens: list[str] = []
     for key, incoming in (("hard_avoids", args.get("add_avoid")), ("likes", args.get("add_like"))):
-        for value in incoming or []:
+        for value in as_str_list(incoming):
             current = list(overrides.get(key, []))
             if value not in current:
                 current.append(value)

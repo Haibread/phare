@@ -223,7 +223,32 @@ class ChatService:
                 "item_count": len(result.items),
             },
         )
-        # Nothing to present and nothing done (e.g. an empty candidate pool): answer
+        # Nothing to present and nothing done. The message already cleared the off-topic decline
+        # above, so it was an in-scope watch request — the planner just produced no usable
+        # recommend (a flaky/empty plan, or filters that matched nothing). Telling the user "no
+        # match" here reads as an empty catalog and is the failure I most want to avoid: fall back
+        # to a general taste slate so a watch request always lands something, and flag the turn
+        # degraded so the UI is honest we didn't fully parse it (it shows a "reduced mode" note).
+        # A surfaced tool note (e.g. "couldn't find 'Zxqyt'") is kept verbatim instead — burying it
+        # under an unrelated slate would be the dishonest move.
+        if not result.items and not result.actions and not result.notes:
+            fallback = _drop_mentioned(
+                self.recommender.recommend(profile_id, vote_mix=True), message
+            )
+            if fallback:
+                log_chat(session, profile_id, fallback)
+                result.items = fallback
+                return PreparedTurn(
+                    items=fallback,
+                    actions=[],
+                    intent=result.intent,
+                    notes=result.notes,
+                    compose_prompt=build_compose_prompt(message, result, self.recommender.language),
+                    result=result,
+                    language=self.recommender.language,
+                    degraded=True,
+                )
+        # Genuinely nothing to show (empty catalog) or a tool note to surface: answer
         # deterministically instead of spending the agent model. Handed an empty grounded title
         # list, it tends to free-associate and invent titles from memory — which both breaks "the
         # LLM never picks from memory" and yields no clickable cards. The template replies honestly.

@@ -102,7 +102,9 @@ class LLMProvider(Protocol):
     clock; ``None`` leaves it to the provider default.
     """
 
-    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str: ...
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str: ...
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 

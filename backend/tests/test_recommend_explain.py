@@ -48,6 +48,25 @@ def test_template_names_genre_and_year_without_leaking_plot() -> None:
     assert _OVERVIEW_LEAK not in out.explanation
 
 
+def test_template_names_the_matched_genre_once_not_twice() -> None:
+    # Regression: the descriptor listed every genre AND the affinity clause repeated the matched
+    # one, so a sci-fi pick read "Science Fiction, Mystery ... your taste for Science Fiction".
+    taste = {"affinities": {"Science Fiction": 0.9}}
+    [out] = explain([_rec(genres=["Science Fiction", "Mystery"])], taste, llm=None)
+    assert out.explanation is not None
+    assert out.explanation.count("Science Fiction") == 1  # named once, in the affinity clause
+    assert "Mystery" in out.explanation  # the other genre still describes the title
+
+
+def test_template_does_not_repeat_a_single_matched_genre() -> None:
+    # When the only genre IS the matched one, name it once and use the generic profile tail rather
+    # than "Comedy movie ... your taste for Comedy".
+    taste = {"affinities": {"Comedy": 0.8}}
+    [out] = explain([_rec(genres=["Comedy"])], taste, llm=None)
+    assert out.explanation is not None
+    assert out.explanation.count("Comedy") == 1
+
+
 def test_swing_explanation_frames_it_as_a_stretch() -> None:
     [out] = explain([_rec(is_swing=True)], {}, llm=None)
     assert out.explanation is not None
@@ -143,7 +162,9 @@ def test_llm_prompt_has_no_directive_in_english() -> None:
 
 def test_llm_failure_falls_back_to_template() -> None:
     class _BoomLLM:
-        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+        def complete(
+            self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+        ) -> str:
             raise RuntimeError("provider down")
 
         def embed(self, texts: object) -> object:  # pragma: no cover - unused

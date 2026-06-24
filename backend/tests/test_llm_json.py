@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from phare.llm_json import extract_json
+from phare.llm_json import as_str_list, extract_json
 
 
 def test_parses_plain_object() -> None:
@@ -37,3 +37,22 @@ def test_raises_on_nothing_parseable(raw: str | None) -> None:
 def test_raises_when_no_json_present() -> None:
     with pytest.raises(ValueError):
         extract_json("I can't help with that.")
+
+
+def test_as_str_list_wraps_a_bare_string_instead_of_splitting_it() -> None:
+    # The bug this guards: a model returning "comedy" instead of ["comedy"] must not iterate into
+    # single characters and silently turn a genre filter into garbage.
+    assert as_str_list("comedy") == ["comedy"]
+
+
+def test_as_str_list_passes_through_a_real_list() -> None:
+    assert as_str_list(["Comedy", "Drama"]) == ["Comedy", "Drama"]
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", []])
+def test_as_str_list_empties_to_empty_list(value: object) -> None:
+    assert as_str_list(value) == []
+
+
+def test_as_str_list_stringifies_and_drops_blanks() -> None:
+    assert as_str_list(["Horror", "", "  ", 7]) == ["Horror", "7"]

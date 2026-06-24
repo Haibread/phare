@@ -107,6 +107,15 @@ def test_planner_missing_calls_key_falls_back_to_recommend() -> None:
     assert [c.tool for c in plan.calls] == ["recommend"]
 
 
+def test_planner_pins_temperature_to_zero_for_determinism() -> None:
+    # Planning is mechanical tool-selection, not prose: pinning temperature to 0 stops a reasoning
+    # model from sampling a different plan for the same message (the genre filter that lands one
+    # turn and vanishes the next). Regression guard for that flakiness.
+    llm = FakeLLMProvider(completion='{"calls":[]}')
+    planner.plan(_DummySession(), uuid.uuid4(), "something funny and short", llm, now=_NOW)
+    assert llm.temperatures == [0.0]
+
+
 class _DummySession:
     """The planner only reads memory/taste for context; an empty profile returns nothing."""
 
@@ -302,7 +311,9 @@ def test_compose_reply_uses_model_text_and_falls_back() -> None:
     assert ok == "Lovely — noted!"
 
     class _Boom:
-        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+        def complete(
+            self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+        ) -> str:
             raise RuntimeError("down")
 
         def embed(self, texts: object) -> object:  # pragma: no cover
@@ -322,7 +333,9 @@ class _RoutingLLM:
         self.plan_json = plan_json
         self.prompts: list[str] = []
 
-    def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str:
         self.prompts.append(prompt)
         if "planner" in prompt.lower():
             return self.plan_json
@@ -381,3 +394,94 @@ def test_explain_picks_with_no_prior_slate_notes_it(db_session: Session) -> None
     result = _run(db_session, profile_id, "explain_picks", {})
     assert result.items == []
     assert any("no earlier picks" in note for note in result.notes)
+
+
+def test_recommend_coerces_a_bare_string_genre_arg(db_session: Session) -> None:
+    # A model that returns include_genres as the bare string "comedy" (not ["comedy"]) must not
+    # iterate it into ['c','o','m','e','d','y'] — that silently disabled the genre filter.
+    profile_id = _seed(db_session)
+    result = _run(db_session, profile_id, "recommend", {"include_genres": "comedy"})
+    assert result.intent.include_genres == ["comedy"]
+
+
+def test_recommend_tolerates_mood_as_a_list(db_session: Session) -> None:
+    # The live failure temperature=0 surfaced: a model returned mood as ["lighthearted","relaxing"],
+    # which crashed ChatIntent (mood: str) and sank the whole recommend tool. It's coerced now.
+    profile_id = _seed(db_session)
+    result = _run(
+        db_session,
+        profile_id,
+        "recommend",
+        {"mood": ["lighthearted", "relaxing"], "max_runtime": 90},
+    )
+    assert result.intent.mood == "lighthearted, relaxing"
+    assert result.intent.max_runtime == 90
+    assert result.intent.include_genres == []  # absent arg stays an empty list, not a crash
+
+
+def test_chat_intent_coerces_loose_llm_arg_shapes() -> None:
+    from phare.agent.schema import ChatIntent
+
+    loose = ChatIntent(include_genres="comedy", mood=["light", "funny"], max_runtime="90 minutes")
+    assert loose.include_genres == ["comedy"]
+    assert loose.mood == "light, funny"
+    assert loose.max_runtime == 90
+
+    empty = ChatIntent(include_genres=None, mood="", max_runtime=None)
+    assert empty.include_genres == [] and empty.mood is None and empty.max_runtime is None
+
+
+def test_unusable_plan_falls_back_to_general_picks_not_a_no_match(db_session: Session) -> None:
+    # The failure this fixes: an in-scope watch request whose plan produced no usable recommend
+    # (a flaky/empty reasoning-model plan) used to answer "I couldn't find a match" — reading as an
+    # empty catalog. It must fall back to a general slate and flag the turn degraded instead.
+    profile_id = _seed(db_session)
+    dune = db_session.scalar(select(Title).where(Title.title == "Dune"))
+    assert dune is not None
+    db_session.add(
+        WatchEvent(
+            profile_id=profile_id,
+            title_id=dune.id,
+            type=EventType.watched,
+            source="t",
+            external_ref="seed",
+            occurred_at=_NOW,
+        )
+    )
+    db_session.flush()
+    # A plan whose only call is an unknown tool: parses fine, runs, but produces nothing at all.
+    workhorse = FakeLLMProvider(completion='{"calls":[{"tool":"noop","args":{}}]}')
+    agent = FakeLLMProvider(completion="Here are a few general ideas you might like.")
+    recommender = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=workhorse,
+    )
+
+    reply = ChatService(recommender, agent).respond(
+        profile_id, "something funny and short", now=_NOW
+    )
+
+    assert reply.items  # a general slate, not an empty apology
+    assert reply.degraded is True  # surfaced honestly as reduced mode
+
+
+def test_chat_surfaces_a_tool_note_instead_of_an_unrelated_slate(db_session: Session) -> None:
+    # The fallback above must NOT trample a real outcome note: "why these?" with no prior slate
+    # should still tell the user there's nothing to explain, not bury it under random picks.
+    profile_id = _seed(db_session)
+    workhorse = FakeLLMProvider(completion='{"calls":[{"tool":"explain_picks","args":{}}]}')
+    agent = FakeLLMProvider(completion="SHOULD NOT BE USED")
+    recommender = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=workhorse,
+    )
+
+    reply = ChatService(recommender, agent).respond(profile_id, "why these?", now=_NOW)
+
+    assert reply.items == []  # no unrelated slate conjured
+    assert "earlier picks" in reply.reply_text.lower()  # the honest note is surfaced
+    assert agent.prompts == []  # answered deterministically, no agent-model spend

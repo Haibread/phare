@@ -26,6 +26,27 @@ def strip_reasoning(raw: str | None) -> str:
     return _THINK.sub("", raw or "").strip()
 
 
+def as_str_list(value: Any) -> list[str]:
+    """Coerce an LLM-supplied list field into ``list[str]``, tolerating the common mistakes.
+
+    A model that's asked for ``["comedy"]`` will sometimes hand back the bare string ``"comedy"``
+    instead. Iterating that string yields ``["c", "o", "m", ...]`` — silently turning a genre filter
+    into garbage. Normalise here: ``None`` → ``[]``, a string → a one-element list, any other
+    iterable → its stringified items (blanks dropped). Used for every list argument the planner /
+    theme-namer fills.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    try:
+        items = list(value)
+    except TypeError:
+        return [str(value)]
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
 def extract_json(raw: str | None) -> Any:
     """Parse a JSON value from an LLM completion.
 

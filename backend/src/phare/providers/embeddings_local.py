@@ -30,7 +30,7 @@ class LocalHashEmbeddingProvider:
         self.dim = dim
 
     def complete(  # pragma: no cover - not a chat model
-        self, prompt: str, *, max_tokens: int | None = None
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
     ) -> str:
         raise NotImplementedError("LocalHashEmbeddingProvider does not do chat completion")
 

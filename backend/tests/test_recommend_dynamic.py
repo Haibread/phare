@@ -120,6 +120,20 @@ def test_dynamic_rows_built_and_genre_scoped(db_session: Session) -> None:
     assert all("Horror" in item.genres for item in spooky.items)
 
 
+def test_dynamic_rows_dedup_titles_across_themes(db_session: Session) -> None:
+    # The themed rows draw from one taste centroid, so a broadly-appealing title (and the wildcard
+    # discovery row especially) would otherwise surface in several rows — three evocatively-named
+    # rows reading as one row relabelled. Dedup keeps each title in only its first/strongest theme.
+    profile_id = _seeded(db_session)
+    # The October fallback gives distinct themes (spooky horror, a taste-genre row, a wildcard
+    # discovery row) whose candidate pools overlap — a realistic setup for cross-row collisions.
+    rows, _ = dynamic_rows(_service(db_session), profile_id, llm=None, now=_OCTOBER)
+
+    assert len(rows) >= 2  # more than one themed row survived
+    ids = [item.title_id for row in rows for item in row.items]
+    assert len(ids) == len(set(ids))  # and no title appears in two themed rows
+
+
 def test_dynamic_rows_explanation_calls_are_bounded(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

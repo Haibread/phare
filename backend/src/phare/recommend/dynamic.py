@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
 from phare.db.models import ROW_KEY_MAX_LEN
-from phare.llm_json import extract_json
+from phare.llm_json import as_str_list, extract_json
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
 from phare.recommend.explain import _taste_fingerprint
@@ -153,7 +153,7 @@ def propose_themes(
             Theme(
                 key=_slug(str(item["title"])),
                 title=str(item["title"]),
-                include_genres=[str(g) for g in item.get("genres", [])],
+                include_genres=as_str_list(item.get("genres")),
             )
             for item in parsed
             if item.get("title")
@@ -208,6 +208,11 @@ def dynamic_rows(
         with_llm=service.chat_llm is not None, budget=service.explanation_budget
     )
     rows: list[Row] = []
+    # Dedup titles across the themed rows, same as the home strip: without it every theme — they
+    # draw from one taste centroid over a small catalog — leads with the same handful of titles, so
+    # three evocatively-named rows are really one row relabelled. Each title stays in its first
+    # (strongest) theme; a theme emptied by dedup is dropped rather than shown bare.
+    seen: set[uuid.UUID] = set()
     for theme in themes:
         items = service.recommend(
             profile_id,
@@ -216,8 +221,9 @@ def dynamic_rows(
             swing_slots=theme.swing_slots,
             explainer=explainer,
         )
-        if items:
-            rows.append(Row(key=theme.key, title=theme.title, items=items))
+        row = service._dedup_against(Row(key=theme.key, title=theme.title, items=items), seen)
+        if row.items:
+            rows.append(row)
     log_rows(service.session, profile_id, rows)
     logger.info("recommend.dynamic", extra={"profile_id": str(profile_id), "rows": len(rows)})
     return rows, degraded

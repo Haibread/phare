@@ -14,7 +14,7 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.api.deps import require_safe_url
+from phare.api.deps import get_language, require_safe_url
 from phare.api.schemas import (
     ApiModel,
     IngestSummary,
@@ -24,6 +24,7 @@ from phare.api.schemas import (
 )
 from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import Settings, get_settings
+from phare.core.i18n import DEFAULT_LANGUAGE, Language
 from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
@@ -144,6 +145,7 @@ def _ingest_from(
     *,
     source_name: str,
     since: datetime | None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> IngestSummary:
     """Shared tail for each source: resolve via TMDB, batch-ingest, set the watermark."""
     if session.get(Profile, profile_id) is None:
@@ -160,7 +162,7 @@ def _ingest_from(
     set_last_synced(session, profile_id, source_name, started_at)
     # Taste is derived from history; refresh it automatically when the sync changed anything.
     if result.created or result.updated:
-        maybe_refresh_taste(session, profile_id, optional_llm_provider())
+        maybe_refresh_taste(session, profile_id, optional_llm_provider(), language)
     session.commit()
     return IngestSummary(
         created=result.created,
@@ -253,6 +255,7 @@ def sync_trakt(
     body: TraktSyncRequest,
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(get_current_user)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> IngestSummary:
     require_own_profile(user, body.profile_id)
     settings = get_settings()
@@ -268,6 +271,7 @@ def sync_trakt(
             _trakt_source(settings, token),
             source_name="trakt",
             since=since,
+            language=language,
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code != 401:
@@ -280,6 +284,7 @@ def sync_trakt(
             _trakt_source(settings, fresh),
             source_name="trakt",
             since=since,
+            language=language,
         )
 
 
@@ -321,6 +326,7 @@ def sync_plex(
     body: PlexSyncRequest,
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(get_current_user)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> IngestSummary:
     """Sync the account owner's own Plex watch history (privacy-safe: single account)."""
     require_own_profile(user, body.profile_id)
@@ -329,7 +335,9 @@ def sync_plex(
     token = _resolve_token(session, body.profile_id, "plex", body.token)
     source = PlexSourceProvider(base_url=body.base_url, token=token, account_id=body.account_id)
     since = _since_for(session, body.profile_id, "plex", full=body.full)
-    return _ingest_from(session, body.profile_id, source, source_name="plex", since=since)
+    return _ingest_from(
+        session, body.profile_id, source, source_name="plex", since=since, language=language
+    )
 
 
 @router.post("/sources/jellyfin/sync", response_model=IngestSummary)
@@ -337,6 +345,7 @@ def sync_jellyfin(
     body: JellyfinSyncRequest,
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(get_current_user)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> IngestSummary:
     """Sync one Jellyfin user's own played history (privacy-safe: single user)."""
     require_own_profile(user, body.profile_id)
@@ -345,7 +354,9 @@ def sync_jellyfin(
     token = _resolve_token(session, body.profile_id, "jellyfin", body.api_key)
     source = JellyfinSourceProvider(base_url=body.base_url, api_key=token, user_id=body.user_id)
     since = _since_for(session, body.profile_id, "jellyfin", full=body.full)
-    return _ingest_from(session, body.profile_id, source, source_name="jellyfin", since=since)
+    return _ingest_from(
+        session, body.profile_id, source, source_name="jellyfin", since=since, language=language
+    )
 
 
 @router.get("/profiles/{profile_id}/sources", response_model=list[ConnectedSource])
