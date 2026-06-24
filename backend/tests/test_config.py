@@ -13,6 +13,12 @@ def test_suite_is_hermetic_no_real_llm() -> None:
     assert not get_settings().llm_api_key
 
 
+def test_suite_pins_closed_registration() -> None:
+    """A dev's ``REGISTRATION_OPEN=true`` must not leak into tests that assert the closed-by-default
+    posture; conftest pins it back to the secure default. If this fails, that pin was removed."""
+    assert get_settings().registration_open is False
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
