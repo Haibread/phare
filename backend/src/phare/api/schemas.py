@@ -155,6 +155,10 @@ class RecommendationRow(ApiModel):
 
 class RecommendationsResponse(ApiModel):
     rows: list[RecommendationRow]
+    # True when a configured LLM couldn't name today's themed rows and the deterministic fallback
+    # filled in — the client flags "basic picks" instead of passing them off as AI-curated. Always
+    # False for the static home rows (they're deterministic by design).
+    degraded: bool = False
 
 
 class RecommendationLogItem(ApiModel):
@@ -208,6 +212,10 @@ class ChatReplyResponse(ApiModel):
     intent: ChatIntentResponse
     items: list[RecommendationItem]
     actions: list[AgentActionResponse] = []
+    # The AI fell back to a plain recommendation because it couldn't parse the planner output — no
+    # writes, no mood parsing. The client shows an honest "reduced mode" note rather than implying
+    # the agent fully understood.
+    degraded: bool = False
 
 
 class UndoRequest(ApiModel):

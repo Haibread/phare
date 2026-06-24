@@ -116,9 +116,9 @@ def get_dynamic_recommendations(
     """Today's LLM-picked themed rows (calendar + taste fallback when no LLM is configured)."""
     require_profile(user, profile_id)
     recommender = build_recommender(session, embedder, chat_llm, language)
-    rows = dynamic_rows(recommender, profile_id, llm=chat_llm)
+    rows, degraded = dynamic_rows(recommender, profile_id, llm=chat_llm)
     session.commit()
-    return RecommendationsResponse(rows=[to_row(row) for row in rows])
+    return RecommendationsResponse(rows=[to_row(row) for row in rows], degraded=degraded)
 
 
 @router.get("/profiles/{profile_id}/recommendations/conversion", response_model=ConversionResponse)

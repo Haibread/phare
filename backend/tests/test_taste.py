@@ -61,6 +61,55 @@ def test_generate_builds_profile(db_session: Session) -> None:
     assert "Dune" in llm.prompts[0]
 
 
+def test_generate_strips_reasoning_block(db_session: Session) -> None:
+    # A reasoning model wraps its JSON in <think>…</think>; the answer must still parse.
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion=f"<think>let me weigh the ratings…</think>\n{CANNED}")
+
+    taste = TasteService(db_session, llm, "test-model").generate(profile_id)
+
+    assert taste.structured["affinities"]["Science Fiction"] == 0.9
+    assert taste.confidence == 0.7
+
+
+def test_generate_falls_back_to_deterministic_when_unparseable(db_session: Session) -> None:
+    # The model answered but emitted no JSON (e.g. spent its budget reasoning) — degrade, don't 500.
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion="<think>thinking forever, never answered</think>")
+
+    taste = TasteService(db_session, llm, "test-model").generate(profile_id)
+
+    assert taste.generated_at is not None
+    assert taste.summary_text is not None and "lean toward" in taste.summary_text
+    assert taste.structured["affinities"]  # derived from the sample history's genres
+    assert taste.confidence <= 0.5  # marked as the coarse fallback it is
+
+
+def test_deterministic_fallback_localises_summary(db_session: Session) -> None:
+    profile_id = _profile_with_history(db_session)
+    llm = FakeLLMProvider(completion="<think>no json</think>")
+
+    taste = TasteService(db_session, llm, "test-model", language="fr").generate(profile_id)
+
+    assert taste.summary_text is not None and "vous penchez pour" in taste.summary_text
+
+
+def test_generate_propagates_when_llm_call_raises(db_session: Session) -> None:
+    # A *thrown* error (LLM unreachable) is not a parse failure — it must propagate so the ingest
+    # auto-refresh can swallow it, rather than masking an outage behind a deterministic profile.
+    profile_id = _profile_with_history(db_session)
+
+    class _Boom:
+        def complete(self, prompt: str, *, max_tokens: int | None = None) -> str:
+            raise RuntimeError("llm down")
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("llm down")
+
+    with pytest.raises(RuntimeError):
+        TasteService(db_session, _Boom(), "test-model").generate(profile_id)
+
+
 def test_generate_localises_only_the_summary(db_session: Session) -> None:
     profile_id = _profile_with_history(db_session)
     llm = FakeLLMProvider(completion=CANNED)

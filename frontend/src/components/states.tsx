@@ -1,5 +1,17 @@
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import styles from "./components.module.css";
+
+/** A human, localised message for any thrown error — network failures (the opaque "Failed to fetch")
+ * become a friendly "couldn't reach the server" instead of leaking the raw browser string. Duck-types
+ * on ``status === 0`` (an ApiError that never reached the server) rather than importing ApiError, so
+ * it stays robust when api is mocked in tests. */
+export function errorMessage(error: unknown, t: TFunction): string {
+  if (error && typeof error === "object" && (error as { status?: number }).status === 0) {
+    return t("networkError");
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function Loading({ label }: { label?: string }): React.JSX.Element {
   const { t } = useTranslation("common");
@@ -29,7 +41,7 @@ export function ErrorState({
   onRetry?: () => void;
 }): React.JSX.Element {
   const { t } = useTranslation("common");
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error, t);
   return (
     <div className={styles.center} data-testid="error" role="alert">
       <span className={styles.error}>{t("error", { message })}</span>

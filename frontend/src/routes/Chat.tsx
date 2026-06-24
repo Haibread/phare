@@ -85,7 +85,9 @@ export function Chat(): React.JSX.Element {
         onStatus: (label) => setLog((l) => patchLast(l, { status: label })),
         onMeta: (meta) => {
           wrote = meta.actions.length > 0;
-          setLog((l) => patchLast(l, { items: meta.items, actions: meta.actions }));
+          setLog((l) =>
+            patchLast(l, { items: meta.items, actions: meta.actions, degraded: meta.degraded }),
+          );
         },
         onDelta: (chunk) => setLog((l) => patchLast(l, (t) => ({ text: t.text + chunk }))),
         onDone: () => setLog((l) => patchLast(l, { streaming: false })),
@@ -140,6 +142,11 @@ export function Chat(): React.JSX.Element {
               <p style={{ margin: 0 }}>
                 {turn.text}
                 {turn.streaming && <span className={styles.caret} aria-hidden="true" />}
+              </p>
+            )}
+            {turn.degraded && !turn.streaming && (
+              <p className={styles.reducedMode} data-testid="chat-degraded">
+                {t("reducedMode")}
               </p>
             )}
             {turn.actions && turn.actions.length > 0 && (

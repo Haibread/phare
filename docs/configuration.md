@@ -25,6 +25,8 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Doubles as the embedding-space version tag. |
 | `LLM_EMBEDDING_DIM` | `1536` | Vector dimension. Fixed by the DB schema — changing it needs a migration + full re-embed. |
 | `LLM_EMBEDDING_REQUEST_DIMENSIONS` | `false` | Send `LLM_EMBEDDING_DIM` as the `dimensions` request param. Enable for models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed; leave off for models that reject the param. |
+| `LLM_REASONING_MODEL` | `false` | Set when the chat/agent model is a **reasoning** model (emits `<think>…</think>` before answering, e.g. Qwen3, DeepSeek-R1). Adds `LLM_REASONING_HEADROOM` tokens to every bounded completion so reasoning doesn't eat the budget and return empty JSON, and strips a leading think block from the streamed reply. See [When a configured model misbehaves](#when-a-configured-model-misbehaves). |
+| `LLM_REASONING_HEADROOM` | `4096` | Extra completion tokens granted per call when `LLM_REASONING_MODEL` is on. The default clears every structured path including taste extraction (the largest output); raise it further only if a very verbose reasoner still truncates. |
 | **Metadata + sources** (live syncs/imports only; not needed for the sample-data path) | | |
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + catalog import (popular + broad) + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
@@ -154,6 +156,26 @@ quality.
 The two spaces never mix: local and real vectors carry different model-version tags
 ([`embeddings/version.py`](../backend/src/phare/embeddings/version.py)) and retrieval only queries
 the active one. So you can run offline first, then add a key later.
+
+### When a configured model misbehaves
+
+The structured-JSON steps (taste extraction, chat planning, dynamic-row naming) tolerate a model
+that wraps its answer in `<think>…</think>` reasoning, fences it in markdown, or surrounds it with
+prose — the JSON is salvaged ([`llm_json.py`](../backend/src/phare/llm_json.py)). If the model
+returns nothing parseable anyway (a common failure with **reasoning models** that spend their whole
+`max_tokens` budget thinking before answering), each step degrades instead of erroring: planning
+falls back to a plain `recommend`, dynamic rows fall back to calendar+genre themes, and taste
+extraction falls back to a deterministic genre-frequency profile (low confidence, still editable).
+
+These fallbacks are **no longer silent**: a degraded chat turn shows a "basic mode" note under the
+reply (it recommended without registering what you said), and a fallback "Today's picks" carries a
+`basic` badge. The matching log lines are `plan_failed` / `dynamic_llm_failed` /
+`unparseable_completion`.
+
+If you're running a reasoning model, set **`LLM_REASONING_MODEL=true`** — it grants the structured
+calls enough token headroom to finish thinking *and* emit their JSON, and strips the think block
+from the streamed reply, which clears up most of the degradation. Otherwise prefer an
+**instruct/non-reasoning** model for `LLM_CHAT_MODEL`.
 
 ## Security notes
 

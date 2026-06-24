@@ -62,7 +62,7 @@ _MESSAGES: dict[str, dict[Language, str]] = {
     # Template (offline) explanation fragments. Assembled into one sentence in recommend/explain.py.
     "explain.kind.movie": {"en": "movie", "fr": "Film"},
     "explain.kind.show": {"en": "show", "fr": "Série"},
-    "explain.genreSpanning": {"en": "genre-spanning", "fr": "multi-genres"},
+    "explain.genreSpanning": {"en": "Genre-spanning", "fr": "multi-genres"},
     "explain.era": {"en": " from {year}", "fr": " de {year}"},
     "explain.becauseAffinity": {
         "en": " that leans into your taste for {matched}",
@@ -73,18 +73,30 @@ _MESSAGES: dict[str, dict[Language, str]] = {
         "fr": " qui correspond à votre profil",
     },
     "explain.base": {
-        "en": "A {genres} {kind}{era}{because}.",
+        # Opens on the (capitalised) genre rather than an article, so it reads right whatever the
+        # genre is — "A Animation movie" was the giveaway that a naive "A {…}" was wrong.
+        "en": "{genres} {kind}{era}{because}.",
         "fr": "{kind} {genres}{era}{because}.",
     },
     "explain.swing": {
         "en": (
-            "A {genres} {kind}{era} — a discovery pick outside your usual lane, "
+            "{genres} {kind}{era} — a discovery pick outside your usual lane, "
             "offered as a deliberate stretch rather than a sure thing."
         ),
         "fr": (
             "{kind} {genres}{era} — une découverte hors de vos sentiers battus, "
             "proposée comme un pari assumé plutôt qu'une valeur sûre."
         ),
+    },
+    # Deterministic taste summary, used when the LLM returns nothing parseable (e.g. a reasoning
+    # model that spent its budget thinking). Genre names interpolate in their stored language.
+    "taste.fallbackSummary": {
+        "en": "From what you've watched, you lean toward {leaning}.",
+        "fr": "D'après vos visionnages, vous penchez pour {leaning}.",
+    },
+    "taste.fallbackSummaryEmpty": {
+        "en": "Not enough watch history yet to read your taste.",
+        "fr": "Pas encore assez d'historique pour cerner vos goûts.",
     },
     # Deterministic chat replies (the offline path, and the off-topic steer-back used even with an
     # LLM). Genre descriptors interpolated in stay in their stored language.

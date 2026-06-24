@@ -6,18 +6,20 @@ validated structured profile. User edits live in ``user_overrides`` and always w
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
-from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
+from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
 from phare.db.models import TasteProfile, Title, WatchEvent
+from phare.llm_json import extract_json
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
 from phare.taste.schema import TasteProfileData
@@ -50,16 +52,6 @@ def effective_profile(taste: TasteProfile) -> dict[str, Any]:
     merged = dict(taste.structured)
     merged.update(taste.user_overrides)
     return merged
-
-
-def _extract_json(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1]
-        if text.startswith("json"):
-            text = text[len("json") :]
-    parsed: dict[str, Any] = json.loads(text.strip())
-    return parsed
 
 
 class TasteService:
@@ -105,6 +97,35 @@ class TasteService:
         joined = "; ".join(n.text for n in notes)
         return f"\n\nThe viewer explicitly told us to remember (weight these heavily): {joined}\n"
 
+    def _deterministic(self, profile_id: uuid.UUID) -> TasteProfileData:
+        """A taste profile built from genre frequency alone — no LLM.
+
+        The graceful floor when the model returns nothing parseable: the most-watched genres become
+        the user's likes and positive affinities (normalised to the peak count), so the profile is
+        still inspectable and editable instead of blank. Confidence stays low to mark it as the
+        coarse fallback it is.
+        """
+        rows = self.session.execute(
+            select(Title.genres)
+            .join(WatchEvent, WatchEvent.title_id == Title.id)
+            .where(WatchEvent.profile_id == profile_id, WatchEvent.excluded.is_(False))
+        ).all()
+        counts: Counter[str] = Counter(g for (genres,) in rows for g in (genres or []))
+        peak = max(counts.values(), default=0)
+        top = [genre for genre, _ in counts.most_common(5)]
+        affinities = {genre: round(count / peak, 2) for genre, count in counts.most_common(8)}
+        summary = (
+            translate(self.language, "taste.fallbackSummary", leaning=", ".join(top))
+            if top
+            else translate(self.language, "taste.fallbackSummaryEmpty")
+        )
+        return TasteProfileData(
+            summary=summary,
+            likes=top,
+            affinities=affinities,
+            confidence=round(min(0.5, len(rows) / 40), 2),
+        )
+
     def generate(self, profile_id: uuid.UUID) -> TasteProfile:
         lines = self._history_lines(profile_id)
         history = "\n".join(lines) if lines else "(no history)"
@@ -119,7 +140,19 @@ class TasteService:
         logger.info("taste.generate", extra={"profile_id": str(profile_id), "events": len(lines)})
 
         raw = self.llm.complete(prompt, max_tokens=_TASTE_MAX_TOKENS)
-        data = TasteProfileData.model_validate(_extract_json(raw))
+        try:
+            data = TasteProfileData.model_validate(extract_json(raw))
+        except (ValueError, ValidationError):
+            # The model answered but with no parseable JSON — e.g. a reasoning model that spent its
+            # token budget thinking, or one that ignored the "JSON only" contract. Degrade to a
+            # deterministic profile from genre history (docs/design.md: works on a weak model)
+            # rather than 500 the request. A raised exception (LLM unreachable) still propagates so
+            # callers like the ingest auto-refresh can swallow it.
+            logger.warning(
+                "taste.unparseable_completion; using deterministic fallback",
+                extra={"profile_id": str(profile_id)},
+            )
+            data = self._deterministic(profile_id)
 
         taste = self.session.scalar(
             select(TasteProfile).where(TasteProfile.profile_id == profile_id)
@@ -148,6 +181,7 @@ def optional_llm_provider() -> LLMProvider | None:
         chat_model=settings.llm_chat_model,
         embedding_model=settings.llm_embedding_model,
         base_url=settings.llm_base_url,
+        reasoning_headroom=settings.reasoning_headroom,
     )
 
 

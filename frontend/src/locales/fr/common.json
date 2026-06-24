@@ -1,6 +1,7 @@
 {
   "loading": "Chargement…",
   "error": "Une erreur est survenue : {{message}}",
+  "networkError": "Impossible de joindre le serveur — vérifiez qu'il fonctionne et réessayez.",
   "tryAgain": "Réessayer",
   "language": {
     "label": "Langue"

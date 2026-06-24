@@ -1,6 +1,7 @@
 {
   "loading": "Loading…",
   "error": "Something went wrong: {{message}}",
+  "networkError": "Couldn't reach the server — check it's running and try again.",
   "tryAgain": "Try again",
   "language": {
     "label": "Language"

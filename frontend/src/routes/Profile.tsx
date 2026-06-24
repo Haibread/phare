@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { HistoryItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
-import { ErrorState, Loading } from "../components/states";
+import { ErrorState, Loading, errorMessage } from "../components/states";
 import {
   keys,
   useAddMemoryNote,
@@ -42,6 +42,7 @@ function episodeLabel(item: HistoryItem): string {
 
 export function Profile(): React.JSX.Element {
   const { t } = useTranslation("profile");
+  const { t: tCommon } = useTranslation("common");
   const profileId = useProfileId();
   const qc = useQueryClient();
   const taste = useTaste(profileId);
@@ -158,10 +159,7 @@ export function Profile(): React.JSX.Element {
             {generateTaste.isError && (
               <p className={styles.errorText} data-testid="taste-generate-error" role="alert">
                 {t("taste.generateError", {
-                  message:
-                    generateTaste.error instanceof Error
-                      ? generateTaste.error.message
-                      : String(generateTaste.error),
+                  message: errorMessage(generateTaste.error, tCommon),
                 })}
               </p>
             )}

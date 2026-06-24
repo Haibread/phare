@@ -18,6 +18,9 @@ export interface ChatTurn {
   actions?: AgentAction[];
   streaming?: boolean;
   status?: string;
+  // The agent fell back to a plain recommendation (couldn't parse the planner) — shown as an honest
+  // "reduced mode" note so the warm reply doesn't imply it understood or remembered.
+  degraded?: boolean;
 }
 
 interface ChatState {

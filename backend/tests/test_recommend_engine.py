@@ -108,6 +108,21 @@ def test_rows_include_you_might_like_with_explanations(db_session: Session) -> N
     assert all(item.title_id not in watched_title_ids(db_session, profile_id) for item in yml.items)
 
 
+def test_taste_driven_rows_do_not_repeat_titles(db_session: Session) -> None:
+    # The "because you watched X" rows + you_might_like must not all lead with the same picks — with
+    # a small catalog that made every row look identical (the review's "wall of the same dozen").
+    profile_id = _seeded_profile(db_session)
+    rows = {row.key: row for row in _service(db_session).rows(profile_id)}
+    discovery = [r for k, r in rows.items() if k.startswith("because:") or k == "you_might_like"]
+    assert len(discovery) >= 2  # there are several taste-driven rows to dedup across
+
+    seen: set[str] = set()
+    for row in discovery:
+        ids = [str(item.title_id) for item in row.items]
+        assert not (set(ids) & seen)  # no title appears in more than one taste-driven row
+        seen.update(ids)
+
+
 def test_rows_have_watch_again_and_continue_watching(db_session: Session) -> None:
     profile_id = _seeded_profile(db_session)
     by_key = {row.key: row for row in _service(db_session).rows(profile_id)}

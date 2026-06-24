@@ -65,6 +65,7 @@ def get_optional_chat_llm() -> LLMProvider | None:
         chat_model=settings.llm_chat_model,
         embedding_model=settings.llm_embedding_model,
         base_url=settings.llm_base_url,
+        reasoning_headroom=settings.reasoning_headroom,
     )
 
 
@@ -79,4 +80,5 @@ def get_optional_agent_llm() -> LLMProvider | None:
         chat_model=settings.agent_chat_model,
         embedding_model=settings.llm_embedding_model,
         base_url=settings.llm_base_url,
+        reasoning_headroom=settings.reasoning_headroom,
     )

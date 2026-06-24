@@ -165,6 +165,14 @@ class RecommendationService:
             key="you_might_like", title=translate(self.language, "row.youMightLike"), items=items
         )
 
+    @staticmethod
+    def _dedup_against(row: Row, seen: set[uuid.UUID]) -> Row:
+        """Drop a row's items already shown in an earlier row, recording the survivors in ``seen``.
+        Keeps each title to its strongest (earliest) row so the page isn't the same picks over."""
+        kept = [item for item in row.items if item.title_id not in seen]
+        seen.update(item.title_id for item in kept)
+        return row.model_copy(update={"items": kept})
+
     def _title_vector(self, title_id: uuid.UUID) -> list[float] | None:
         embedding = self.session.scalar(
             select(TitleEmbedding.embedding).where(
@@ -212,13 +220,25 @@ class RecommendationService:
         # One explainer per render, so the LLM-call budget is pooled across every explaining row
         # (because-you-watched + you-might-like) instead of each row fanning out independently.
         explainer = self._explainer(with_llm=True, budget=self.explanation_budget)
+        # Dedup the taste-driven discovery rows against each other: with a small catalog every
+        # "because you watched X" row otherwise leads with the same handful of titles, so the page
+        # reads as one row repeated. Each title appears in only its strongest row; the watched-title
+        # rows (continue/again) and popular draw from different pools and stay untouched.
+        seen: set[uuid.UUID] = set()
+        because = [
+            self._dedup_against(row, seen)
+            for row in self.because_you_watched_rows(profile_id, explainer=explainer)
+        ]
+        you_might_like = self._dedup_against(
+            self.you_might_like(profile_id, explainer=explainer), seen
+        )
         candidate_rows = [
             # Most-personalized first — these render right under the hero top pick.
-            *self.because_you_watched_rows(profile_id, explainer=explainer),
+            *because,
             row_builders.continue_watching_row(
                 self.session, profile_id, limit=self.row_size, language=self.language
             ),
-            self.you_might_like(profile_id, explainer=explainer),
+            you_might_like,
             row_builders.watch_again_row(
                 self.session, profile_id, limit=self.row_size, language=self.language
             ),

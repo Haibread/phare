@@ -33,7 +33,8 @@ def _fresh_theme_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_fallback_uses_season_taste_and_discovery() -> None:
     taste = {"affinities": {"Science Fiction": 0.9, "Musical": -0.5}}
-    themes = propose_themes(taste, _OCTOBER, llm=None)
+    themes, degraded = propose_themes(taste, _OCTOBER, llm=None)
+    assert degraded is False  # no LLM is the honest offline path, not degradation
     keys = [t.key for t in themes]
 
     assert any("Horror" in t.include_genres for t in themes)  # October -> spooky season
@@ -43,7 +44,7 @@ def test_fallback_uses_season_taste_and_discovery() -> None:
 
 
 def test_fallback_without_season_still_has_taste_and_discovery() -> None:
-    themes = propose_themes({"affinities": {"Drama": 0.8}}, _MARCH, llm=None)
+    themes, _ = propose_themes({"affinities": {"Drama": 0.8}}, _MARCH, llm=None)
     assert any(t.include_genres == ["Drama"] for t in themes)
     assert any(t.swing_slots >= 3 for t in themes)  # the discovery row
 
@@ -53,9 +54,10 @@ def test_llm_themes_are_parsed() -> None:
         '[{"title":"Cozy mysteries","genres":["Mystery"]},{"title":"Wildcard","genres":[]}]'
     )
     llm = FakeLLMProvider(completion=completion)
-    themes = propose_themes({"summary": "x"}, _MARCH, llm=llm)
+    themes, degraded = propose_themes({"summary": "x"}, _MARCH, llm=llm)
     assert [t.title for t in themes] == ["Cozy mysteries", "Wildcard"]
     assert themes[0].include_genres == ["Mystery"]
+    assert degraded is False  # the model produced usable themes
 
 
 def test_llm_theme_prompt_localises_titles_but_keeps_genres_english() -> None:
@@ -81,10 +83,11 @@ def test_slug_truncates_long_titles_but_stays_distinct() -> None:
 
 
 def test_llm_failure_falls_back() -> None:
-    themes = propose_themes(
+    themes, degraded = propose_themes(
         {"affinities": {"Drama": 0.7}}, _MARCH, llm=FakeLLMProvider(completion="not json")
     )
     assert any(t.include_genres == ["Drama"] for t in themes)
+    assert degraded is True  # a configured LLM that failed → flagged as reduced mode
 
 
 def _service(session: Session) -> RecommendationService:
@@ -108,7 +111,7 @@ def _seeded(session: Session) -> uuid.UUID:
 
 def test_dynamic_rows_built_and_genre_scoped(db_session: Session) -> None:
     profile_id = _seeded(db_session)
-    rows = dynamic_rows(_service(db_session), profile_id, llm=None, now=_OCTOBER)
+    rows, _ = dynamic_rows(_service(db_session), profile_id, llm=None, now=_OCTOBER)
 
     assert rows
     spooky = next((r for r in rows if "Horror" in r.title or r.key.startswith("dyn:spooky")), None)
@@ -133,7 +136,7 @@ def test_dynamic_rows_explanation_calls_are_bounded(
         explanation_budget=3,
     )
 
-    rows = dynamic_rows(service, profile_id, llm=None, now=_OCTOBER)  # deterministic themes
+    rows, _ = dynamic_rows(service, profile_id, llm=None, now=_OCTOBER)  # deterministic themes
 
     assert sum(len(r.items) for r in rows) > 3  # many cards across themed rows...
     assert len(llm.prompts) <= 3  # ...but the LLM is called at most `budget` times, not per card
@@ -147,7 +150,7 @@ def test_dynamic_rows_long_llm_theme_logs_fitting_key(db_session: Session) -> No
     llm = FakeLLMProvider(completion=f'[{{"title":{long_title!r},"genres":["Horror"]}}]')
     profile_id = _seeded(db_session)
 
-    rows = dynamic_rows(_service(db_session), profile_id, llm=llm, now=_OCTOBER)
+    rows, _ = dynamic_rows(_service(db_session), profile_id, llm=llm, now=_OCTOBER)
 
     assert rows
     keys = db_session.scalars(

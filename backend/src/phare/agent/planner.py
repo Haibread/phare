@@ -8,7 +8,6 @@ to a catalog title needs the model.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime
@@ -20,6 +19,7 @@ from phare.agent import commitments as commitments_store
 from phare.agent import memory as memory_store
 from phare.agent.schema import AgentPlan, ToolCall
 from phare.db.models import TasteProfile, Title
+from phare.llm_json import extract_json
 from phare.providers.types import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -87,13 +87,6 @@ def _context_block(session: Session, profile_id: uuid.UUID, now: datetime) -> st
     return "\n".join(parts) if parts else "(no memory yet)"
 
 
-def _strip_fence(raw: str) -> str:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1].removeprefix("json").strip()
-    return text
-
-
 def plan(
     session: Session,
     profile_id: uuid.UUID,
@@ -113,10 +106,9 @@ def plan(
     context = _context_block(session, profile_id, now)
     prompt = f"{_SYSTEM}\nContext:\n{context}\n\nUser message: {message}\n"
     try:
-        raw = _strip_fence(llm.complete(prompt, max_tokens=_PLAN_MAX_TOKENS))
-        parsed = json.loads(raw)
+        parsed = extract_json(llm.complete(prompt, max_tokens=_PLAN_MAX_TOKENS))
         if not isinstance(parsed, dict) or "calls" not in parsed:
-            return AgentPlan(calls=[ToolCall(tool="recommend")])
+            return AgentPlan(calls=[ToolCall(tool="recommend")], degraded=True)
         calls = [
             ToolCall(tool=str(c["tool"]), args=dict(c.get("args", {})))
             for c in parsed["calls"]
@@ -125,4 +117,4 @@ def plan(
         return AgentPlan(calls=calls)  # may be empty → off-topic decline, handled by the service
     except Exception:  # noqa: BLE001 - a flaky planner must not break the chat turn
         logger.warning("agent.plan_failed; defaulting to recommend")
-        return AgentPlan(calls=[ToolCall(tool="recommend")])
+        return AgentPlan(calls=[ToolCall(tool="recommend")], degraded=True)

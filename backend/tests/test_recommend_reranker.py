@@ -81,6 +81,24 @@ def test_swing_slots_are_reserved_and_flagged() -> None:
     assert all((r.confidence or 0) < 0.6 for r in swings)
 
 
+def test_confidence_reflects_affinity_spread() -> None:
+    # Two equally-similar titles; one hits a liked genre, one doesn't. Confidence must separate them
+    # so a row isn't a flat wall of one label (review: everything reading "Strong fit").
+    liked = _cand(title="Liked", sim=0.7, genres=["Science Fiction"])
+    offaxis = _cand(title="Offaxis", sim=0.7, genres=["Western"])
+    taste = {"affinities": {"Science Fiction": 1.0, "Western": -0.5}, "confidence": 0.5}
+    recs = {r.title: r for r in rerank([liked, offaxis], taste, k=2, swing_slots=0)}
+    assert (recs["Liked"].confidence or 0) > (recs["Offaxis"].confidence or 0)
+
+
+def test_confidence_is_similarity_only_without_taste() -> None:
+    # With no taste profile, affinity carries no signal — confidence shouldn't be dragged toward
+    # neutral; it stays the pure similarity read.
+    cand = _cand(title="t", sim=0.6, genres=["Drama"])
+    (rec,) = rerank([cand], {}, k=1, swing_slots=0)
+    assert rec.confidence == round((0.6 + 1.0) / 2.0, 3)
+
+
 def test_swing_slots_clamped_to_available() -> None:
     recs = rerank([_cand(title="only", sim=0.5)], {}, k=5, swing_slots=2)
     assert len(recs) == 1  # never invents items it doesn't have

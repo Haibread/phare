@@ -42,6 +42,7 @@ describe("Chat write actions", () => {
     mocked.chatStream.mockImplementation(
       async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
         handlers.onMeta?.({
+          degraded: false,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
           items: [],
           actions: [
@@ -73,6 +74,7 @@ describe("Chat write actions", () => {
     mocked.chatStream.mockImplementation(
       async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
         handlers.onMeta?.({
+          degraded: false,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
           items: [],
           actions: [],
@@ -91,11 +93,34 @@ describe("Chat write actions", () => {
     expect(await screen.findByText("A few ideas for you.")).toBeInTheDocument();
   });
 
+  it("shows a reduced-mode note when the turn degraded", async () => {
+    mocked.chatOpening.mockResolvedValue({ greeting: null });
+    mocked.chatStream.mockImplementation(
+      async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
+        handlers.onMeta?.({
+          degraded: true,
+          intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
+          items: [],
+          actions: [],
+        });
+        handlers.onDelta?.("Here are some picks.");
+        handlers.onDone?.();
+      },
+    );
+
+    renderChat();
+    fireEvent.change(screen.getByTestId("chat-input"), { target: { value: "I loved Dune" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+
+    expect(await screen.findByTestId("chat-degraded")).toBeInTheDocument();
+  });
+
   it("clears the conversation when New chat is clicked", async () => {
     mocked.chatOpening.mockResolvedValue({ greeting: null });
     mocked.chatStream.mockImplementation(
       async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
         handlers.onMeta?.({
+          degraded: false,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
           items: [],
           actions: [],

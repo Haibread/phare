@@ -93,6 +93,22 @@ A compact snapshot of what's built and what's next. Update as features land.
   into taste (durable → overrides; temporal → session filters), all inspectable/editable in Profile
   ("Watch plans" + "Memory"). New tables `watch_commitment` / `memory_note` (migration 0010); see
   [`agent.md`](agent.md).
+- **Reasoning-model robustness + honest degradation** — one tolerant JSON extractor
+  ([`llm_json.py`](../backend/src/phare/llm_json.py)) salvages structured output wrapped in
+  `<think>…</think>`, markdown fences, or prose, shared by the planner, taste extraction, and
+  themed-row namer; the provider coalesces a null `content` to `""`. When a configured model still
+  returns nothing parseable, each path degrades *visibly* instead of silently: taste falls back to a
+  deterministic genre-frequency profile (no more 500), a degraded chat turn carries a "basic mode"
+  note, and a fallback "Today's picks" a `basic` badge (`degraded` on the chat + dynamic responses).
+  `LLM_REASONING_MODEL` grants reasoning models token headroom (and strips the think block from the
+  streamed reply) so the structured paths actually parse. See
+  [`configuration.md`](configuration.md#when-a-configured-model-misbehaves).
+- **Recommendation polish** — confidence now folds the taste-affinity (steering) signal in, so a row
+  spreads across fit labels instead of reading as a wall of "Strong fit"; the taste-driven rows
+  (because-you-watched + you-might-like) dedup against each other so the page isn't the same dozen
+  titles repeated; the chat strip drops any title named in the current message ("I loved X" no longer
+  recommends X back); and the sample catalog ships real TMDB poster art (works offline — the image
+  CDN needs no key).
 
 ## Run it
 

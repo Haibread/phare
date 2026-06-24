@@ -12,6 +12,7 @@ from phare.agent.service import (
     ChatService,
     _compose_reply_template,
     _reply_text,
+    _strip_leading_think,
     build_compose_prompt,
 )
 from phare.agent.tools import ExecutionResult
@@ -59,6 +60,21 @@ def test_keyword_intent_negation_excludes_genre() -> None:
     intent = keyword_intent("a thriller but no horror")
     assert "Thriller" in intent.include_genres
     assert intent.exclude_genres == ["Horror"]
+
+
+def test_strip_leading_think_drops_reasoning_block() -> None:
+    chunks = ["<think>let me ", "consider</think>Try ", "Prisoners next."]
+    assert "".join(_strip_leading_think(iter(chunks))) == "Try Prisoners next."
+
+
+def test_strip_leading_think_passes_through_a_normal_reply() -> None:
+    chunks = ["So glad ", "you loved it!"]
+    assert "".join(_strip_leading_think(iter(chunks))) == "So glad you loved it!"
+
+
+def test_strip_leading_think_yields_nothing_for_reasoning_only() -> None:
+    # All reasoning, no answer after — yields nothing, so the caller falls back to the template.
+    assert "".join(_strip_leading_think(iter(["<think>only ", "thinking</think>"]))) == ""
 
 
 def _recommender(session: Session) -> RecommendationService:
@@ -132,6 +148,36 @@ def test_empty_result_replies_deterministically_without_the_agent_model(
     assert prepared.items == []
     assert prepared.compose_prompt is None  # the agent model is not spent on an empty list
     assert prepared.reply_text  # a deterministic "no match" reply instead
+
+
+def test_chat_flags_degraded_when_planner_output_unparseable(db_session: Session) -> None:
+    # A configured model that returns unparseable planner output must surface degraded=True so the
+    # UI can flag reduced mode — not silently pretend the agent understood.
+    profile_id = _seeded_profile(db_session)
+
+    junk = FakeLLMProvider(completion="not json at all")
+    degraded_reply = ChatService(_recommender(db_session), chat_llm=junk).respond(
+        profile_id, "funny"
+    )
+    assert degraded_reply.degraded is True
+
+    good = FakeLLMProvider(completion='{"calls":[{"tool":"recommend","args":{}}]}')
+    ok_reply = ChatService(_recommender(db_session), chat_llm=good).respond(profile_id, "funny")
+    assert ok_reply.degraded is False
+
+
+def test_chat_drops_titles_named_in_the_message(db_session: Session) -> None:
+    # Telling the agent about a title must not get it recommended straight back ("I loved X" → X in
+    # the strip reads as not listening).
+    profile_id = _seeded_profile(db_session)
+    service = ChatService(_recommender(db_session), chat_llm=None)
+
+    baseline = service.respond(profile_id, "something good to watch")
+    target = next((i.title for i in baseline.items if len(i.title) >= 4), None)
+    assert target is not None  # baseline returns nameable picks
+
+    reply = service.respond(profile_id, f"I just watched {target} last night and loved it")
+    assert all(item.title != target for item in reply.items)
 
 
 def test_rewatch_draws_from_watched_history_not_the_fresh_catalog(db_session: Session) -> None:
