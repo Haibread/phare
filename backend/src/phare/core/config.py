@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     # models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed;
     # leave off for models that reject the parameter.
     llm_embedding_request_dimensions: bool = False
+    # Set when the workhorse/agent model is a *reasoning* model (emits `<think>…</think>` before its
+    # answer). Reasoning eats the response budget, so without headroom a model spends its whole
+    # `max_tokens` thinking and returns empty/truncated JSON — breaking taste, planning, and themed
+    # rows. When on, every bounded completion gets `llm_reasoning_headroom` extra tokens and the
+    # reply stream drops a leading think block. See docs/configuration.md.
+    llm_reasoning_model: bool = False
+    llm_reasoning_headroom: int = 4096
 
     # Taste extraction cost controls. Taste is a derived artifact that auto-refreshes after a
     # profile's history changes, but a full re-extraction is a workhorse LLM call over the whole
@@ -128,6 +135,11 @@ class Settings(BaseSettings):
     def agent_chat_model(self) -> str:
         """Conversational chat-agent model — the bigger one when set, else the chat model."""
         return self.llm_agent_model or self.llm_chat_model
+
+    @property
+    def reasoning_headroom(self) -> int:
+        """Extra completion tokens for a reasoning model, or 0 when not configured as one."""
+        return self.llm_reasoning_headroom if self.llm_reasoning_model else 0
 
     @property
     def is_production(self) -> bool:

@@ -8,6 +8,7 @@
   "send": "Envoyer",
   "undo": "annuler",
   "undone": "annulé",
+  "reducedMode": "⚠ Mode basique — je n'ai pas pu tout traiter, j'ai donc simplement recommandé sans rien noter. Vérifie la configuration du modèle d'IA.",
   "error": "Désolé — un problème est survenu. Réessaie.",
   "status": {
     "thinking": "Réflexion…"

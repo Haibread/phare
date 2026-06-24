@@ -9,10 +9,14 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
  * rejection (4xx) from a transient blip worth retrying. Network/parse failures stay plain `Error`. */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, detail: string) {
-    super(detail);
+  constructor(status: number, detail: string, options?: ErrorOptions) {
+    super(detail, options);
     this.name = "ApiError";
     this.status = status;
+  }
+  /** Status 0 = the request never reached the server (network/CORS/opaque failure). */
+  get isNetwork(): boolean {
+    return this.status === 0;
   }
 }
 
@@ -109,6 +113,9 @@ export type RecommendationRow = z.infer<typeof recommendationRowSchema>;
 
 const recommendationsResponseSchema = z.object({
   rows: z.array(recommendationRowSchema),
+  // True when a configured LLM couldn't name today's themed rows and the deterministic fallback
+  // filled in — the UI flags "basic picks" instead of passing them off as AI-curated.
+  degraded: z.boolean().default(false),
 });
 
 const chatIntentSchema = z.object({
@@ -130,6 +137,9 @@ export const chatReplySchema = z.object({
   intent: chatIntentSchema,
   items: z.array(recommendationItemSchema),
   actions: z.array(agentActionSchema),
+  // The AI couldn't fully process the turn (planner output unparseable) and fell back to a plain
+  // recommendation — no writes, no mood parsing. The UI flags it instead of implying it understood.
+  degraded: z.boolean().default(false),
 });
 export type ChatReply = z.infer<typeof chatReplySchema>;
 
@@ -138,6 +148,7 @@ export const chatStreamMetaSchema = z.object({
   intent: chatIntentSchema,
   items: z.array(recommendationItemSchema),
   actions: z.array(agentActionSchema),
+  degraded: z.boolean().default(false),
 });
 export type ChatStreamMeta = z.infer<typeof chatStreamMetaSchema>;
 
@@ -292,10 +303,19 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   if (authToken !== null) {
     headers.Authorization = `Bearer ${authToken}`;
   }
-  const response = await fetch(url, {
-    ...init,
-    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
+    });
+  } catch (cause) {
+    // fetch() itself rejected — the server is unreachable, or a 500 came back without CORS headers
+    // (the browser surfaces both as an opaque "Failed to fetch"). Throw a typed network error so the
+    // UI can show a friendly, localised message instead of leaking the raw TypeError.
+    logger.warn("api.network_error", { url });
+    throw new ApiError(0, "network", { cause });
+  }
   if (!response.ok) {
     if (response.status === 401) {
       // Expired/invalid token — drop it so the app falls back to the login gate on the next /me.

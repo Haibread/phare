@@ -8,6 +8,7 @@
   "send": "Send",
   "undo": "undo",
   "undone": "undone",
+  "reducedMode": "⚠ Basic mode — I couldn't fully process that, so I just recommended without noting anything. Check the AI model config.",
   "error": "Sorry — something went wrong. Please try again.",
   "status": {
     "thinking": "Thinking…"

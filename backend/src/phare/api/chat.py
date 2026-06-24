@@ -73,6 +73,7 @@ def chat(
             AgentActionResponse(kind=a.kind, summary=a.summary, undo_token=a.undo_token)
             for a in reply.actions
         ],
+        degraded=reply.degraded,
     )
 
 
@@ -106,6 +107,7 @@ def _meta_payload(prepared: PreparedTurn) -> dict[str, object]:
             )
             for a in prepared.actions
         ],
+        "degraded": prepared.degraded,
     }
 
 

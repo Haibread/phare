@@ -33,11 +33,15 @@ class OpenAILLMProvider:
         client: httpx.Client | None = None,
         embedding_dimensions: int | None = None,
         *,
+        reasoning_headroom: int = 0,
         max_retries: int = DEFAULT_MAX_RETRIES,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._chat_model = chat_model
         self._embedding_model = embedding_model
+        # Extra tokens added to every bounded completion for a reasoning model, so the `<think>`
+        # phase doesn't consume the whole budget and leave the actual answer empty/truncated.
+        self._reasoning_headroom = reasoning_headroom
         # When set, request this output size via the standard OpenAI `dimensions` parameter — for
         # models with configurable (Matryoshka) embeddings, so they fit the schema without a
         # re-embed. Left unset for models that don't accept the parameter.
@@ -49,6 +53,13 @@ class OpenAILLMProvider:
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=60.0,
         )
+
+    def _budget(self, max_tokens: int | None) -> int | None:
+        """The caller's cap plus reasoning headroom — so a bounded JSON call still has room to emit
+        the JSON after a reasoning model has finished thinking."""
+        if max_tokens is None:
+            return None
+        return max_tokens + self._reasoning_headroom
 
     def _post(self, path: str, payload: dict[str, object]) -> Any:
         # Hosted LLM endpoints rate-limit on 429 (often with Retry-After); back off and retry.
@@ -70,10 +81,14 @@ class OpenAILLMProvider:
             "model": self._chat_model,
             "messages": [{"role": "user", "content": prompt}],
         }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        if (budget := self._budget(max_tokens)) is not None:
+            payload["max_tokens"] = budget
         data = self._post("/chat/completions", payload)
-        return data["choices"][0]["message"]["content"]
+        # An OpenAI-compatible ``content`` is null when the model refuses or burns its token budget
+        # on reasoning before emitting an answer; honour the ``-> str`` contract so callers never
+        # have to guard against ``None`` (a reasoning model must not crash a structured-JSON path).
+        content = data["choices"][0]["message"].get("content")
+        return content if isinstance(content, str) else ""
 
     def stream(self, prompt: str, *, max_tokens: int | None = None) -> Iterator[str]:
         """Yield reply text chunks as the model produces them (OpenAI ``stream: true`` SSE).
@@ -88,8 +103,8 @@ class OpenAILLMProvider:
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
         }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        if (budget := self._budget(max_tokens)) is not None:
+            payload["max_tokens"] = budget
         with self._client.stream("POST", "/chat/completions", json=payload) as response:
             response.raise_for_status()
             for line in response.iter_lines():

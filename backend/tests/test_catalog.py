@@ -27,6 +27,14 @@ def _count_titles(session: Session) -> int:
     return session.scalar(select(func.count()).select_from(Title)) or 0
 
 
+def test_sample_catalog_titles_carry_real_posters(db_session: Session) -> None:
+    # The sample-data path is a new user's first impression; every sample title must ship a real
+    # TMDB poster so it isn't a wall of text blocks (works offline — the image CDN needs no key).
+    seed_sample_catalog(db_session)
+    posters = db_session.scalars(select(Title.poster_path)).all()
+    assert posters and all(p and p.startswith("/") and p.endswith(".jpg") for p in posters)
+
+
 def test_seed_sample_catalog_is_idempotent(db_session: Session) -> None:
     created = seed_sample_catalog(db_session)
     assert created > 20  # a diverse pool, not a couple of titles

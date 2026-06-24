@@ -149,6 +149,29 @@
   color: var(--text-muted);
 }
 
+.basicBadge {
+  margin-left: var(--sp-2);
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.reducedMode {
+  margin: var(--sp-2) 0 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .undoBtn {
   border: none;
   background: none;

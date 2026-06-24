@@ -9,7 +9,6 @@ feature works offline.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 import uuid
@@ -21,6 +20,7 @@ from pydantic import BaseModel
 
 from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
 from phare.db.models import ROW_KEY_MAX_LEN
+from phare.llm_json import extract_json
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
 from phare.recommend.explain import _taste_fingerprint
@@ -129,10 +129,15 @@ def propose_themes(
     now: datetime,
     llm: LLMProvider | None,
     language: Language = DEFAULT_LANGUAGE,
-) -> list[Theme]:
-    """LLM-picked themes when available, else the deterministic calendar+taste fallback."""
+) -> tuple[list[Theme], bool]:
+    """LLM-picked themes when available, else the deterministic calendar+taste fallback.
+
+    Returns ``(themes, degraded)``. ``degraded`` is True only when an LLM *was* configured but its
+    output couldn't be used — a fallback masking a real failure, which the UI flags. Running with no
+    LLM at all is the honest offline path, not degradation, so it reports False.
+    """
     if llm is None:
-        return _fallback_themes(taste, now, language)
+        return _fallback_themes(taste, now, language), False
     title_language = (
         f" Write each title in {LANGUAGE_NAMES[language]}." if language != DEFAULT_LANGUAGE else ""
     )
@@ -143,10 +148,7 @@ def propose_themes(
         avoid=", ".join(taste.get("hard_avoids") or []) or "(nothing specific)",
     )
     try:
-        raw = llm.complete(prompt, max_tokens=250).strip()
-        if raw.startswith("```"):
-            raw = raw.split("```", 2)[1].removeprefix("json").strip()
-        parsed = json.loads(raw)
+        parsed = extract_json(llm.complete(prompt, max_tokens=250))
         themes = [
             Theme(
                 key=_slug(str(item["title"])),
@@ -156,10 +158,12 @@ def propose_themes(
             for item in parsed
             if item.get("title")
         ]
-        return themes[:3] if themes else _fallback_themes(taste, now, language)
+        if themes:
+            return themes[:3], False
+        return _fallback_themes(taste, now, language), True  # parsed, but nothing usable
     except Exception:  # noqa: BLE001 - never let a flaky LLM kill the row set
         logger.warning("recommend.dynamic_llm_failed; using fallback themes")
-        return _fallback_themes(taste, now, language)
+        return _fallback_themes(taste, now, language), True
 
 
 def _genre_filter(genres: Sequence[str]):
@@ -181,15 +185,19 @@ def dynamic_rows(
     *,
     llm: LLMProvider | None = None,
     now: datetime | None = None,
-) -> list[Row]:
-    """Build today's themed rows. Each theme is filled through the same engine."""
+) -> tuple[list[Row], bool]:
+    """Build today's themed rows. Each theme is filled through the same engine.
+
+    Returns ``(rows, degraded)`` — ``degraded`` True when a configured LLM couldn't name the themes
+    and the deterministic fallback stepped in (so the UI can flag it). See :func:`propose_themes`.
+    """
     service.ensure_embeddings()
     taste = service.load_taste(profile_id)
     when = now or datetime.now(UTC)
     # Stable for the day per taste + language — see _THEME_CACHE. Stamps the recurring LLM theme
     # call out; the language is in the key so an EN render can't serve FR its cached themes.
     theme_key = (_taste_fingerprint(taste), when.date().isoformat(), service.language)
-    themes = _THEME_CACHE.get_or_set(
+    themes, degraded = _THEME_CACHE.get_or_set(
         theme_key, lambda: propose_themes(taste, when, llm, service.language)
     )
 
@@ -212,4 +220,4 @@ def dynamic_rows(
             rows.append(Row(key=theme.key, title=theme.title, items=items))
     log_rows(service.session, profile_id, rows)
     logger.info("recommend.dynamic", extra={"profile_id": str(profile_id), "rows": len(rows)})
-    return rows
+    return rows, degraded

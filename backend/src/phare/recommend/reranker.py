@@ -143,13 +143,30 @@ def _select_diverse(
     return chosen
 
 
-def _confidence(candidate: Candidate, taste: Mapping[str, Any], *, is_swing: bool) -> float:
-    """Honest confidence: blend taste confidence with this title's similarity; swings hedge low."""
+def _confidence(
+    candidate: Candidate, taste: Mapping[str, Any], *, is_swing: bool, affinity_norm: float
+) -> float:
+    """Honest confidence, blending the signals we actually have:
+
+    - **similarity** — does it look like what they watch;
+    - **affinity** — does it hit a genre they like (the *steering* signal); folding this in is what
+      stops a whole row collapsing to one label, since affinity varies title-to-title while raw
+      similarity barely does. Only counted when a taste profile exists — with none, similarity is
+      all we honestly have, so we don't drag every pick toward neutral;
+    - **taste confidence** — how much history backs the profile at all.
+
+    Swings hedge low regardless: a reserved discovery pick is a deliberate gamble, and says so.
+    """
     sim_norm = (candidate.similarity + 1.0) / 2.0
+    signals = [sim_norm]
+    if taste.get("affinities"):
+        signals.append(affinity_norm)
     taste_conf = taste.get("confidence")
-    base = sim_norm if taste_conf is None else (sim_norm + float(taste_conf)) / 2.0
+    if taste_conf is not None:
+        signals.append(float(taste_conf))
+    base = sum(signals) / len(signals)
     if is_swing:
-        base *= 0.5  # a deliberate gamble — say so
+        base *= 0.5
     return round(max(0.0, min(1.0, base)), 3)
 
 
@@ -217,7 +234,9 @@ def _to_rec(
         genres=candidate.genres,
         score=round(score, 4),
         is_swing=is_swing,
-        confidence=_confidence(candidate, taste, is_swing=is_swing),
+        confidence=_confidence(
+            candidate, taste, is_swing=is_swing, affinity_norm=components["affinity"]
+        ),
         poster_path=candidate.poster_path,
         components=components,
     )

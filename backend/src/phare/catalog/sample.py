@@ -14,6 +14,37 @@ from phare.catalog.service import upsert_titles
 from phare.db.models import TitleKind
 from phare.providers.types import TitleMetadata
 
+# Real TMDB poster paths, keyed by tmdb_id, so the sample catalog shows actual artwork — even fully
+# offline (the TMDB image CDN needs no API key). Without these the demo is a wall of text blocks,
+# which is the first thing a new user sees on the sample-data path. Verified against the TMDB API;
+# refresh if a title's primary poster ever changes.
+_POSTERS: dict[int, str] = {
+    329865: "/x2FJsf1ElAgr63Y3PNPtJrcmpoe.jpg",
+    335984: "/qTcATCpiFDcgY8snQIfS2j0bFP7.jpg",
+    264660: "/dmJW8IAKHKxFNiUnoDR7JfsK7Rp.jpg",
+    157336: "/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
+    238: "/kKjIYmvpBUIxcYJ0LL9YZwv4nrZ.jpg",
+    8967: "/l8cwuB5WJSoj4uMAsnzuHBOMaSJ.jpg",
+    120467: "/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg",
+    8363: "/ek8e8txUyUwd2BNqj6lFEerJfbq.jpg",
+    493922: "/4GFPuL14eXi66V96xBWY73Y9PfR.jpg",
+    419430: "/mE24wUCfjK8AoBBjaMjho7Rczr7.jpg",
+    76341: "/tRxkZboyyXnFgCthoViWBwISZ0r.jpg",
+    245891: "/sm7rZZivZm2NhJDucFf3gpfFdVt.jpg",
+    120: "/oENY593nKRVL2PnxXsMtlh8izb4.jpg",
+    6977: "/6d5XOczc226jECq0LIX0siKtgHR.jpg",
+    210577: "/ts996lKsxvjkO2yiYG0ht4qAicO.jpg",
+    146233: "/jsS3a3ep2KyBVmmiwaz3LvK49b1.jpg",
+    129: "/39wmItIWsg5sZMyRUHLkWBcuVCM.jpg",
+    324857: "/eD4bGQNfmqExIAzKdvX5gDHhI2.jpg",
+    1396: "/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg",
+    1438: "/4lbclFySvugI51fwsyxBTOm4DqK.jpg",
+    87108: "/hlLXt2tOPT6RRnjiUmoxyG1LTFi.jpg",
+    60059: "/zjg4jpK1Wp2kiRvtt5ND0kznako.jpg",
+    94997: "/7V0Ebks0GgpKvQ7QbLAIdX5dos4.jpg",
+    46648: "/dC7jkj2g1aU8sxKqM6D4g44xA6w.jpg",
+}
+
 
 def _movie(
     tmdb_id: int,
@@ -35,6 +66,7 @@ def _movie(
         runtime_minutes=runtime,
         popularity=popularity,
         overview=overview,
+        poster_path=_POSTERS.get(tmdb_id),
     )
 
 
@@ -58,6 +90,7 @@ def _show(
         runtime_minutes=runtime,
         popularity=popularity,
         overview=overview,
+        poster_path=_POSTERS.get(tmdb_id),
     )
 
 

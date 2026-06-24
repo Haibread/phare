@@ -103,6 +103,11 @@ export function Browse(): React.JSX.Element {
           <>
             <h3 className={styles.pageTitle} style={{ marginTop: "var(--sp-5)" }}>
               {t("todaysPicks")}
+              {dynamic.data.degraded && (
+                <span className={styles.basicBadge} data-testid="dynamic-degraded">
+                  {t("basicPicks")}
+                </span>
+              )}
             </h3>
             {dynamic.data.rows.map((row) => (
               <RecRow key={row.key} row={row} />

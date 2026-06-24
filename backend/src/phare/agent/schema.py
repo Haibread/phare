@@ -32,6 +32,10 @@ class AgentPlan(BaseModel):
     """The planner's decision: which tools to run for this message, in order."""
 
     calls: list[ToolCall] = []
+    # True when this plan is a *fallback* the planner produced because the model's output couldn't
+    # be parsed (not a real decision) — surfaced so the UI can honestly flag "running in reduced
+    # mode" instead of silently degrading. See ChatReply.degraded.
+    degraded: bool = False
 
 
 class AgentAction(BaseModel):
@@ -49,3 +53,7 @@ class ChatReply(BaseModel):
     intent: ChatIntent
     items: list[Recommendation]
     actions: list[AgentAction] = []
+    # The AI couldn't fully process this turn (planner output unparseable) and fell back to a plain
+    # recommendation — no writes, no mood parsing. Surfaced so the UI tells the user honestly rather
+    # than pretending the agent understood. See docs/agent.md and docs/configuration.md.
+    degraded: bool = False
