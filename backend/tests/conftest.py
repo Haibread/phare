@@ -22,10 +22,11 @@ from phare.db import models  # noqa: F401  (registers tables on Base.metadata)
 from phare.db.base import Base, get_session
 from phare.db.models import Profile, User
 
-# Hermetic tests: a developer's real credentials in .env must not change test behavior (offline by
-# default) or make the suite hit the network. Blank them unless the opt-in live tests are requested
-# (PHARE_LIVE_LLM=1). Env vars override .env in pydantic-settings, so this wins over the file.
+# Hermetic tests: a developer's real .env must not change test behavior (offline by default) or
+# make the suite hit the network. Env vars override .env in pydantic-settings, so setting them here
+# wins over the file. Done unless the opt-in live tests are requested (PHARE_LIVE_LLM=1).
 if not os.environ.get("PHARE_LIVE_LLM"):
+    # Credentials: blank to empty (these are str|None, so "" reads as unset = offline).
     for _var in (
         "LLM_API_KEY",
         "TMDB_API_KEY",
@@ -37,6 +38,11 @@ if not os.environ.get("PHARE_LIVE_LLM"):
         "PLEX_CLIENT_IDENTIFIER",
     ):
         os.environ[_var] = ""
+    # Behaviour-gating flags a dev flips locally: pin to their secure defaults so tests that assert
+    # the closed-by-default posture don't fail on a dev box. Typed (bool/int), so "" won't parse —
+    # set the actual default value.
+    for _var, _default in (("REGISTRATION_OPEN", "false"),):
+        os.environ[_var] = _default
     get_settings.cache_clear()
 
 _BASE_URL = os.environ.get(
