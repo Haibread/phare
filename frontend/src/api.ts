@@ -124,6 +124,8 @@ const chatIntentSchema = z.object({
   excludeGenres: z.array(z.string()),
   mood: z.string().nullable(),
 });
+/** The filters in effect after a turn — replayed on the next so a follow-up refines, not restarts. */
+export type ChatIntent = z.infer<typeof chatIntentSchema>;
 
 export const agentActionSchema = z.object({
   kind: z.string(),
@@ -137,6 +139,7 @@ export const chatReplySchema = z.object({
   intent: chatIntentSchema,
   items: z.array(recommendationItemSchema),
   actions: z.array(agentActionSchema),
+  suggestions: z.array(z.string()).default([]),
   // The AI couldn't fully process the turn (planner output unparseable) and fell back to a plain
   // recommendation — no writes, no mood parsing. The UI flags it instead of implying it understood.
   degraded: z.boolean().default(false),
@@ -148,6 +151,8 @@ export const chatStreamMetaSchema = z.object({
   intent: chatIntentSchema,
   items: z.array(recommendationItemSchema),
   actions: z.array(agentActionSchema),
+  // Tappable quick-replies when the agent asked a clarifying question instead of recommending.
+  suggestions: z.array(z.string()).default([]),
   degraded: z.boolean().default(false),
 });
 export type ChatStreamMeta = z.infer<typeof chatStreamMetaSchema>;
@@ -158,6 +163,9 @@ export interface ChatStreamHandlers {
   onDelta?: (text: string) => void;
   onDone?: () => void;
 }
+
+/** A prior turn replayed to the agent so it can resolve references and not repeat itself. */
+export type ChatHistoryMessage = { role: "user" | "agent"; text: string };
 
 const chatOpeningSchema = z.object({ greeting: z.string().nullable() });
 const undoResultSchema = z.object({ undone: z.boolean() });
@@ -392,13 +400,15 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
 async function chatStream(
   profileId: string,
   message: string,
+  history: ChatHistoryMessage[],
+  activeIntent: ChatIntent | null,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/profiles/${profileId}/chat/stream`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, history, activeIntent }),
     signal: signal ?? null,
   });
   await readEventStream(response, (event, parsed) => {

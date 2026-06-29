@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from phare.agent import commitments as commitments_store
 from phare.agent.intent import keyword_intent
+from phare.agent.schema import ChatIntent, ChatMessage
 from phare.agent.service import ChatService, PreparedTurn, stream_compose
 from phare.agent.tools import undo_action
 from phare.api.deps import (
@@ -44,6 +45,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
 
 
+def _history(body: ChatRequest) -> list[ChatMessage]:
+    """Map the wire history DTOs to the agent's value objects (kept off the domain layer)."""
+    return [ChatMessage(role=m.role, text=m.text) for m in body.history]
+
+
+def _active_intent(body: ChatRequest) -> ChatIntent | None:
+    """Map the wire active-intent DTO (the filters in effect) to the agent's value object."""
+    ai = body.active_intent
+    if ai is None:
+        return None
+    return ChatIntent(
+        max_runtime=ai.max_runtime,
+        include_genres=ai.include_genres,
+        exclude_genres=ai.exclude_genres,
+        mood=ai.mood,
+    )
+
+
 @router.post("/profiles/{profile_id}/chat", response_model=ChatReplyResponse)
 def chat(
     profile_id: uuid.UUID,
@@ -58,7 +77,9 @@ def chat(
     require_profile(user, profile_id)
     # Explanations (high volume) use the workhorse model; the conversational agent uses agent_llm.
     recommender = build_recommender(session, embedder, chat_llm, language)
-    reply = ChatService(recommender, agent_llm).respond(profile_id, body.message)
+    reply = ChatService(recommender, agent_llm).respond(
+        profile_id, body.message, history=_history(body), active_intent=_active_intent(body)
+    )
     session.commit()
     return ChatReplyResponse(
         reply_text=reply.reply_text,
@@ -73,6 +94,7 @@ def chat(
             AgentActionResponse(kind=a.kind, summary=a.summary, undo_token=a.undo_token)
             for a in reply.actions
         ],
+        suggestions=reply.suggestions,
         degraded=reply.degraded,
     )
 
@@ -107,6 +129,7 @@ def _meta_payload(prepared: PreparedTurn) -> dict[str, object]:
             )
             for a in prepared.actions
         ],
+        "suggestions": prepared.suggestions,
         "degraded": prepared.degraded,
     }
 
@@ -130,12 +153,16 @@ def chat_stream(
     require_profile(user, profile_id)
     recommender = build_recommender(session, embedder, chat_llm, language)
     service = ChatService(recommender, agent_llm)
+    history = _history(body)
+    active_intent = _active_intent(body)
 
     def events() -> Iterator[str]:
         # Instant: echo the request so the screen isn't blank during the planner call.
         yield _sse("status", {"stage": "planning", "label": _planning_label(body.message)})
         try:
-            prepared = service.prepare(profile_id, body.message)
+            prepared = service.prepare(
+                profile_id, body.message, history=history, active_intent=active_intent
+            )
             session.commit()  # persist signals/commitments/memory + logs before the read-only reply
         except Exception:  # noqa: BLE001 - a failed turn must still close the stream gracefully
             logger.exception("chat.stream_prepare_failed")

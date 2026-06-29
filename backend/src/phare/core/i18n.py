@@ -120,6 +120,8 @@ _MESSAGES: dict[str, dict[Language, str]] = {
         "fr": "Je n'ai pas trouvé de bonne correspondance — essayez d'élargir un peu les critères.",
     },
     "chat.done": {"en": "Done.", "fr": "C'est fait."},
+    # The always-present escape hatch on a clarifying question — the user never has to answer it.
+    "chat.surpriseMe": {"en": "Surprise me", "fr": "Surprends-moi"},
     "chat.offlineNoMatch": {
         "en": "I couldn't find a good match for that — try loosening the constraints a little.",
         "fr": "Je n'ai rien trouvé de pertinent — essayez d'assouplir un peu les critères.",

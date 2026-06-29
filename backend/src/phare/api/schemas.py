@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -190,8 +190,33 @@ class ConversionResponse(ApiModel):
     within_days: int
 
 
+class ChatHistoryMessage(ApiModel):
+    """One prior turn the client replays so the agent isn't a cold start. The conversation lives in
+    the client (sessionStorage); the server keeps no transcript. Bounded server-side before it ever
+    reaches a prompt (see ``agent.schema.format_history``)."""
+
+    role: Literal["user", "agent"]
+    text: str = Field(min_length=1, max_length=500)
+
+
+class ChatIntentInput(ApiModel):
+    """The filters currently in effect, replayed by the client so a follow-up ("even shorter") can
+    refine them. The runtime ceiling lives only here, never in the replayed prose, so the planner
+    needs this to tighten below the previous cap rather than guess."""
+
+    max_runtime: int | None = None
+    include_genres: list[str] = Field(default_factory=list)
+    exclude_genres: list[str] = Field(default_factory=list)
+    mood: str | None = None
+
+
 class ChatRequest(ApiModel):
     message: str = Field(min_length=1, max_length=500)
+    # Recent conversation, oldest-first. Optional (defaults empty) so the turn stays backward
+    # compatible; capped so a client can't balloon the prompt with an unbounded transcript.
+    history: list[ChatHistoryMessage] = Field(default_factory=list, max_length=50)
+    # The filters in effect from earlier turns, so a refinement adjusts them instead of restarting.
+    active_intent: ChatIntentInput | None = None
 
 
 class ChatIntentResponse(ApiModel):
@@ -212,6 +237,8 @@ class ChatReplyResponse(ApiModel):
     intent: ChatIntentResponse
     items: list[RecommendationItem]
     actions: list[AgentActionResponse] = []
+    # Tappable quick-replies when the agent asked a clarifying question (empty on a normal turn).
+    suggestions: list[str] = []
     # The AI fell back to a plain recommendation because it couldn't parse the planner output — no
     # writes, no mood parsing. The client shows an honest "reduced mode" note rather than implying
     # the agent fully understood.

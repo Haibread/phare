@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from phare.agent import planner
 from phare.agent.intent import keyword_intent
-from phare.agent.schema import AgentAction, ChatIntent
+from phare.agent.schema import (
+    AgentAction,
+    ChatIntent,
+    ChatMessage,
+    format_active_intent,
+    format_history,
+)
 from phare.agent.service import (
     ChatService,
+    _clarify_suggestions,
     _compose_reply_template,
     _reply_text,
     _strip_leading_think,
@@ -30,6 +39,124 @@ def test_composer_prompt_carries_french_directive() -> None:
     assert "French" in build_compose_prompt("salut", result, "fr")
     # English: no output-language directive is appended.
     assert "Write your response in" not in build_compose_prompt("hi", result)
+
+
+def test_format_history_bounds_count_and_truncates_text() -> None:
+    msgs = [ChatMessage(role="user" if i % 2 == 0 else "agent", text=f"msg {i}") for i in range(20)]
+    block = format_history(msgs)
+    lines = block.splitlines()
+    assert len(lines) == 6  # only the last few turns reach the prompt
+    assert "msg 19" in lines[-1] and "msg 14" in lines[0]  # the last six (14..19), oldest dropped
+    assert "msg 13" not in block
+
+    block = format_history(
+        [ChatMessage(role="user", text="x" * 1000), ChatMessage(role="agent", text="   ")]
+    )
+    assert block.startswith("User: ") and block.endswith("…")  # long text truncated
+    assert "\n" not in block  # the blank agent turn is dropped, not rendered as an empty line
+    assert format_history([]) == ""  # no history → no dangling header for callers to emit
+
+
+def test_compose_prompt_includes_conversation_history() -> None:
+    result = ExecutionResult()
+    history = [
+        ChatMessage(role="user", text="something funny"),
+        ChatMessage(role="agent", text="Try Paddington 2."),
+    ]
+    prompt = build_compose_prompt("even shorter", result, "en", history)
+    assert "Recent conversation:" in prompt
+    assert "something funny" in prompt and "Paddington 2" in prompt
+    # No history → no dangling header.
+    assert "Recent conversation:" not in build_compose_prompt("hi", result)
+
+
+def test_format_active_intent_summarises_filters() -> None:
+    summary = format_active_intent(
+        ChatIntent(
+            include_genres=["Comedy"], exclude_genres=["Horror"], max_runtime=40, mood="cozy"
+        )
+    )
+    assert "Comedy" in summary and "no Horror" in summary
+    assert "≤40 min" in summary and "cozy" in summary
+    assert format_active_intent(ChatIntent()) == ""  # nothing in effect → empty, no dangling line
+
+
+def test_planner_prompt_carries_active_filters(db_session: Session) -> None:
+    # The runtime cap lives only in the structured intent, never the prose — so the planner needs
+    # the active-filters line to tighten "even shorter" below the prior cap instead of guessing.
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+
+    fake = FakeLLMProvider(completion='{"calls": [{"tool": "recommend", "args": {}}]}')
+    active = ChatIntent(include_genres=["Comedy"], max_runtime=40)
+    planner.plan(
+        db_session, profile.id, "even shorter", fake, now=datetime.now(UTC), active_intent=active
+    )
+    prompt = fake.prompts[0]
+    assert "Active filters" in prompt
+    assert "Comedy" in prompt and "≤40 min" in prompt
+
+
+def test_clarify_suggestions_bounds_and_guarantees_escape_hatch() -> None:
+    chips = _clarify_suggestions({"suggestions": ["a", "b", "c", "d", "e"]})
+    assert chips == ["a", "b", "c", "Surprise me"]  # capped at 3, escape hatch appended
+    # The model already offered an out → don't double it.
+    assert _clarify_suggestions({"suggestions": ["a film", "surprise me"]}) == [
+        "a film",
+        "surprise me",
+    ]
+    assert _clarify_suggestions({}) == ["Surprise me"]  # nothing usable → just the escape hatch
+    assert _clarify_suggestions({"suggestions": []}, "fr")[-1] == "Surprends-moi"  # localised
+
+
+def test_clarify_asks_one_question_without_spending_the_agent_model(db_session: Session) -> None:
+    # A genuinely vague request: the planner asks instead of guessing. The question is the workhorse
+    # planner's own text (no agent-model call), and an escape hatch is always present (guardrail 5).
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+
+    clarify = (
+        '{"calls": [{"tool": "clarify", "args": {"question": "A quick film or a series?", '
+        '"suggestions": ["a film", "a series"]}}]}'
+    )
+    fake = FakeLLMProvider(completion=clarify)
+    reply = ChatService(_recommender(db_session), chat_llm=fake).respond(
+        profile.id, "recommend me something"
+    )
+    assert reply.items == []
+    assert reply.reply_text == "A quick film or a series?"
+    assert reply.suggestions == ["a film", "a series", "Surprise me"]
+    assert len(fake.prompts) == 1  # only the planner ran; the agent model was never spent
+
+
+def test_planner_prompt_offers_clarify_as_a_high_bar_option() -> None:
+    from phare.agent.planner import _SYSTEM
+
+    # The move exists, is gated high, and may repeat across turns (no blunt "once only" cap) — the
+    # escape hatch, not a count, is what stops a loop.
+    assert "clarify" in _SYSTEM and "bar is high" in _SYSTEM
+    assert "MAY ask again" in _SYSTEM
+
+
+def test_planner_prompt_carries_conversation_history(db_session: Session) -> None:
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+
+    fake = FakeLLMProvider(completion='{"calls": [{"tool": "recommend", "args": {}}]}')
+    history = [
+        ChatMessage(role="user", text="something funny"),
+        ChatMessage(role="agent", text="Try Paddington 2."),
+    ]
+    planner.plan(
+        db_session, profile.id, "even shorter", fake, now=datetime.now(UTC), history=history
+    )
+    prompt = fake.prompts[0]
+    assert "Recent conversation:" in prompt
+    assert "something funny" in prompt and "Paddington 2" in prompt
+    assert prompt.index("Recent conversation:") < prompt.index("User message: even shorter")
 
 
 def test_offline_reply_text_localises() -> None:
