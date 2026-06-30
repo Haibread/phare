@@ -96,6 +96,8 @@ class RecommendationService:
         and skipped. The caller owns the commit.
         """
         missing = [c for c in candidates if c.runtime_minutes is None][:READ_RUNTIME_CAP]
+        if not missing:  # pool already fully runtime'd (the common case once enriched) — no DB hit
+            return candidates
         rows = (
             self.session.execute(select(Title).where(Title.id.in_([c.title_id for c in missing])))
             .scalars()

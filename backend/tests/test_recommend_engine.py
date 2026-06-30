@@ -86,6 +86,33 @@ def test_enrich_runtimes_fills_pool_from_provider_and_persists(db_session: Sessi
     assert {tmdb for tmdb, _ in provider.calls} == {2000, 2001}  # only the missing ones fetched
 
 
+def test_enrich_runtimes_short_circuits_when_pool_is_already_filled(db_session: Session) -> None:
+    # The common case once a taste's pool is enriched: nothing missing → return as-is, no provider
+    # call and no (empty) DB query on the hot path.
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.recommend.schema import Candidate
+
+    candidates = [
+        Candidate(
+            title_id=uuid.uuid4(),
+            title=name,
+            kind="movie",
+            year=None,
+            genres=[],
+            keywords=[],
+            runtime_minutes=runtime,
+            popularity=None,
+            overview=None,
+            similarity=0.5,
+        )
+        for name, runtime in [("A", 90), ("B", 120)]
+    ]
+    provider = FakeMetadataProvider(titles={})
+    result = _service(db_session)._enrich_runtimes(candidates, provider)
+    assert result is candidates  # same list returned untouched
+    assert provider.calls == []  # nothing fetched
+
+
 def test_centroid_is_memoized_per_request(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

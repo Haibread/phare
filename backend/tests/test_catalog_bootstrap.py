@@ -68,6 +68,17 @@ def test_autoseed_scope_auto_resolves_by_environment() -> None:
     )
 
 
+def test_invalid_autoseed_scope_fails_loud_at_startup() -> None:
+    # A typo'd scope must raise at config load, not silently fall back to popular.
+    import pytest
+    from pydantic import ValidationError
+
+    from phare.core.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(catalog_autoseed_scope="brod")
+
+
 def test_seed_is_skipped_without_a_tmdb_key() -> None:
     # conftest blanks TMDB_API_KEY, so the configured settings have no key: the seed must no-op
     # (and never touch the network) rather than raise.

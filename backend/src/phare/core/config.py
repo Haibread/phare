@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -68,8 +68,9 @@ class Settings(BaseSettings):
     catalog_autoseed: bool = True
     # What to seed when autoseed runs: "popular" (light front-page top-up), "broad" (deep genre
     # sweep — the real-world catalog), or "auto" (broad in production, popular elsewhere — so a prod
-    # box deep-seeds itself without an operator running a command, while dev stays light).
-    catalog_autoseed_scope: str = "auto"
+    # box deep-seeds itself without an operator running a command, while dev stays light). A typo
+    # here fails validation at startup rather than silently falling back to popular.
+    catalog_autoseed_scope: Literal["auto", "popular", "broad"] = "auto"
     # Depth/quality of a broad seed (also used by autoseed when its scope resolves to broad). The
     # broad sweep is what surfaces the long tail; deeper = more titles + more embedding cost.
     catalog_broad_pages_per_genre: int = 20
