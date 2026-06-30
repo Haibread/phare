@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from phare.agent import commitments as commitments_store
 from phare.agent import memory as memory_store
 from phare.agent.schema import AgentAction, AgentPlan, ChatIntent
-from phare.catalog.service import CatalogSearchSource, search_titles
+from phare.catalog.service import CatalogMetadataSource, search_titles
 from phare.db.models import (
     CommitmentStatus,
     EventType,
@@ -57,7 +57,8 @@ class ToolContext:
     profile_id: uuid.UUID
     recommender: RecommendationService
     now: datetime
-    metadata: CatalogSearchSource | None  # TMDB provider for live title resolution
+    # TMDB provider: resolves named titles (search) and backfills candidate runtimes (get_title).
+    metadata: CatalogMetadataSource | None
 
 
 @dataclass
@@ -123,6 +124,9 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         rewatch=intent.rewatch,
         vote_mix=True,  # chat slates mix well-known/lesser-known/low-vote, ordered by votes
         explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
+        # Only on a runtime-capped turn: backfill the pool's missing runtimes from TMDB so the cap
+        # can actually filter (the broad import omits runtime). No-op without a metadata provider.
+        runtime_source=ctx.metadata if intent.max_runtime is not None else None,
     )
 
 

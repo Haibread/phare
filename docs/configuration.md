@@ -86,6 +86,17 @@ thousands** of titles in a few minutes; raise `--pages-per-genre` to go deeper. 
 (one call per ~20 titles) rather than `popular`'s per-title metadata fan-out, so the request count
 stays modest. The command embeds the new titles afterwards by default (`--embed`).
 
+**Runtime is filled in lazily, not at import.** *discover* omits per-title runtime, so broad-imported
+titles start with `runtime_minutes = NULL` — which means a "something short" chat request has nothing
+to filter on. Rather than slow every import with a per-title detail fan-out, runtimes are **backfilled
+on the read path**, and only when needed: a chat turn that actually asks for a runtime cap fetches the
+missing runtimes **for that turn's candidate pool** from TMDB (in parallel — the provider's HTTP
+client is thread-safe) before filtering, and persists them. It enriches the exact titles being
+filtered, not a global batch, so the cap bites on the first such turn; each fetch is permanent, so the
+catalog heals as it's used — no command, no manual step. Without a `TMDB_API_KEY` (or offline), runtime
+filtering simply stays inert: length requests parse but don't constrain. Bounded by `READ_RUNTIME_CAP`
+(a code constant, mirroring the lazy embedding top-up).
+
 **Guard — won't run in dev by accident.** Both the import endpoint and the CLI refuse to run unless
 `ENVIRONMENT=production`, **or** you explicitly override (`confirm=true` on the endpoint,
 `--confirm` on the CLI). This stops a dev box from fanning out thousands of TMDB requests during a

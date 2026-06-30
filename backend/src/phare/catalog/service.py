@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleKind
-from phare.providers.types import TitleMetadata
+from phare.providers.types import MetadataProvider, TitleMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,14 @@ class CatalogSearchSource(Protocol):
     """A provider that can search titles by free text (e.g. TMDB)."""
 
     def search(self, query: str, *, limit: int = ...) -> list[TitleMetadata]: ...
+
+
+class CatalogMetadataSource(CatalogSearchSource, MetadataProvider, Protocol):
+    """A provider that can both search the catalog *and* resolve per-title detail (e.g. TMDB).
+
+    The chat tool context holds one of these: ``search`` resolves a named title, ``get_title``
+    backfills a candidate's runtime. Typing it as the union lets both callers stay precise.
+    """
 
 
 class CatalogDiscoverSource(Protocol):

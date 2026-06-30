@@ -41,6 +41,51 @@ def _seeded_profile(session: Session) -> uuid.UUID:
     return profile.id
 
 
+def test_enrich_runtimes_fills_pool_from_provider_and_persists(db_session: Session) -> None:
+    from phare.db.models import Title, TitleKind
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+    from phare.recommend.schema import Candidate
+
+    titles = []
+    for i in range(3):
+        title = Title(kind=TitleKind.movie, title=f"Film {i}", tmdb_id=2000 + i)
+        db_session.add(title)
+        titles.append(title)
+    db_session.flush()
+    provider = FakeMetadataProvider(
+        titles={
+            (t.tmdb_id, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, title=t.title, runtime_minutes=90 + i
+            )
+            for i, t in enumerate(titles)
+        }
+    )
+
+    def cand(title: Title, runtime: int | None) -> Candidate:
+        return Candidate(
+            title_id=title.id,
+            title=title.title,
+            kind="movie",
+            year=None,
+            genres=[],
+            keywords=[],
+            runtime_minutes=runtime,
+            popularity=None,
+            overview=None,
+            similarity=0.5,
+        )
+
+    # Two candidates lack runtime; the third already has one and must be left untouched (no fetch).
+    candidates = [cand(titles[0], None), cand(titles[1], None), cand(titles[2], 120)]
+    enriched = _service(db_session)._enrich_runtimes(candidates, provider)
+
+    assert [c.runtime_minutes for c in enriched] == [90, 91, 120]  # the two missing got filled
+    assert titles[0].runtime_minutes == 90 and titles[1].runtime_minutes == 91  # persisted to DB
+    assert titles[2].runtime_minutes is None  # never fetched — its candidate already had runtime
+    assert {tmdb for tmdb, _ in provider.calls} == {2000, 2001}  # only the missing ones fetched
+
+
 def test_centroid_is_memoized_per_request(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

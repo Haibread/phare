@@ -18,6 +18,13 @@ style, layout, and tooling, follow the convention skills; don't expect them dupl
    model or a weak local one, with or without Plex/Jellyfin/*arr.
 6. **Strict privacy + spoiler safety.** See [`docs/agent.md`](docs/agent.md).
 7. **One account = one user.**
+8. **Self-triggering over manual steps — avoid the CLI as a delivery mechanism.** Features should be
+   packaged and fire when they're needed — lazy on the read path, in the background, on demand — and
+   heal themselves as the app is used, not sit behind a `phare …` command or an operator ritual the
+   user has to remember to run. A CLI command is a fallback for genuinely out-of-band jobs (a one-off
+   bulk migration/seed), never how a normal user- or operator-facing feature is delivered. When
+   something needs data or setup it doesn't have yet, make it acquire it on demand (e.g. the lazy
+   runtime/embedding backfill on the read path), don't require a command.
 
 ## LLM usage (don't violate)
 

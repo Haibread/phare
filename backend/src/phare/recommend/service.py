@@ -10,14 +10,15 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
-from phare.db.models import TasteProfile, TitleEmbedding
+from phare.db.models import TasteProfile, Title, TitleEmbedding
 from phare.embeddings.service import EmbeddingService
-from phare.providers.types import LLMProvider
+from phare.providers.types import LLMProvider, MetadataProvider
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
 from phare.recommend.explain import _EXPLANATION_CACHE, Explainer
@@ -35,6 +36,15 @@ CandidateFilter = Callable[[list[Candidate]], list[Candidate]]
 # lazy read-path top-up must stay bounded so a fresh import can't make the first request embed the
 # whole catalog inline (minutes against a real embedding API). Beyond the cap we log and defer.
 READ_EMBED_CAP = 512
+
+# Read-path runtime backfill. The broad catalog import comes from TMDB *discover*, which omits
+# runtime, so freshly-imported titles have ``runtime_minutes = NULL`` and a "something short"
+# request has nothing to filter on. We fill the *candidate pool's* missing runtimes from TMDB, but
+# only on a turn that actually asks for a runtime cap (so the detail calls aren't spent otherwise),
+# in parallel (httpx is thread-safe), and persist each — a one-time cost per title that heals the
+# catalog as it's used. The cap is a safety bound; the pool is already small (~k*4+10).
+READ_RUNTIME_CAP = 64
+_RUNTIME_FETCH_WORKERS = 8
 
 
 class RecommendationService:
@@ -75,6 +85,51 @@ class RecommendationService:
         return EmbeddingService(
             self.session, self.embed_provider, self.embed_model_version
         ).embed_missing(limit=READ_EMBED_CAP)
+
+    def _enrich_runtimes(
+        self, candidates: list[Candidate], source: MetadataProvider
+    ) -> list[Candidate]:
+        """Fill the candidate pool's missing runtimes from the metadata provider, so a runtime cap
+        can actually filter. Fetches in parallel (the provider's httpx client is thread-safe; the
+        worker threads do *only* HTTP, never touch the session), persists each runtime permanently,
+        and returns the pool with the fetched values applied. Best-effort: a failed fetch is logged
+        and skipped. The caller owns the commit.
+        """
+        missing = [c for c in candidates if c.runtime_minutes is None][:READ_RUNTIME_CAP]
+        rows = (
+            self.session.execute(select(Title).where(Title.id.in_([c.title_id for c in missing])))
+            .scalars()
+            .all()
+        )
+        by_id = {row.id: row for row in rows}
+        fetchable = [(row.id, row.tmdb_id, row.kind) for row in rows if row.tmdb_id is not None]
+        if not fetchable:
+            return candidates
+
+        def fetch(item: tuple[uuid.UUID, int, object]) -> tuple[uuid.UUID, int | None]:
+            title_id, tmdb_id, kind = item
+            try:
+                meta = source.get_title(tmdb_id, kind)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001 - a flaky fetch must not sink the turn
+                logger.warning("recommend.runtime_fetch_failed", extra={"title_id": str(title_id)})
+                return title_id, None
+            return title_id, (meta.runtime_minutes if meta is not None else None)
+
+        runtimes: dict[uuid.UUID, int] = {}
+        with ThreadPoolExecutor(max_workers=_RUNTIME_FETCH_WORKERS) as pool:
+            for title_id, runtime in pool.map(fetch, fetchable):
+                if runtime is not None:
+                    by_id[title_id].runtime_minutes = runtime  # main thread → safe to write
+                    runtimes[title_id] = runtime
+        if not runtimes:
+            return candidates
+        logger.info("recommend.runtimes_enriched", extra={"enriched_count": len(runtimes)})
+        return [
+            c.model_copy(update={"runtime_minutes": runtimes[c.title_id]})
+            if c.title_id in runtimes
+            else c
+            for c in candidates
+        ]
 
     def _centroid(self, profile_id: uuid.UUID) -> list[float] | None:
         """Memoized taste centroid for this request."""
@@ -119,6 +174,7 @@ class RecommendationService:
         vote_mix: bool = False,
         explain_with_llm: bool = True,
         explainer: Explainer | None = None,
+        runtime_source: MetadataProvider | None = None,
     ) -> list[Recommendation]:
         """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain.
 
@@ -145,6 +201,10 @@ class RecommendationService:
             hard_avoids=avoids,
             from_watched=rewatch,
         )
+        # Backfill the pool's missing runtimes before filtering, so a runtime cap has data to bite
+        # on (the broad import omits runtime). Only passed on a runtime turn — see tool_recommend.
+        if runtime_source is not None:
+            candidates = self._enrich_runtimes(candidates, runtime_source)
         if candidate_filter is not None:
             candidates = candidate_filter(candidates)
         default_swings = 0 if rewatch else self.swing_slots
