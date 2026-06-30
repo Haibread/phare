@@ -167,6 +167,13 @@ export interface ChatStreamHandlers {
 /** A prior turn replayed to the agent so it can resolve references and not repeat itself. */
 export type ChatHistoryMessage = { role: "user" | "agent"; text: string };
 
+/** The conversation context a chat turn carries: the recent transcript + the filters in effect. */
+export interface ChatStreamOptions {
+  history: ChatHistoryMessage[];
+  activeIntent: ChatIntent | null;
+  signal?: AbortSignal;
+}
+
 const chatOpeningSchema = z.object({ greeting: z.string().nullable() });
 const undoResultSchema = z.object({ undone: z.boolean() });
 
@@ -400,11 +407,10 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
 async function chatStream(
   profileId: string,
   message: string,
-  history: ChatHistoryMessage[],
-  activeIntent: ChatIntent | null,
+  options: ChatStreamOptions,
   handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
 ): Promise<void> {
+  const { history, activeIntent, signal } = options;
   const response = await fetch(`${API_BASE}/profiles/${profileId}/chat/stream`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),

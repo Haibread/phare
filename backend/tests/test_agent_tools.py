@@ -419,6 +419,64 @@ def test_recommend_tolerates_mood_as_a_list(db_session: Session) -> None:
     assert result.intent.include_genres == []  # absent arg stays an empty list, not a crash
 
 
+def test_runtime_capped_recommend_drives_the_lazy_runtime_backfill(db_session: Session) -> None:
+    # Wiring guard: a runtime-capped recommend must drive the pool runtime backfill
+    # (tool_recommend -> recommend(runtime_source) -> _enrich_runtimes), so "something short" has
+    # data to filter on — and a plain recommend must NOT touch the provider (no wasted calls).
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    titles = []
+    for n, name in enumerate(["Dune", "Arrival", "Sicario", "Heat", "Tenet"]):
+        title = Title(
+            kind=TitleKind.movie, tmdb_id=100 + n, title=name, genres=["Drama"], vote_count=50 - n
+        )
+        db_session.add(title)
+        titles.append(title)
+    db_session.flush()
+    EmbeddingService(db_session, LocalHashEmbeddingProvider(), LOCAL_MODEL_VERSION).embed_missing()
+    # A liked title gives the profile a taste centroid, so recommend actually returns a pool.
+    db_session.add(
+        WatchEvent(
+            profile_id=profile.id, title_id=titles[0].id, type=EventType.liked, source="test"
+        )
+    )
+    db_session.flush()
+
+    def _ctx_with(metadata: object) -> ToolContext:
+        return ToolContext(
+            session=db_session,
+            profile_id=profile.id,
+            recommender=_recommender(db_session),
+            now=_NOW,
+            metadata=metadata,  # type: ignore[arg-type]  # fake satisfies get_title at runtime
+        )
+
+    provider = FakeMetadataProvider(
+        titles={
+            (t.tmdb_id, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, title=t.title, runtime_minutes=95
+            )
+            for t in titles
+        }
+    )
+    execute_plan(
+        _ctx_with(provider),
+        AgentPlan(calls=[ToolCall(tool="recommend", args={"max_runtime": 120})]),
+    )
+    db_session.flush()
+    assert provider.calls  # the runtime cap drove get_title...
+    assert any(t.runtime_minutes == 95 for t in titles)  # ...and the pool's runtimes were persisted
+
+    # No runtime cap → the backfill must not fire.
+    plain = FakeMetadataProvider(titles={})
+    execute_plan(_ctx_with(plain), AgentPlan(calls=[ToolCall(tool="recommend", args={})]))
+    assert plain.calls == []
+
+
 def test_chat_intent_coerces_loose_llm_arg_shapes() -> None:
     from phare.agent.schema import ChatIntent
 

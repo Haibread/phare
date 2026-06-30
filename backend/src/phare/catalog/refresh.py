@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 # daemon, so it dies with the process regardless — this just lets a quick pass finish cleanly).
 _SHUTDOWN_JOIN_TIMEOUT = 5.0
 
+# Bound the embed step so a recurring pass can't block on a large unembedded backlog (the freshness
+# import itself is small; this only matters if a prior seed left vectors pending). The read-path
+# top-up and the next pass mop up anything beyond the cap.
+_REFRESH_EMBED_CAP = 512
+
 
 def run_refresh(
     session: Session,
@@ -42,7 +47,9 @@ def run_refresh(
 
     created = refresh_from_tmdb(session, source, pages=pages)
     session.commit()
-    embedded = EmbeddingService(session, embed_provider, model_version).embed_missing()  # type: ignore[arg-type]
+    embedded = EmbeddingService(session, embed_provider, model_version).embed_missing(  # type: ignore[arg-type]
+        limit=_REFRESH_EMBED_CAP
+    )
     session.commit()
     logger.info(
         "catalog.refresh.done", extra={"created_count": created, "embedded_count": embedded}
@@ -84,17 +91,24 @@ def start_refresh_loop(settings: Settings) -> Callable[[], None]:
     """Start the recurring freshness refresh in a daemon thread; return a ``stop()`` that ends it.
 
     No-op (returns a no-op stop) when disabled (``catalog_refresh_interval_seconds <= 0``) or with
-    no TMDB key. The first run waits one full interval — startup already seeds, so there's no point
-    pulling again immediately. ``stop()`` signals the loop and waits briefly for an in-flight pass.
+    no TMDB key. The first run fires after a short ``catalog_refresh_initial_delay_seconds`` (not a
+    full interval) so a box that restarts more often than the interval still refreshes — waiting a
+    full interval first would let frequent restarts starve it. ``stop()`` signals the loop and waits
+    briefly for an in-flight pass.
     """
     interval = settings.catalog_refresh_interval_seconds
     if interval <= 0 or not settings.tmdb_api_key:
         return lambda: None
 
     stop = threading.Event()
+    initial_delay = max(0, settings.catalog_refresh_initial_delay_seconds)
 
     def loop() -> None:
         # Event.wait returns True only when stop is set; on timeout it returns False → run a pass.
+        # First run after the short initial delay, then every interval.
+        if stop.wait(initial_delay):
+            return
+        run_refresh_once(settings)
         while not stop.wait(interval):
             run_refresh_once(settings)
 
