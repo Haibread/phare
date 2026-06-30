@@ -8,11 +8,15 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
 
 ## How a turn works
 
-`message + memory context → planner (LLM) → tool calls → deterministic execution → reply`
+`message + recent conversation + memory context → planner (LLM) → tool calls → deterministic
+execution → reply`
 
 - **Planner** ([`agent/planner.py`](../backend/src/phare/agent/planner.py)) reads the message plus
-  context (taste summary, open commitments, active memory notes) and emits a JSON list of tool
-  calls. It never picks titles itself.
+  the **recent conversation** (see below) and context (taste summary, open commitments, active
+  memory notes) and emits a JSON list of tool calls. It never picks titles itself. The conversation
+  is context for resolving references in the *latest* message ("even shorter", "more like that") —
+  scope and intent are still judged on the latest message, so an off-topic turn after an on-topic
+  chat is still declined for free.
 - **Tools** ([`agent/tools.py`](../backend/src/phare/agent/tools.py)) — thin wrappers over the
   engine: `recommend`, `explain_picks`, `log_signal`, `set_commitment`, `resolve_commitment`,
   `remember`, `update_taste`. Title references resolve through the catalog search (local + live
@@ -23,11 +27,36 @@ executes them; the embeddings still rank. (A swarm is over-engineering here.)
   comfort rewatch", "something I've seen", "watch again") sets `rewatch=true`, which flips the
   candidate source to titles you've already watched and reserves no discovery swing slot. The
   offline keyword parser detects the same intent.
+- **Clarify (ask vs. guess).** Instead of always dumping a slate, the planner may emit a single
+  `clarify {question, suggestions?}` when a request is genuinely too vague to pick well *and* one
+  answer would change the picks (a bare "what should I watch" with no genre/mood/length/vibe and no
+  taste yet). The bar is high — any named genre/mood/length, or an existing taste profile, and it
+  just recommends. It *may* ask again across turns when the user is genuinely still working it out
+  (each question must cover something new and make progress), but stops the moment they signal "I
+  don't know / you pick / surprise me" — and the guaranteed escape hatch (below), not a turn cap, is
+  what prevents a loop: the user can bail in one tap on any clarify turn. The question is the
+  **workhorse planner's own text**, so a clarify turn spends **no agent-model call**. The reply
+  carries tappable `suggestions`, and the service **guarantees an escape hatch** ("Surprise me") so
+  the user never has to answer to get a result — guardrail 5's "ask only to cut real uncertainty,
+  always leave an out", made deterministic rather than trusted to the model.
 - **Chat slate ordering.** Unlike the Browse rows, chat recommendations use a **vote-count mix**
   instead of reserved swing slots: the slate is composed as ~50% well-known / ~35% lesser-known /
   ~15% low-vote (TMDB rating count tiers), then ordered most-voted-first. So chat reads as a
   sensible "best-known first" list with a small discovery tail, rather than a similarity ranking
   that surfaces obscure trending titles. Vote counts come from the catalog import.
+- **Recent conversation** — the planner and the composer both receive the last few turns of the
+  chat so a turn isn't a cold start: references resolve ("even shorter" knows what it's shortening)
+  and the reply builds on what was said instead of re-pitching the same titles. It's **short-term,
+  client-held memory**: the web client replays it on each request (it already keeps the transcript
+  in app state / `sessionStorage`); the server persists no transcript. It's bounded before it ever
+  reaches a prompt — only the last few messages, each truncated ([`agent/schema.py`](../backend/src/phare/agent/schema.py)) —
+  so a long chat can't balloon the prompt or the token bill (no extra LLM *calls*, just bounded
+  input). **Offline** (no LLM) stays single-message: there's no model to resolve a reference against.
+- **Active filters (refinement)** — the planner also gets the *structured* filters in effect from the
+  previous turn (genres, runtime cap, mood — replayed by the client as `activeIntent`), not just the
+  prose. The runtime ceiling lives only in the intent and never reaches the transcript, so without
+  this "even shorter" can't tighten below the prior cap — the planner re-emits the full refined
+  recommend args, carrying over what still applies and adjusting only what the message changed.
 - **Reply** is written by the model (natural language), grounded in what the tools actually did —
   it never invents titles. Falls back to a deterministic template if the model call fails. When a
   turn produces **no picks and no actions** (e.g. an empty candidate pool), the model is skipped
@@ -85,7 +114,9 @@ the spine — durable preferences also become taste overrides; temporal notes (w
 shape the active session's filters and feed the taste-extraction prompt. The LLM never reads a note
 and hand-picks a title.
 
-Short-term memory is the in-flight conversation.
+Short-term memory is the in-flight conversation — now actually fed to the model: the last few turns
+ride along on each request (client-held, bounded), so the planner and composer build on the thread.
+See **Recent conversation** under [How a turn works](#how-a-turn-works).
 
 ## Guardrails (hard)
 
@@ -99,5 +130,14 @@ Short-term memory is the in-flight conversation.
 3. **No hallucinated titles** — only act on titles the catalog can resolve; if resolution fails, the
    agent asks instead of guessing (no write).
 4. **Confidence** — distinguish confident picks from guesses; admit thin data.
-5. **Honesty over engagement** — proactive follow-ups must be useful and easy to ignore, never
-   retention bait.
+5. **Honesty over engagement.** The chat *should* feel like a real conversation — warm, curious,
+   building on what was just said. But every conversational move has to earn its place by helping the
+   user decide what to watch, never by manufacturing turns or time-on-app:
+   - **Ask only to cut real uncertainty.** A clarifying question is welcome when the request is
+     genuinely under-specified *and* the answer would change the picks. When there's already enough
+     to recommend, recommend — don't stall to ask. Default to acting.
+   - **Always leave an escape hatch.** Any question or nudge is one word to skip ("…or just say
+     *surprise me*"); the user never has to answer to get a result.
+   - **Warmth, not bait.** An inviting line or proactive follow-up is fine when it's useful and easy
+     to ignore — never there to pull the user back or keep them typing. Never optimize for session
+     length, turns per session, or return rate.

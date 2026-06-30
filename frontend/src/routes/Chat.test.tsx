@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatStreamHandlers } from "../api";
+import type { ChatHistoryMessage, ChatIntent, ChatStreamHandlers } from "../api";
 import { ChatProvider } from "../app/ChatContext";
 import { ProfileProvider } from "../app/ProfileContext";
 import { Chat } from "./Chat";
@@ -40,7 +40,13 @@ describe("Chat write actions", () => {
   it("shows an undoable action chip after a streamed write and reverses it on undo", async () => {
     mocked.chatOpening.mockResolvedValue({ greeting: null });
     mocked.chatStream.mockImplementation(
-      async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
+      async (
+        _profileId: string,
+        _message: string,
+        _history: ChatHistoryMessage[],
+        _activeIntent: ChatIntent | null,
+        handlers: ChatStreamHandlers,
+      ) => {
         handlers.onMeta?.({
           degraded: false,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
@@ -48,6 +54,7 @@ describe("Chat write actions", () => {
           actions: [
             { kind: "logged_signal", summary: "logged Dune as loved", undoToken: "event:abc" },
           ],
+          suggestions: [],
         });
         handlers.onDelta?.("Got it — logged Dune as loved.");
         handlers.onDone?.();
@@ -72,12 +79,19 @@ describe("Chat write actions", () => {
   it("streams the reply text into the agent bubble", async () => {
     mocked.chatOpening.mockResolvedValue({ greeting: null });
     mocked.chatStream.mockImplementation(
-      async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
+      async (
+        _profileId: string,
+        _message: string,
+        _history: ChatHistoryMessage[],
+        _activeIntent: ChatIntent | null,
+        handlers: ChatStreamHandlers,
+      ) => {
         handlers.onMeta?.({
           degraded: false,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
           items: [],
           actions: [],
+          suggestions: [],
         });
         handlers.onDelta?.("A few ");
         handlers.onDelta?.("ideas for you.");
@@ -96,12 +110,19 @@ describe("Chat write actions", () => {
   it("shows a reduced-mode note when the turn degraded", async () => {
     mocked.chatOpening.mockResolvedValue({ greeting: null });
     mocked.chatStream.mockImplementation(
-      async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
+      async (
+        _profileId: string,
+        _message: string,
+        _history: ChatHistoryMessage[],
+        _activeIntent: ChatIntent | null,
+        handlers: ChatStreamHandlers,
+      ) => {
         handlers.onMeta?.({
           degraded: true,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
           items: [],
           actions: [],
+          suggestions: [],
         });
         handlers.onDelta?.("Here are some picks.");
         handlers.onDone?.();
@@ -118,12 +139,19 @@ describe("Chat write actions", () => {
   it("clears the conversation when New chat is clicked", async () => {
     mocked.chatOpening.mockResolvedValue({ greeting: null });
     mocked.chatStream.mockImplementation(
-      async (_profileId: string, _message: string, handlers: ChatStreamHandlers) => {
+      async (
+        _profileId: string,
+        _message: string,
+        _history: ChatHistoryMessage[],
+        _activeIntent: ChatIntent | null,
+        handlers: ChatStreamHandlers,
+      ) => {
         handlers.onMeta?.({
           degraded: false,
           intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
           items: [],
           actions: [],
+          suggestions: [],
         });
         handlers.onDelta?.("Sure thing.");
         handlers.onDone?.();
@@ -140,10 +168,100 @@ describe("Chat write actions", () => {
     expect(screen.getByTestId("chat-greeting")).toBeInTheDocument(); // back to the empty state
   });
 
+  it("renders clarify suggestions and sends the tapped one as the next turn", async () => {
+    mocked.chatOpening.mockResolvedValue({ greeting: null });
+    mocked.chatStream.mockImplementation(
+      async (
+        _profileId: string,
+        _message: string,
+        _history: ChatHistoryMessage[],
+        _activeIntent: ChatIntent | null,
+        handlers: ChatStreamHandlers,
+      ) => {
+        handlers.onMeta?.({
+          degraded: false,
+          intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
+          items: [],
+          actions: [],
+          suggestions: ["a film", "a series", "Surprise me"],
+        });
+        handlers.onDelta?.("A film or a series?");
+        handlers.onDone?.();
+      },
+    );
+
+    renderChat();
+    fireEvent.change(screen.getByTestId("chat-input"), {
+      target: { value: "recommend something" },
+    });
+    fireEvent.click(screen.getByTestId("chat-send"));
+    await screen.findByText("A film or a series?");
+
+    const chips = await screen.findAllByTestId("chat-clarify-suggestion");
+    expect(chips.map((c) => c.textContent)).toEqual(["a film", "a series", "Surprise me"]);
+
+    const series = chips[1];
+    if (!series) throw new Error("expected a second suggestion chip");
+    fireEvent.click(series); // "a series"
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(2));
+    expect(mocked.chatStream.mock.calls[1]?.[1]).toBe("a series"); // sent as the next message
+  });
+
   it("uses the proactive opening greeting when there are pending plans", async () => {
     mocked.chatOpening.mockResolvedValue({ greeting: "Did you watch Heat? How was it?" });
 
     renderChat();
     expect(await screen.findByText(/Did you watch Heat/)).toBeInTheDocument();
+  });
+
+  it("replays the prior conversation and active filters on the next turn (not a cold start)", async () => {
+    mocked.chatOpening.mockResolvedValue({ greeting: null });
+    const firstIntent = {
+      maxRuntime: 40,
+      includeGenres: ["comedy"],
+      excludeGenres: [],
+      mood: null,
+    };
+    mocked.chatStream.mockImplementation(
+      async (
+        _profileId: string,
+        _message: string,
+        _history: ChatHistoryMessage[],
+        _activeIntent: ChatIntent | null,
+        handlers: ChatStreamHandlers,
+      ) => {
+        handlers.onMeta?.({
+          degraded: false,
+          intent: firstIntent,
+          items: [],
+          actions: [],
+          suggestions: [],
+        });
+        handlers.onDelta?.("Try Paddington 2.");
+        handlers.onDone?.();
+      },
+    );
+
+    renderChat();
+    fireEvent.change(screen.getByTestId("chat-input"), { target: { value: "something funny" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+    await screen.findByText("Try Paddington 2.");
+
+    fireEvent.change(screen.getByTestId("chat-input"), { target: { value: "even shorter" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(2));
+    const secondCall = mocked.chatStream.mock.calls[1];
+    if (!secondCall) throw new Error("expected a second chatStream call");
+    // The second turn carries the first exchange — so "even shorter" can resolve against it…
+    const history = secondCall[2];
+    expect(history).toEqual([
+      { role: "user", text: "something funny" },
+      { role: "agent", text: "Try Paddington 2." },
+    ]);
+    // …but the current message is never folded into its own history.
+    expect(history).not.toContainEqual({ role: "user", text: "even shorter" });
+    // …and the filters in effect (≤40 min comedy) ride along so the planner can tighten them.
+    expect(secondCall[3]).toEqual(firstIntent);
   });
 });

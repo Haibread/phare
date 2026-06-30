@@ -62,10 +62,23 @@ class Settings(BaseSettings):
     tmdb_image_base_url: str = "https://image.tmdb.org/t/p/w342"
     # In-process TTL (seconds) for cached TMDB metadata/search reads. 0 disables caching.
     tmdb_cache_ttl_seconds: int = 3600
-    # On startup, if the candidate pool is empty and TMDB is configured, seed popular titles in the
+    # On startup, if the candidate pool is empty and TMDB is configured, seed the catalog in the
     # background so a fresh instance has something to recommend from. Disable to manage the catalog
-    # yourself (`phare import-catalog`). No-op without TMDB_API_KEY.
+    # yourself. No-op without TMDB_API_KEY.
     catalog_autoseed: bool = True
+    # What to seed when autoseed runs: "popular" (light front-page top-up), "broad" (deep genre
+    # sweep — the real-world catalog), or "auto" (broad in production, popular elsewhere — so a prod
+    # box deep-seeds itself without an operator running a command, while dev stays light).
+    catalog_autoseed_scope: str = "auto"
+    # Depth/quality of a broad seed (also used by autoseed when its scope resolves to broad). The
+    # broad sweep is what surfaces the long tail; deeper = more titles + more embedding cost.
+    catalog_broad_pages_per_genre: int = 20
+    catalog_broad_min_vote_count: int = 50
+    # Ongoing freshness: every N seconds a background pass pulls new/current releases (trending +
+    # now-playing/on-the-air) and embeds them, so the catalog keeps up with new movies/TV. 0 = off.
+    catalog_refresh_interval_seconds: int = 86400
+    # Pages of each freshness list to pull per refresh (≈20 titles/page/kind/list).
+    catalog_refresh_pages: int = 1
     trakt_client_id: str | None = None
     trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"

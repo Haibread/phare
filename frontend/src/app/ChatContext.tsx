@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import type { AgentAction, RecommendationItem } from "../api";
+import type { AgentAction, ChatIntent, RecommendationItem } from "../api";
 
 /** One message in the conversation. `streaming` marks the agent turn whose text is still arriving;
  * `status` is the live progress line shown before the reply text starts. */
@@ -18,6 +18,11 @@ export interface ChatTurn {
   actions?: AgentAction[];
   streaming?: boolean;
   status?: string;
+  // The filters this turn applied — replayed to the next turn so a refinement ("even shorter")
+  // adjusts them instead of starting from scratch.
+  intent?: ChatIntent;
+  // Quick-reply chips when the agent asked a clarifying question; tapping one sends it as the reply.
+  suggestions?: string[];
   // The agent fell back to a plain recommendation (couldn't parse the planner) — shown as an honest
   // "reduced mode" note so the warm reply doesn't imply it understood or remembered.
   degraded?: boolean;

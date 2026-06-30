@@ -57,29 +57,55 @@ def run_seed(
     return created, embedded
 
 
+def autoseed_scope(settings: Settings) -> str:
+    """Resolve the autoseed scope. ``auto`` means broad in production (so a prod box deep-seeds
+    itself, no operator command) and popular elsewhere (so dev never fans out tens of thousands)."""
+    scope = settings.catalog_autoseed_scope
+    if scope == "auto":
+        return "broad" if settings.is_production else "popular"
+    return scope
+
+
 def seed_catalog_if_empty(settings: Settings) -> int:
-    """Seed TMDB popular titles + embed them when the candidate pool is thin. Returns titles created
-    (0 when skipped). Best-effort: logs and swallows everything so it can't take down startup."""
+    """Seed the catalog + embed it when the candidate pool is thin. Returns titles created (0 when
+    skipped). Scope (popular vs the deep broad sweep) follows ``autoseed_scope``. Best-effort: logs
+    and swallows everything so it can't take down startup."""
     if not settings.tmdb_api_key:
         logger.info("catalog.autoseed.skipped", extra={"reason": "no TMDB_API_KEY"})
         return 0
     # Imports are local so a no-TMDB / disabled deployment never pays for them.
+    from phare.catalog.service import broad_import_from_tmdb
     from phare.db.base import get_session_factory
+    from phare.embeddings.service import EmbeddingService
     from phare.embeddings.version import embedding_model_version, get_embedding_provider
     from phare.providers.tmdb import TMDBMetadataProvider
 
+    scope = autoseed_scope(settings)
     try:
         with get_session_factory()() as session:
             pool = candidate_pool_size(session)
             if pool >= _MIN_POOL:
                 logger.info("catalog.autoseed.skipped", extra={"reason": "pool ok", "pool": pool})
                 return 0
-            logger.info("catalog.autoseed.start", extra={"pool": pool, "pages": _SEED_PAGES})
+            logger.info("catalog.autoseed.start", extra={"pool": pool, "scope": scope})
             provider = TMDBMetadataProvider(
                 api_key=settings.tmdb_api_key,
                 base_url=settings.tmdb_base_url,
                 cache_ttl=settings.tmdb_cache_ttl_seconds,
             )
+            if scope == "broad":
+                created = broad_import_from_tmdb(
+                    session,
+                    provider,
+                    pages_per_genre=settings.catalog_broad_pages_per_genre,
+                    min_vote_count=settings.catalog_broad_min_vote_count,
+                )
+                session.commit()
+                EmbeddingService(
+                    session, get_embedding_provider(settings), embedding_model_version(settings)
+                ).embed_missing()
+                session.commit()
+                return created
             created, _ = run_seed(
                 session,
                 provider,

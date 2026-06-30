@@ -213,6 +213,67 @@ def test_chat_journey(db_session: Session) -> None:
     assert "replyText" in body
 
 
+def test_chat_replays_conversation_history_into_the_planner(db_session: Session) -> None:
+    # The client replays the recent turns; the planner must see them so "even shorter" resolves
+    # against the prior exchange instead of coming in blind.
+    user = make_account(db_session)
+    fake = FakeLLMProvider(completion='{"calls":[{"tool":"recommend","args":{}}]}')
+    overrides = {
+        get_embedder: lambda: Embedder(
+            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        ),
+        get_optional_chat_llm: lambda: fake,
+        get_optional_agent_llm: lambda: FakeLLMProvider(completion="A few shorter ideas."),
+    }
+    client = authed_client(db_session, user, overrides=overrides)
+    profile_id = _profile_with_data(client, user)
+
+    response = client.post(
+        f"/profiles/{profile_id}/chat",
+        json={
+            "message": "even shorter",
+            "history": [
+                {"role": "user", "text": "something funny"},
+                {"role": "agent", "text": "Try Paddington 2."},
+            ],
+            "activeIntent": {"maxRuntime": 40, "includeGenres": ["Comedy"]},
+        },
+    )
+    assert response.status_code == 200
+    planner_prompt = fake.prompts[0]  # the workhorse plans first
+    assert "Recent conversation:" in planner_prompt
+    assert "something funny" in planner_prompt and "Paddington 2" in planner_prompt
+    # The active filters ride along too, so "even shorter" can tighten the prior 40-min cap.
+    assert "Active filters" in planner_prompt and "≤40 min" in planner_prompt
+
+
+def test_chat_clarify_surfaces_suggestions(db_session: Session) -> None:
+    # When the planner asks a clarifying question, the reply carries the question text + tappable
+    # quick-replies (with the guaranteed escape hatch), and no picks.
+    user = make_account(db_session)
+    clarify = (
+        '{"calls":[{"tool":"clarify","args":{"question":"A film or a series?",'
+        '"suggestions":["a film","a series"]}}]}'
+    )
+    overrides = {
+        get_embedder: lambda: Embedder(
+            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        ),
+        get_optional_chat_llm: lambda: FakeLLMProvider(completion=clarify),  # workhorse plans
+        # An agent model must be present for the tool-using path; never called on a clarify turn.
+        get_optional_agent_llm: lambda: FakeLLMProvider(completion="unused"),
+    }
+    client = authed_client(db_session, user, overrides=overrides)
+    profile_id = _profile_with_data(client, user)
+
+    body = client.post(
+        f"/profiles/{profile_id}/chat", json={"message": "recommend something"}
+    ).json()
+    assert body["replyText"] == "A film or a series?"
+    assert body["items"] == []
+    assert body["suggestions"] == ["a film", "a series", "Surprise me"]
+
+
 def test_chat_stream_offline_emits_meta_then_reply(db_session: Session) -> None:
     user = make_account(db_session)
     # offline (no LLM): deterministic reply, still streamed as SSE

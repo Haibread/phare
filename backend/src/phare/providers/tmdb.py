@@ -100,14 +100,13 @@ class TMDBMetadataProvider:
         data = self._get(f"/tv/{tmdb_id}", append_to_response="keywords,external_ids")
         return self._parse_show(data)
 
-    def popular(self, kind: TitleKind, page: int = 1) -> list[TitleMetadata]:
-        """List popular titles for catalog seeding. Each is fully resolved (genres/keywords).
+    def _resolve_listing(self, kind: TitleKind, data: dict[str, Any]) -> list[TitleMetadata]:
+        """Resolve a thin TMDB list response (popular / trending / now-playing) into full metadata.
 
-        The popular list endpoint returns thin records, so we resolve each via ``get_title``
-        to get the same metadata depth (keywords, runtime) the embedder relies on.
+        These list endpoints return shallow records, so we re-fetch each via ``get_title`` to get
+        the depth (genres, keywords, runtime) the embedder relies on. Cached, so the per-title
+        fan-out is cheap on repeat.
         """
-        path = "/movie/popular" if kind is TitleKind.movie else "/tv/popular"
-        data = self._get(path, page=str(page))
         out: list[TitleMetadata] = []
         for result in data.get("results", []):
             tmdb_id = result.get("id")
@@ -117,6 +116,25 @@ class TMDBMetadataProvider:
             if meta is not None:
                 out.append(meta)
         return out
+
+    def popular(self, kind: TitleKind, page: int = 1) -> list[TitleMetadata]:
+        """List popular titles for catalog seeding. Each is fully resolved (genres/keywords)."""
+        path = "/movie/popular" if kind is TitleKind.movie else "/tv/popular"
+        return self._resolve_listing(kind, self._get(path, page=str(page)))
+
+    def trending(self, kind: TitleKind, page: int = 1) -> list[TitleMetadata]:
+        """This week's trending titles — catches new + buzzy content for the freshness refresh."""
+        path = f"/trending/{'movie' if kind is TitleKind.movie else 'tv'}/week"
+        return self._resolve_listing(kind, self._get(path, page=str(page)))
+
+    def now_playing(self, kind: TitleKind, page: int = 1) -> list[TitleMetadata]:
+        """Currently-released titles (movies in theatres / shows on the air) — the freshest content.
+
+        Unlike ``discover`` there's no vote-count floor, so brand-new releases (which have barely
+        any votes yet) actually show up. That's the whole point of the freshness pull.
+        """
+        path = "/movie/now_playing" if kind is TitleKind.movie else "/tv/on_the_air"
+        return self._resolve_listing(kind, self._get(path, page=str(page)))
 
     def genres(self, kind: TitleKind) -> dict[int, str]:
         """TMDB's genre id -> name map for a kind (cached). Used both to resolve ``discover``

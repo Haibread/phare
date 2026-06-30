@@ -3,12 +3,63 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, field_validator
 
 from phare.llm_json import as_str_list
 from phare.recommend.schema import Recommendation
+
+# The in-flight conversation is fed back to the planner/composer so the agent can resolve references
+# ("even shorter") and not repeat itself — short-term memory, held by the client, not persisted.
+# Both bounds keep a long chat from blowing the prompt budget: only the last few turns reach the
+# model, each truncated. They live here so the planner and composer format history identically.
+_HISTORY_MAX_MESSAGES = 6
+_HISTORY_MAX_CHARS = 400
+
+
+class ChatMessage(BaseModel):
+    """One prior turn of the conversation, as fed back into a prompt. Distinct from the wire DTO."""
+
+    role: Literal["user", "agent"]
+    text: str
+
+
+def format_active_intent(intent: ChatIntent) -> str:
+    """Render the filters currently in effect into a one-line planner hint, so a refinement ("even
+    shorter") can adjust a *number the planner can see* instead of guessing blind. The runtime cap
+    in particular lives only in the structured intent — it never reaches the replayed prose — so
+    without this the planner can't tighten below the previous cap. Empty intent → empty string."""
+    parts: list[str] = []
+    if intent.include_genres:
+        parts.append(", ".join(intent.include_genres))
+    if intent.exclude_genres:
+        parts.append("no " + ", ".join(intent.exclude_genres))
+    if intent.max_runtime is not None:
+        parts.append(f"≤{intent.max_runtime} min")
+    if intent.mood:
+        parts.append(intent.mood)
+    if intent.rewatch:
+        parts.append("rewatch")
+    return "; ".join(parts)
+
+
+def format_history(history: list[ChatMessage]) -> str:
+    """Render recent turns into a prompt block, bounded to the last few and truncated per message.
+
+    Empty (or all-blank) history → empty string, so callers omit the block entirely rather than
+    emit a dangling "Recent conversation:" header.
+    """
+    lines: list[str] = []
+    for msg in history[-_HISTORY_MAX_MESSAGES:]:
+        text = msg.text.strip()
+        if not text:
+            continue
+        if len(text) > _HISTORY_MAX_CHARS:
+            text = text[:_HISTORY_MAX_CHARS].rstrip() + "…"
+        label = "User" if msg.role == "user" else "Assistant"
+        lines.append(f"{label}: {text}")
+    return "\n".join(lines)
 
 
 class ChatIntent(BaseModel):
@@ -86,6 +137,8 @@ class ChatReply(BaseModel):
     intent: ChatIntent
     items: list[Recommendation]
     actions: list[AgentAction] = []
+    # Quick-reply chips for a clarifying question (empty otherwise) — see docs/agent.md guardrail 5.
+    suggestions: list[str] = []
     # The AI couldn't fully process this turn (planner output unparseable) and fell back to a plain
     # recommendation — no writes, no mood parsing. Surfaced so the UI tells the user honestly rather
     # than pretending the agent understood. See docs/agent.md and docs/configuration.md.

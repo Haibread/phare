@@ -72,6 +72,14 @@ export function Chat(): React.JSX.Element {
     if (trimmed === "" || pending) {
       return;
     }
+    // The conversation so far (this turn's message isn't appended yet) — replayed so the agent can
+    // resolve references and not repeat itself. The backend bounds it; we just drop empty bubbles.
+    const history = log
+      .filter((turn) => turn.text.trim() !== "")
+      .map((turn) => ({ role: turn.role, text: turn.text }));
+    // The filters in effect from the most recent answered turn, so "even shorter" can tighten them.
+    const activeIntent =
+      [...log].reverse().find((turn) => turn.role === "agent" && turn.intent)?.intent ?? null;
     setLog((l) => [
       ...l,
       { role: "user", text: trimmed },
@@ -81,12 +89,18 @@ export function Chat(): React.JSX.Element {
     setPending(true);
     let wrote = false;
     try {
-      await api.chatStream(profileId, outbound ?? trimmed, {
+      await api.chatStream(profileId, outbound ?? trimmed, history, activeIntent, {
         onStatus: (label) => setLog((l) => patchLast(l, { status: label })),
         onMeta: (meta) => {
           wrote = meta.actions.length > 0;
           setLog((l) =>
-            patchLast(l, { items: meta.items, actions: meta.actions, degraded: meta.degraded }),
+            patchLast(l, {
+              items: meta.items,
+              actions: meta.actions,
+              degraded: meta.degraded,
+              intent: meta.intent,
+              suggestions: meta.suggestions,
+            }),
           );
         },
         onDelta: (chunk) => setLog((l) => patchLast(l, (t) => ({ text: t.text + chunk }))),
@@ -148,6 +162,22 @@ export function Chat(): React.JSX.Element {
               <p className={styles.reducedMode} data-testid="chat-degraded">
                 {t("reducedMode")}
               </p>
+            )}
+            {turn.suggestions && turn.suggestions.length > 0 && !turn.streaming && (
+              <div className={styles.followups} data-testid="chat-suggestions">
+                {turn.suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    className={styles.followup}
+                    data-testid="chat-clarify-suggestion"
+                    disabled={pending}
+                    onClick={() => send(suggestion)}
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
             )}
             {turn.actions && turn.actions.length > 0 && (
               <div className={styles.actionChips} data-testid="chat-actions">

@@ -17,7 +17,14 @@ from sqlalchemy.orm import Session
 
 from phare.agent import commitments as commitments_store
 from phare.agent import memory as memory_store
-from phare.agent.schema import AgentPlan, ToolCall
+from phare.agent.schema import (
+    AgentPlan,
+    ChatIntent,
+    ChatMessage,
+    ToolCall,
+    format_active_intent,
+    format_history,
+)
 from phare.db.models import TasteProfile, Title
 from phare.llm_json import extract_json
 from phare.providers.types import LLMProvider
@@ -43,11 +50,32 @@ include_genres / exclude_genres / mood / max_runtime / rewatch from the words). 
 like "romance" or "horror" is the film genre, never an off-topic subject. When a short phrase could
 plausibly be a watch request, assume it is and `recommend` rather than decline.
 
+A "Recent conversation" block may precede the message. Use it ONLY to resolve references in the
+LATEST user message ("even shorter", "more like that", "the second one") — judge scope and intent on
+the latest message, and never treat an earlier turn as a fresh request.
+
+An "Active filters" line may also precede the message — the filters already in effect from earlier
+turns. When the latest message REFINES them, carry over the filters still in play and adjust only
+what changed, then re-emit the FULL recommend args you want in effect (not just the delta):
+"even shorter" lowers max_runtime BELOW the current value; "funnier"/"lighter" keeps the runtime and
+leans the genre; "no horror" adds horror to exclude_genres. A fresh, unrelated request ignores them.
+
 Tools (emit a JSON array under "calls", each {"tool","args"}):
 - recommend {include_genres?, exclude_genres?, max_runtime?, mood?, rewatch?} — suggest something
   to watch. Set rewatch=true when the user wants to REVISIT something they've already seen (a
   rewatch, "comfort watch", "something I've seen before", "watch again") — it draws from their own
   history instead of new titles.
+- clarify {question, suggestions?} — ask ONE short, warm question INSTEAD of recommending, but ONLY
+  when the request is too vague to pick well AND a single answer would genuinely change the picks
+  (a bare "recommend me something" / "what should I watch" with no genre, mood, length, or vibe and
+  no taste profile yet). `suggestions` is 2-3 short tappable answers; ALWAYS include an easy out
+  like "surprise me". Use this sparingly — the bar is high. If the message names any genre/mood/
+  length, or a taste profile exists, just `recommend`. You MAY ask again on a later turn if the user
+  is still working it out, but ONLY when their last answer still leaves you unable to pick AND your
+  next question covers something NEW — never re-ask what they already told you, and lean toward
+  recommending as soon as you can pick reasonably. The moment the user signals they don't know, want
+  you to choose, or takes the "surprise me" out, `recommend` instead of asking. Emit clarify alone
+  (no other tool).
 - explain_picks {} — the user asks WHY you recommended the previous titles ("why these?", "why
   those?", "why did you pick these?", "explain your picks"). Re-surfaces the last slate so the
   reply can explain the fit. This is in scope — never decline it.
@@ -94,6 +122,8 @@ def plan(
     llm: LLMProvider,
     *,
     now: datetime,
+    history: list[ChatMessage] | None = None,
+    active_intent: ChatIntent | None = None,
 ) -> AgentPlan:
     """Ask the LLM for a tool plan.
 
@@ -104,7 +134,15 @@ def plan(
     normal request never silently does nothing.
     """
     context = _context_block(session, profile_id, now)
-    prompt = f"{_SYSTEM}\nContext:\n{context}\n\nUser message: {message}\n"
+    convo = format_history(history or [])
+    convo_block = f"Recent conversation:\n{convo}\n\n" if convo else ""
+    active = format_active_intent(active_intent) if active_intent is not None else ""
+    active_block = (
+        f"Active filters (the user may be refining these): {active}\n\n" if active else ""
+    )
+    prompt = (
+        f"{_SYSTEM}\nContext:\n{context}\n\n{convo_block}{active_block}User message: {message}\n"
+    )
     try:
         # temperature=0: picking tools from a fixed contract is mechanical, not creative. Without
         # pinning it, a reasoning model samples a different plan for the same message — the genre
