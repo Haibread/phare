@@ -31,7 +31,12 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + catalog import (popular + broad) + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
 | `TMDB_CACHE_TTL_SECONDS` | `3600` | In-process TTL for cached TMDB metadata/search reads (see [Rate limits & caching](#rate-limits--caching)). `0` disables the cache. |
-| `CATALOG_AUTOSEED` | `true` | On startup, if the candidate pool is empty and `TMDB_API_KEY` is set, seed TMDB popular titles in the background (see [Seeding the catalog](#seeding-the-catalog)). No-op without a TMDB key. |
+| `CATALOG_AUTOSEED` | `true` | On startup, if the candidate pool is empty and `TMDB_API_KEY` is set, seed the catalog in the background (see [Seeding the catalog](#seeding-the-catalog)). Master on/off switch. No-op without a TMDB key. |
+| `CATALOG_AUTOSEED_SCOPE` | `auto` | What autoseed pulls: `popular` (light front page), `broad` (deep genre sweep), or `auto` (**broad in production**, popular elsewhere — so a prod box deep-seeds itself with no command). |
+| `CATALOG_BROAD_PAGES_PER_GENRE` | `20` | Depth of a broad seed (also the autoseed when its scope is broad). Deeper = more titles + more embedding cost. |
+| `CATALOG_BROAD_MIN_VOTE_COUNT` | `50` | Quality floor for the broad seed (titles below this vote count are skipped). |
+| `CATALOG_REFRESH_INTERVAL_SECONDS` | `86400` (24 h) | How often a background pass pulls **new/current releases** (trending + now-playing/on-the-air) and embeds them, so the catalog keeps up with new movies/TV. `0` disables it. No-op without a TMDB key. |
+| `CATALOG_REFRESH_PAGES` | `1` | Pages of each freshness list pulled per refresh (≈20 titles/page/kind/list). |
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
 | `TRAKT_CLIENT_SECRET` | _(unset)_ | Also required for the Trakt OAuth device-connect flow. |
 | `SEERR_BASE_URL` / `SEERR_API_KEY` | _(unset)_ | Instance-wide Seerr fallback; per-profile creds set in the UI take precedence. |
@@ -74,9 +79,24 @@ watched", so recommendations and chat picks come back empty until a candidate po
 than ~50 never-watched titles) and `TMDB_API_KEY` is set, Phare pulls a few pages of TMDB's popular
 titles and embeds them — in a background thread, so readiness never waits on the network. It's
 idempotent (upsert by `tmdb_id`) and best-effort: a failure logs and is swallowed, never crashing
-startup. No-op without a TMDB key. This is just enough to make a brand-new instance work; for a real
-catalog with the long tail, still run the **broad** seed below. Set `CATALOG_AUTOSEED=false` to
-manage the catalog yourself.
+startup. No-op without a TMDB key. Set `CATALOG_AUTOSEED=false` to manage the catalog yourself.
+
+**Auto-broad in production.** Popular alone is just blockbusters — not enough for a real instance. So
+the autoseed scope (`CATALOG_AUTOSEED_SCOPE`, default `auto`) resolves to the deep **broad** sweep
+when `ENVIRONMENT=production`, and to light popular elsewhere. A fresh production box therefore
+deep-seeds itself in the background on first boot — no operator command — while a dev box stays light
+and never fans out tens of thousands of TMDB requests. Depth/cost is tuned by
+`CATALOG_BROAD_PAGES_PER_GENRE` / `CATALOG_BROAD_MIN_VOTE_COUNT`. It's still gated on a thin pool, so
+it runs once and then never re-pulls. (The CLI broad seed below remains for a deliberate one-off; the
+auto path is the default delivery.)
+
+**Staying fresh — new movies & TV.** Seeding is a point-in-time snapshot; new releases keep coming,
+and nothing on the read path can surface a title that isn't imported yet. So a background pass runs
+every `CATALOG_REFRESH_INTERVAL_SECONDS` (default daily; `0` to disable) and pulls TMDB's **current
+content** — this week's *trending* plus what's *now playing* / *on the air* — then embeds it. Those
+curated lists (unlike vote-filtered *discover*) carry brand-new releases that have barely any votes
+yet, which is exactly what we want to catch. It's idempotent (upsert by `tmdb_id`), best-effort, and
+runs in a daemon thread that stops cleanly on shutdown — no cron, no command.
 
 **Broad seed (the recommended real-world seed).** `--scope broad` pages TMDB's *discover* endpoint
 per genre, sorted by vote count with a quality floor (`--min-vote-count`, default 50, so titles with

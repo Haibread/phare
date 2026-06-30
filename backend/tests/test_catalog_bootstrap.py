@@ -45,6 +45,29 @@ def test_candidate_pool_size_counts_only_unwatched(db_session: Session) -> None:
     assert candidate_pool_size(db_session) == base - 1
 
 
+def test_autoseed_scope_auto_resolves_by_environment() -> None:
+    from phare.catalog.bootstrap import autoseed_scope
+    from phare.core.config import Settings
+
+    # "auto" deep-seeds production (broad) but keeps dev light (popular)...
+    assert (
+        autoseed_scope(Settings(environment="production", catalog_autoseed_scope="auto")) == "broad"
+    )
+    assert (
+        autoseed_scope(Settings(environment="development", catalog_autoseed_scope="auto"))
+        == "popular"
+    )
+    # ...and an explicit scope is always honoured verbatim.
+    assert (
+        autoseed_scope(Settings(environment="production", catalog_autoseed_scope="popular"))
+        == "popular"
+    )
+    assert (
+        autoseed_scope(Settings(environment="development", catalog_autoseed_scope="broad"))
+        == "broad"
+    )
+
+
 def test_seed_is_skipped_without_a_tmdb_key() -> None:
     # conftest blanks TMDB_API_KEY, so the configured settings have no key: the seed must no-op
     # (and never touch the network) rather than raise.

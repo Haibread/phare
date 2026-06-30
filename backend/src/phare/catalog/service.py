@@ -42,6 +42,14 @@ class CatalogMetadataSource(CatalogSearchSource, MetadataProvider, Protocol):
     """
 
 
+class CatalogRefreshSource(Protocol):
+    """A provider that can list current/new releases to keep the catalog fresh (e.g. TMDB)."""
+
+    def trending(self, kind: TitleKind, page: int = ...) -> list[TitleMetadata]: ...
+
+    def now_playing(self, kind: TitleKind, page: int = ...) -> list[TitleMetadata]: ...
+
+
 class CatalogDiscoverSource(Protocol):
     """A provider that can enumerate genres and page a discover endpoint (e.g. TMDB)."""
 
@@ -151,6 +159,35 @@ def import_from_tmdb(
         for page in range(1, pages + 1):
             metas.extend(metadata.popular(kind, page))
     return upsert_titles(session, metas)
+
+
+def refresh_from_tmdb(
+    session: Session,
+    source: CatalogRefreshSource,
+    *,
+    kinds: Sequence[TitleKind] = (TitleKind.movie, TitleKind.show),
+    pages: int = 1,
+) -> int:
+    """Keep the catalog current: pull *new/current* releases (this week's trending + what's playing
+    now / on the air) and upsert them. Returns count created.
+
+    Deliberately **no vote-count floor** — brand-new releases have barely any votes, so a floor (as
+    the broad seed uses for quality) would exclude exactly the content this is meant to catch.
+    Dedupes the two lists by ``tmdb_id`` and drops anything with no overview (the embed input).
+    """
+    by_tmdb_id: dict[int, TitleMetadata] = {}
+    for kind in kinds:
+        for page in range(1, pages + 1):
+            for meta in (*source.trending(kind, page), *source.now_playing(kind, page)):
+                if meta.tmdb_id is None or not (meta.overview or "").strip():
+                    continue
+                by_tmdb_id.setdefault(meta.tmdb_id, meta)
+    created = upsert_titles(session, list(by_tmdb_id.values()))
+    logger.info(
+        "catalog.refresh",
+        extra={"created_count": created, "unique_count": len(by_tmdb_id)},
+    )
+    return created
 
 
 def broad_import_from_tmdb(

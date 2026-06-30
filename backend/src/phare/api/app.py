@@ -54,7 +54,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             name="catalog-autoseed",
             daemon=True,
         ).start()
+    # Ongoing freshness: a recurring background pull of new/current releases (no-op when disabled or
+    # without TMDB). Held so it can be stopped cleanly on shutdown.
+    from phare.catalog.refresh import start_refresh_loop
+
+    stop_refresh = start_refresh_loop(settings)
     yield
+    stop_refresh()
     logger.info("shutdown")
 
 
