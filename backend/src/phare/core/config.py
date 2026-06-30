@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # Ongoing freshness: every N seconds a background pass pulls new/current releases (trending +
     # now-playing/on-the-air) and embeds them, so the catalog keeps up with new movies/TV. 0 = off.
     catalog_refresh_interval_seconds: int = 86400
+    # Delay before the *first* refresh after startup. Deliberately short (not a full interval) so a
+    # box that restarts more often than the interval still refreshes — a full-interval first wait
+    # would let frequent restarts starve the refresh entirely. Small enough to run on a normal boot,
+    # long enough to let the startup autoseed get going first.
+    catalog_refresh_initial_delay_seconds: int = 300
     # Pages of each freshness list to pull per refresh (≈20 titles/page/kind/list).
     catalog_refresh_pages: int = 1
     trakt_client_id: str | None = None

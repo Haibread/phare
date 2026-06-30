@@ -36,6 +36,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `CATALOG_BROAD_PAGES_PER_GENRE` | `20` | Depth of a broad seed (also the autoseed when its scope is broad). Deeper = more titles + more embedding cost. |
 | `CATALOG_BROAD_MIN_VOTE_COUNT` | `50` | Quality floor for the broad seed (titles below this vote count are skipped). |
 | `CATALOG_REFRESH_INTERVAL_SECONDS` | `86400` (24 h) | How often a background pass pulls **new/current releases** (trending + now-playing/on-the-air) and embeds them, so the catalog keeps up with new movies/TV. `0` disables it. No-op without a TMDB key. |
+| `CATALOG_REFRESH_INITIAL_DELAY_SECONDS` | `300` (5 min) | Delay before the **first** refresh after startup — short (not a full interval) so a box that restarts more often than the interval still refreshes, rather than starving. |
 | `CATALOG_REFRESH_PAGES` | `1` | Pages of each freshness list pulled per refresh (≈20 titles/page/kind/list). |
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
 | `TRAKT_CLIENT_SECRET` | _(unset)_ | Also required for the Trakt OAuth device-connect flow. |

@@ -77,9 +77,14 @@ export function Chat(): React.JSX.Element {
     const history = log
       .filter((turn) => turn.text.trim() !== "")
       .map((turn) => ({ role: turn.role, text: turn.text }));
-    // The filters in effect from the most recent answered turn, so "even shorter" can tighten them.
+    // The filters in effect from the most recent turn that actually recommended, so "even shorter"
+    // can tighten them. Turns that only asked a clarifying question or declined carry a throwaway
+    // keyword-parsed intent and no picks — skip those so they don't pollute the active filters.
     const activeIntent =
-      [...log].reverse().find((turn) => turn.role === "agent" && turn.intent)?.intent ?? null;
+      [...log]
+        .reverse()
+        .find((turn) => turn.role === "agent" && turn.intent && (turn.items?.length ?? 0) > 0)
+        ?.intent ?? null;
     setLog((l) => [
       ...l,
       { role: "user", text: trimmed },
@@ -89,23 +94,28 @@ export function Chat(): React.JSX.Element {
     setPending(true);
     let wrote = false;
     try {
-      await api.chatStream(profileId, outbound ?? trimmed, history, activeIntent, {
-        onStatus: (label) => setLog((l) => patchLast(l, { status: label })),
-        onMeta: (meta) => {
-          wrote = meta.actions.length > 0;
-          setLog((l) =>
-            patchLast(l, {
-              items: meta.items,
-              actions: meta.actions,
-              degraded: meta.degraded,
-              intent: meta.intent,
-              suggestions: meta.suggestions,
-            }),
-          );
+      await api.chatStream(
+        profileId,
+        outbound ?? trimmed,
+        { history, activeIntent },
+        {
+          onStatus: (label) => setLog((l) => patchLast(l, { status: label })),
+          onMeta: (meta) => {
+            wrote = meta.actions.length > 0;
+            setLog((l) =>
+              patchLast(l, {
+                items: meta.items,
+                actions: meta.actions,
+                degraded: meta.degraded,
+                intent: meta.intent,
+                suggestions: meta.suggestions,
+              }),
+            );
+          },
+          onDelta: (chunk) => setLog((l) => patchLast(l, (t) => ({ text: t.text + chunk }))),
+          onDone: () => setLog((l) => patchLast(l, { streaming: false })),
         },
-        onDelta: (chunk) => setLog((l) => patchLast(l, (t) => ({ text: t.text + chunk }))),
-        onDone: () => setLog((l) => patchLast(l, { streaming: false })),
-      });
+      );
     } catch {
       setLog((l) => patchLast(l, { text: t("error"), streaming: false }));
     } finally {

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatHistoryMessage, ChatIntent, ChatStreamHandlers } from "../api";
+import type { ChatStreamHandlers, ChatStreamOptions } from "../api";
 import { ChatProvider } from "../app/ChatContext";
 import { ProfileProvider } from "../app/ProfileContext";
 import { Chat } from "./Chat";
@@ -43,8 +43,7 @@ describe("Chat write actions", () => {
       async (
         _profileId: string,
         _message: string,
-        _history: ChatHistoryMessage[],
-        _activeIntent: ChatIntent | null,
+        _options: ChatStreamOptions,
         handlers: ChatStreamHandlers,
       ) => {
         handlers.onMeta?.({
@@ -82,8 +81,7 @@ describe("Chat write actions", () => {
       async (
         _profileId: string,
         _message: string,
-        _history: ChatHistoryMessage[],
-        _activeIntent: ChatIntent | null,
+        _options: ChatStreamOptions,
         handlers: ChatStreamHandlers,
       ) => {
         handlers.onMeta?.({
@@ -113,8 +111,7 @@ describe("Chat write actions", () => {
       async (
         _profileId: string,
         _message: string,
-        _history: ChatHistoryMessage[],
-        _activeIntent: ChatIntent | null,
+        _options: ChatStreamOptions,
         handlers: ChatStreamHandlers,
       ) => {
         handlers.onMeta?.({
@@ -142,8 +139,7 @@ describe("Chat write actions", () => {
       async (
         _profileId: string,
         _message: string,
-        _history: ChatHistoryMessage[],
-        _activeIntent: ChatIntent | null,
+        _options: ChatStreamOptions,
         handlers: ChatStreamHandlers,
       ) => {
         handlers.onMeta?.({
@@ -174,8 +170,7 @@ describe("Chat write actions", () => {
       async (
         _profileId: string,
         _message: string,
-        _history: ChatHistoryMessage[],
-        _activeIntent: ChatIntent | null,
+        _options: ChatStreamOptions,
         handlers: ChatStreamHandlers,
       ) => {
         handlers.onMeta?.({
@@ -204,7 +199,10 @@ describe("Chat write actions", () => {
     if (!series) throw new Error("expected a second suggestion chip");
     fireEvent.click(series); // "a series"
     await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(2));
-    expect(mocked.chatStream.mock.calls[1]?.[1]).toBe("a series"); // sent as the next message
+    const followUp = mocked.chatStream.mock.calls[1];
+    expect(followUp?.[1]).toBe("a series"); // the tapped chip is sent as the next message
+    // The clarify turn had no picks, so its throwaway intent must NOT become an active filter.
+    expect(followUp?.[2].activeIntent).toBeNull();
   });
 
   it("uses the proactive opening greeting when there are pending plans", async () => {
@@ -226,14 +224,28 @@ describe("Chat write actions", () => {
       async (
         _profileId: string,
         _message: string,
-        _history: ChatHistoryMessage[],
-        _activeIntent: ChatIntent | null,
+        _options: ChatStreamOptions,
         handlers: ChatStreamHandlers,
       ) => {
         handlers.onMeta?.({
           degraded: false,
           intent: firstIntent,
-          items: [],
+          // A real pick — so this counts as a recommendation turn whose filters carry forward.
+          items: [
+            {
+              titleId: "t1",
+              title: "Paddington 2",
+              kind: "movie",
+              year: 2017,
+              genres: ["comedy"],
+              score: 0.9,
+              isSwing: false,
+              confidence: 0.8,
+              explanation: null,
+              posterUrl: null,
+              components: {},
+            },
+          ],
           actions: [],
           suggestions: [],
         });
@@ -253,8 +265,8 @@ describe("Chat write actions", () => {
     await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(2));
     const secondCall = mocked.chatStream.mock.calls[1];
     if (!secondCall) throw new Error("expected a second chatStream call");
+    const { history, activeIntent } = secondCall[2];
     // The second turn carries the first exchange — so "even shorter" can resolve against it…
-    const history = secondCall[2];
     expect(history).toEqual([
       { role: "user", text: "something funny" },
       { role: "agent", text: "Try Paddington 2." },
@@ -262,6 +274,6 @@ describe("Chat write actions", () => {
     // …but the current message is never folded into its own history.
     expect(history).not.toContainEqual({ role: "user", text: "even shorter" });
     // …and the filters in effect (≤40 min comedy) ride along so the planner can tighten them.
-    expect(secondCall[3]).toEqual(firstIntent);
+    expect(activeIntent).toEqual(firstIntent);
   });
 });

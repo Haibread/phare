@@ -338,7 +338,12 @@ def _clarify_suggestions(args: dict, language: Language = DEFAULT_LANGUAGE) -> l
     raw = args.get("suggestions", [])
     chips = [str(s).strip() for s in raw if str(s).strip()][:3] if isinstance(raw, list) else []
     escape = translate(language, "chat.surpriseMe")
-    if not any(re.search(r"surprise|anything|whatever|just pick", c, re.I) for c in chips):
+    # Recognise an existing "just pick for me" chip in either supported language, so we don't append
+    # a duplicate escape hatch next to a model-generated one ("surprise me" / "surprends-moi", …).
+    already_has_out = re.compile(
+        r"surprise|surprends|anything|whatever|just pick|n'importe|peu importe|au hasard", re.I
+    )
+    if not any(already_has_out.search(c) for c in chips):
         chips.append(escape)
     return chips
 
