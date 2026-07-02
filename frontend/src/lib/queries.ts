@@ -116,6 +116,22 @@ export function useInvalidateAfterChat(profileId: string): () => void {
   };
 }
 
+/** Send a card feedback signal ("not interested"). Deliberately does NOT invalidate the
+ * recommendation queries: the card removes itself locally and keeps an undo affordance in its slot,
+ * so a full refetch (which would yank that affordance) is left for the next natural navigation. The
+ * negative signal does change history + taste, so those refresh. */
+export function useSendTitleFeedback(profileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ titleId, signal }: { titleId: string; signal: "not_interested" }) =>
+      api.sendTitleFeedback(profileId, titleId, signal),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.history(profileId) });
+      qc.invalidateQueries({ queryKey: keys.taste(profileId) });
+    },
+  });
+}
+
 export function useLoadSampleData(profileId: string) {
   const qc = useQueryClient();
   return useMutation({

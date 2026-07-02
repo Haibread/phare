@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type RenderResult, fireEvent, render, screen } from "@testing-library/react";
+import { type RenderResult, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RecommendationItem, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
@@ -141,6 +141,41 @@ describe("RecRow", () => {
     it("passes no anchor for a non-because row", () => {
       const spy = openFirstCardOf("you_might_like");
       expect(spy.mock.calls[0][4]).toBeNull();
+    });
+  });
+
+  describe("not interested (K2)", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("sends the signal, removes the card, and restores it on undo", async () => {
+      const item = recItem({ title: "Arrival" });
+      const send = vi
+        .spyOn(api, "sendTitleFeedback")
+        .mockResolvedValue({
+          titleId: item.titleId,
+          signal: "not_interested",
+          undoToken: "event:e1",
+        });
+      const undo = vi.spyOn(api, "undoChatAction").mockResolvedValue({ undone: true });
+
+      renderCard(<PosterCard item={item} />);
+
+      // The affordance carries an accessible label and is discreet (a button, not text).
+      fireEvent.click(screen.getByTestId("not-interested"));
+      // The card leaves its slot for an undo placeholder, and the signal is sent.
+      expect(screen.getByTestId("rec-card-removed")).toBeInTheDocument();
+      await waitFor(() =>
+        expect(send).toHaveBeenCalledWith("p1", item.titleId, "not_interested"),
+      );
+
+      // Undo is enabled once the write returns its token, then reverses via the chat mechanism.
+      const undoBtn = screen.getByTestId("undo-not-interested");
+      await waitFor(() => expect(undoBtn).not.toBeDisabled());
+      fireEvent.click(undoBtn);
+      await waitFor(() => expect(undo).toHaveBeenCalledWith("p1", "event:e1"));
+      // The full card returns.
+      expect(await screen.findByTestId("not-interested")).toBeInTheDocument();
+      expect(screen.queryByTestId("rec-card-removed")).toBeNull();
     });
   });
 });

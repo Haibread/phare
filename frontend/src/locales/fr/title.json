@@ -14,5 +14,10 @@
   "badge": {
     "swing": "audace",
     "watched": "vu"
+  },
+  "feedback": {
+    "notInterested": "Pas intéressé",
+    "removed": "Retiré de vos recommandations.",
+    "undo": "Annuler"
   }
 }

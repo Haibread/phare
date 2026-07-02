@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecommendationItem } from "../api";
+import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
+import { useSendTitleFeedback, useUndoChatAction } from "../lib/queries";
 import { TitleAction } from "./Availability";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 import { TitleDetailSheet } from "./TitleDetailSheet";
@@ -19,11 +21,70 @@ export function PosterCard({
   anchorTitleId?: string | null;
 }): React.JSX.Element {
   const { t } = useTranslation("title");
+  const profileId = useProfileId();
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  // Local removal: the card leaves its row on "not interested" but stays in place as an undo slot,
+  // so we don't refetch the whole row out from under the user (see useSendTitleFeedback).
+  const [removed, setRemoved] = useState(false);
+  const [undoToken, setUndoToken] = useState<string | null>(null);
+  const feedback = useSendTitleFeedback(profileId);
+  const undo = useUndoChatAction(profileId);
   const showPoster = item.posterUrl !== null && !imgFailed;
+
+  function dismiss(): void {
+    setRemoved(true); // optimistic — revert if the write fails
+    feedback.mutate(
+      { titleId: item.titleId, signal: "not_interested" },
+      {
+        onSuccess: (res) => setUndoToken(res.undoToken),
+        onError: () => setRemoved(false),
+      },
+    );
+  }
+
+  function restore(): void {
+    if (!undoToken) return;
+    undo.mutate(undoToken, {
+      onSuccess: () => {
+        setRemoved(false);
+        setUndoToken(null);
+      },
+    });
+  }
+
+  if (removed) {
+    return (
+      <article className={styles.card} data-testid="rec-card">
+        <div className={styles.cardRemoved} data-testid="rec-card-removed">
+          <span>{t("feedback.removed")}</span>
+          <button
+            type="button"
+            className={styles.undoInline}
+            data-testid="undo-not-interested"
+            disabled={!undoToken || undo.isPending}
+            onClick={restore}
+          >
+            {t("feedback.undo")}
+          </button>
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article className={styles.card} data-testid="rec-card">
+      <button
+        type="button"
+        className={styles.dismiss}
+        data-testid="not-interested"
+        aria-label={t("feedback.notInterested")}
+        title={t("feedback.notInterested")}
+        disabled={feedback.isPending}
+        onClick={dismiss}
+      >
+        ✕
+      </button>
       {/* Poster + title open the detail sheet; the request button below stays separately clickable. */}
       <button
         type="button"

@@ -14,5 +14,10 @@
   "badge": {
     "swing": "swing",
     "watched": "watched"
+  },
+  "feedback": {
+    "notInterested": "Not interested",
+    "removed": "Removed from your recommendations.",
+    "undo": "Undo"
   }
 }

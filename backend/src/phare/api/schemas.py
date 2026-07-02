@@ -5,6 +5,7 @@ All JSON fields are camelCase on the wire (alias generator), populatable by fiel
 
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -259,6 +260,25 @@ class UndoRequest(ApiModel):
 
 class UndoResponse(ApiModel):
     undone: bool
+
+
+class FeedbackSignal(enum.StrEnum):
+    """A correction a user can send from a recommendation card. One negative member for now — no
+    thumbs-up, to avoid optimising for engagement (review K2) — but shaped to grow."""
+
+    not_interested = "not_interested"
+
+
+class FeedbackRequest(ApiModel):
+    # An unknown signal fails enum validation → 422, as the contract requires.
+    signal: FeedbackSignal
+
+
+class FeedbackResponse(ApiModel):
+    title_id: uuid.UUID
+    signal: FeedbackSignal
+    # Same undo mechanism as the chat writes: POST this token to /chat/undo to reverse the signal.
+    undo_token: str
 
 
 class ChatOpeningResponse(ApiModel):

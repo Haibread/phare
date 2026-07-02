@@ -186,6 +186,15 @@ const undoResultSchema = z.object({ undone: z.boolean() });
 
 const catalogSummarySchema = z.object({ created: z.number() });
 
+/** The only card-feedback signal for now — extensible, but deliberately no thumbs-up (K2). */
+export type FeedbackSignal = "not_interested";
+const feedbackResponseSchema = z.object({
+  titleId: z.string(),
+  signal: z.string(),
+  // Reuse the chat undo mechanism: hand this to `undoChatAction` to reverse the signal.
+  undoToken: z.string(),
+});
+
 export const traktConnectStartSchema = z.object({
   deviceCode: z.string(),
   userCode: z.string(),
@@ -541,6 +550,11 @@ export const api = {
     request(`/profiles/${profileId}/chat/undo`, undoResultSchema, {
       method: "POST",
       body: JSON.stringify({ token }),
+    }),
+  sendTitleFeedback: (profileId: string, titleId: string, signal: FeedbackSignal) =>
+    request(`/profiles/${profileId}/titles/${titleId}/feedback`, feedbackResponseSchema, {
+      method: "POST",
+      body: JSON.stringify({ signal }),
     }),
   searchCatalog: (profileId: string, q: string) =>
     request(
