@@ -54,6 +54,9 @@ class EventType(enum.StrEnum):
     abandoned = "abandoned"
     rewatched = "rewatched"
     watchlisted = "watchlisted"
+    # Rejected from a card without watching ("not interested") — a negative taste signal that also
+    # keeps the title out of future recs. Distinct from `disliked`, which implies it was watched.
+    not_interested = "not_interested"
 
 
 class CommitmentStatus(enum.StrEnum):

@@ -53,6 +53,19 @@ _REWATCH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Movie vs show, FR + EN. Only a constraint when the message clearly leans one way (not both).
+_MOVIE_RE = re.compile(r"\b(movie|movies|film|films)\b", re.IGNORECASE)
+_SHOW_RE = re.compile(r"\b(show|shows|series|serie|séries?|tv)\b", re.IGNORECASE)
+
+
+def _parse_kind(text: str) -> str | None:
+    movie, show = bool(_MOVIE_RE.search(text)), bool(_SHOW_RE.search(text))
+    if movie and not show:
+        return "movie"
+    if show and not movie:
+        return "show"
+    return None  # neither, or both → no constraint
+
 
 def _parse_runtime(text: str) -> int | None:
     if match := _RUNTIME_RE.search(text):
@@ -85,5 +98,6 @@ def keyword_intent(message: str) -> ChatIntent:
         include_genres=include,
         exclude_genres=exclude,
         mood=message.strip() or None,
+        kind=_parse_kind(lowered),
         rewatch=_REWATCH_RE.search(message) is not None,
     )

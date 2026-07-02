@@ -27,7 +27,10 @@ execution → reply`
   action names the resolved title + year so the reply states exactly what was recorded.
   `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
   recommendation log — never from the model's memory — so the reply explains the titles actually
-  shown; it sets no new picks, so the slate isn't re-logged.
+  shown. It emits **no new strip** (they're already on screen from the previous turn — review B2)
+  and feeds the composer the leading picks with their per-item fit reasons, so the answer covers the
+  first few honestly instead of re-posting a wall of posters. It sets no new picks, so nothing's
+  re-logged.
   `recommend` defaults to *new* titles (excludes everything watched); a **rewatch** request ("a
   comfort rewatch", "something I've seen", "watch again") sets `rewatch=true`, which flips the
   candidate source to titles you've already watched and reserves no discovery swing slot. The
@@ -59,10 +62,15 @@ execution → reply`
   so a long chat can't balloon the prompt or the token bill (no extra LLM *calls*, just bounded
   input). **Offline** (no LLM) stays single-message: there's no model to resolve a reference against.
 - **Active filters (refinement)** — the planner also gets the *structured* filters in effect from the
-  previous turn (genres, runtime cap, mood — replayed by the client as `activeIntent`), not just the
+  previous turn (genres, runtime cap, mood, movie/show kind — replayed by the client as
+  `activeIntent`), not just the
   prose. The runtime ceiling lives only in the intent and never reaches the transcript, so without
   this "even shorter" can't tighten below the prior cap — the planner re-emits the full refined
   recommend args, carrying over what still applies and adjusting only what the message changed.
+- **Mood biases retrieval** — an ephemeral mood ("slow-burn", "something cosy") isn't just a label:
+  when a real embedder is configured, the mood text is embedded once and blended (gently) into the
+  taste centroid, so retrieval leans toward it while taste still leads ("LLM steers, embeddings
+  rank" — review A4). Skipped on the offline hash embedder, where the vectors carry no meaning.
 - **Reply** is written by the model (natural language), grounded in what the tools actually did —
   it never invents titles. Falls back to a deterministic template if the model call fails. When a
   turn produces **no picks and no actions** (e.g. an empty candidate pool), the model is skipped
@@ -100,9 +108,10 @@ false "noted!" is worse than an admitted miss (review B3).
 ### Delivery: streaming + persistent history
 
 `POST /chat/stream` runs the same turn as `POST /chat` but returns **Server-Sent Events** so the UI
-never sits on a blank "Thinking…" for the whole turn: a `meta` event carries the picks + undoable
-write-chips as soon as the tools finish, then `delta` events stream the reply text token-by-token,
-then `done`. Writes are committed *before* streaming begins, so the stream itself is read-only;
+never sits on a blank "Thinking…" for the whole turn: an instant **localised** `status` (a keyword
+acknowledgement — "Finding something funny…" / "Je cherche…") while the planner runs, a `meta` event
+carrying the picks + undoable write-chips as soon as the tools finish, another `status` while the
+reply is composed, then `delta` events stream the reply text token-by-token, then `done`. Writes are committed *before* streaming begins, so the stream itself is read-only;
 `POST /chat` stays for non-streaming callers (and is what the tests assert against). Providers that
 implement `stream` are used token-by-token; others fall back to one blocking `complete`, and a
 streaming error degrades to the deterministic template — a flaky composer never leaves an empty

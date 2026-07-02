@@ -244,6 +244,7 @@ describe("Chat write actions", () => {
               explanation: null,
               posterUrl: null,
               components: {},
+              watched: false,
             },
           ],
           actions: [],

@@ -73,6 +73,7 @@ def to_item(rec: Recommendation) -> RecommendationItem:
         explanation=rec.explanation,
         poster_url=_poster_url(rec.poster_path),
         components=rec.components,
+        watched=rec.watched,
     )
 
 
@@ -103,6 +104,7 @@ def get_recommendations(
     return RecommendationsResponse(
         rows=[to_row(row) for row in rows],
         embeddings_degraded=embedder.model_version == LOCAL_MODEL_VERSION,
+        profile_building=recommender.profile_building(profile_id),
     )
 
 

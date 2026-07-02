@@ -19,6 +19,7 @@ from phare.db.base import get_session
 from phare.db.models import Profile, Title
 from phare.embeddings.service import EmbeddingService
 from phare.providers.tmdb import TMDBMetadataProvider
+from phare.recommend.taste_vector import watched_title_ids
 
 router = APIRouter(tags=["Catalog"])
 
@@ -31,7 +32,7 @@ class SearchResponse(ApiModel):
     results: list[RecommendationItem]
 
 
-def _to_search_item(title: Title) -> RecommendationItem:
+def _to_search_item(title: Title, *, watched: bool) -> RecommendationItem:
     return RecommendationItem(
         title_id=title.id,
         title=title.title,
@@ -44,6 +45,7 @@ def _to_search_item(title: Title) -> RecommendationItem:
         explanation=None,
         poster_url=_poster_url(title.poster_path),
         components={},
+        watched=watched,
     )
 
 
@@ -70,7 +72,8 @@ def search_catalog(
     )
     titles = search_titles(session, body.q, tmdb, limit=12)
     session.commit()  # persist any titles upserted from TMDB
-    return SearchResponse(results=[_to_search_item(t) for t in titles])
+    watched = watched_title_ids(session, profile_id)  # badge the ones you've already seen (A11)
+    return SearchResponse(results=[_to_search_item(t, watched=t.id in watched) for t in titles])
 
 
 @router.post("/catalog/sample", response_model=CatalogSummary)

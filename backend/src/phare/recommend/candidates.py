@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select, true
+from sqlalchemy import select, text, true
 from sqlalchemy.orm import Session
 
 from phare.core.fallback import record_fallback
@@ -63,6 +63,12 @@ def generate_candidates(
     distance = TitleEmbedding.embedding.cosine_distance(list(centroid))
     # Over-fetch so the post-filter for hard-avoids can't starve the result below ``limit``.
     pool = limit * 3 + len(hard_avoids) + 10
+    # The re-ranker must be deterministic, but the ``ix_title_embedding_hnsw`` index is an
+    # *approximate* nearest-neighbour structure: at the default ``ef_search`` the same query can
+    # return a slightly different set near the cutoff as the graph changes, flickering the rows a
+    # user sees on reload. Widen the search beam so recall is effectively exact for a self-hosted
+    # catalog (works at N=200, principle 5); ``SET LOCAL`` scopes it to this transaction.
+    session.execute(text("SET LOCAL hnsw.ef_search = 1000"))
     rows = session.execute(
         select(Title, distance.label("distance"))
         .join(TitleEmbedding, TitleEmbedding.title_id == Title.id)
@@ -70,7 +76,9 @@ def generate_candidates(
             TitleEmbedding.model_version == model_version,
             scope,
         )
-        .order_by(distance.asc())
+        # Break exact-distance ties on the stable catalog id (``tmdb_id``, not the per-insert
+        # random UUID) so the ``limit(pool)`` cutoff resolves identically on every run and process.
+        .order_by(distance.asc(), Title.tmdb_id.asc().nulls_last(), Title.id)
         .limit(pool)
     ).all()
 

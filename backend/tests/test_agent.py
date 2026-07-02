@@ -23,6 +23,7 @@ from phare.agent.service import (
     _reply_text,
     _strip_leading_think,
     build_compose_prompt,
+    intent_filter,
 )
 from phare.agent.tools import ExecutionResult
 from phare.catalog.sample import seed_sample_catalog
@@ -30,6 +31,7 @@ from phare.db.models import Profile
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
+from phare.recommend.schema import Candidate, Recommendation
 from phare.recommend.service import RecommendationService
 from phare.recommend.taste_vector import watched_title_ids
 
@@ -187,6 +189,61 @@ def test_keyword_intent_negation_excludes_genre() -> None:
     intent = keyword_intent("a thriller but no horror")
     assert "Thriller" in intent.include_genres
     assert intent.exclude_genres == ["Horror"]
+
+
+def test_composer_prompt_titles_follow_the_displayed_order() -> None:
+    # B1: the composer and the strip are the same ordered list now (score order, since M1.1), so the
+    # reply leads with what's actually on top of the strip — no more "why these?" naming positions
+    # 4-6. Lock that the prompt lists the leading items in payload order.
+    items = [
+        Recommendation(
+            title_id=uuid.uuid4(), title=t, kind="movie", year=2020, genres=["Drama"], score=s
+        )
+        for t, s in [("Alpha", 0.9), ("Beta", 0.8), ("Gamma", 0.7), ("Delta", 0.6)]
+    ]
+    prompt = build_compose_prompt("something good", ExecutionResult(items=items))
+    assert "Alpha, Beta, Gamma, Delta" in prompt  # displayed order, verbatim
+    assert prompt.index("Alpha") < prompt.index("Beta") < prompt.index("Gamma")
+
+
+def test_chat_intent_kind_coercion() -> None:
+    # A5: the planner's `kind` arg is a loose LLM value — synonyms map, unknown never raises.
+    assert ChatIntent(kind="film").kind == "movie"
+    assert ChatIntent(kind="TV series").kind == "show"
+    assert ChatIntent(kind="série").kind == "show"
+    assert ChatIntent(kind=42).kind is None  # garbage → no constraint, no error
+    assert ChatIntent(kind="anything").kind is None
+    assert ChatIntent().kind is None
+
+
+def test_keyword_intent_detects_kind_fr_and_en() -> None:
+    assert keyword_intent("a light movie for tonight").kind == "movie"
+    assert keyword_intent("une série à binge ce soir").kind == "show"
+    assert keyword_intent("something funny").kind is None  # no lean either way
+    assert keyword_intent("movies and shows both fine").kind is None  # both → no constraint
+
+
+def test_intent_filter_hard_filters_by_kind() -> None:
+    # "a movie for tonight" must not return a show (review A5) — a hard filter, no fallback.
+    def _cand(title: str, kind: str) -> Candidate:
+        return Candidate(
+            title_id=uuid.uuid4(),
+            title=title,
+            kind=kind,
+            year=2020,
+            genres=["Drama"],
+            keywords=[],
+            runtime_minutes=100,
+            popularity=None,
+            overview=None,
+            similarity=0.5,
+        )
+
+    pool = [_cand("A Film", "movie"), _cand("A Series", "show")]
+    kept = intent_filter(ChatIntent(kind="movie"))(pool)
+    assert [c.title for c in kept] == ["A Film"]
+    # No constraint → both survive.
+    assert len(intent_filter(ChatIntent())(pool)) == 2
 
 
 def test_strip_leading_think_drops_reasoning_block() -> None:

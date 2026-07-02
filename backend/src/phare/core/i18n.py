@@ -68,9 +68,22 @@ _MESSAGES: dict[str, dict[Language, str]] = {
         "en": " that leans into your taste for {matched}",
         "fr": " qui rejoint votre goût pour {matched}",
     },
-    "explain.becauseProfile": {
+    # "Because you'll like it" tails, varied by a deterministic title hash so a strip of a dozen
+    # doesn't read the same line a dozen times (review B5). The *hedged* set is used when confidence
+    # is mid/low — it must not over-claim a "fits your profile" on a shaky pick.
+    "explain.becauseProfile.0": {
         "en": " that fits your profile",
         "fr": " qui correspond à votre profil",
+    },
+    "explain.becauseProfile.1": {"en": " tuned to your taste", "fr": " taillé pour vos goûts"},
+    "explain.becauseProfile.2": {
+        "en": " in your usual wheelhouse",
+        "fr": " dans vos habitudes",
+    },
+    "explain.becauseHedged.0": {"en": " worth a look", "fr": " qui vaut le coup d'œil"},
+    "explain.becauseHedged.1": {
+        "en": " that might land for you",
+        "fr": " qui pourrait vous plaire",
     },
     "explain.base": {
         # Opens on the (capitalised) genre rather than an article, so it reads right whatever the
@@ -131,6 +144,14 @@ _MESSAGES: dict[str, dict[Language, str]] = {
         "fr": "Voici quelques suggestions {descriptor}{runtime} qui pourraient vous plaire.",
     },
     "chat.runtimeUnder": {"en": " under {minutes} minutes", "fr": " de moins de {minutes} minutes"},
+    # SSE progress labels for the chat stream — shown while the planner runs, then while the reply
+    # is composed, so the screen is never a blank "…" (review B4/F2).
+    "chat.statusFinding": {
+        "en": "Finding something {descriptor}…",
+        "fr": "Je cherche quelque chose {descriptor}…",
+    },
+    "chat.statusWorking": {"en": "Working on it…", "fr": "Je m'en occupe…"},
+    "chat.statusComposing": {"en": "Writing a reply…", "fr": "Je rédige la réponse…"},
     # Dynamic-row fallback theme titles (used offline / when the LLM proposes nothing).
     "theme.februaryRomance": {"en": "February romance", "fr": "Romance de février"},
     "theme.summerBlockbusters": {"en": "Summer blockbusters", "fr": "Blockbusters de l'été"},

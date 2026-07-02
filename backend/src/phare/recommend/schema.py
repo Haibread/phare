@@ -53,6 +53,9 @@ class Recommendation(BaseModel):
     confidence: float | None = None
     explanation: str | None = None
     poster_path: str | None = None
+    # True when the profile has already watched this title — the UI badges it "Watched" so the same
+    # title recurring in search / rewatch rows is honest about what you've seen (review A11).
+    watched: bool = False
     # Internal-only (never mapped to the API DTO): the overview + keywords ground the LLM "why this"
     # prompt so it describes real appeal instead of inventing aligned qualities (review H4). The
     # template explanation never touches the overview, so it still can't leak plot.

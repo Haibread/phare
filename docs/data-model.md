@@ -33,9 +33,16 @@ similarity search.
 ## Normalized event stream (the heart)
 
 Every source normalizes into one per-profile event shape:
-`type ∈ {watched, rated, liked, disliked, abandoned, rewatched, watchlisted}`, canonical
-title (+ season/episode for TV), rating normalized to 0–10, optional **free-text** (the LLM
-reads it), `occurred_at` (drives recency decay), `source` provenance, and an `excluded` flag.
+`type ∈ {watched, rated, liked, disliked, abandoned, rewatched, watchlisted, not_interested}`,
+canonical title (+ season/episode for TV), rating normalized to 0–10, optional **free-text** (the
+LLM reads it), `occurred_at` (drives recency decay), `source` provenance, and an `excluded` flag.
+
+`not_interested` is the one type a user emits **directly from a recommendation card** ("not
+interested", review K2) — a negative taste contribution (weight −1.0) that, being an event on the
+title, also drops it from future candidate generation. It's distinct from `disliked`, which implies
+the title was actually watched. The write reuses the chat agent's undo mechanism: the endpoint
+returns an `event:<id>` token the client hands to `/chat/undo` to reverse it. No positive card
+signal exists — deliberately, to avoid optimizing for engagement.
 
 **Dedup / conflict:** the same logical event from two sources (watched on Plex *and* synced to
 Trakt) collapses to one; keep all provenances. On rating conflict, pick a deterministic winner

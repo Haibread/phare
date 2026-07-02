@@ -5,6 +5,7 @@
   "todaysPicks": "Les choix du jour",
   "basicPicks": "basique",
   "offlineBanner": "Mode hors-ligne : recommandations approximatives — ajoutez une clé d'embedding pour la qualité réelle.",
+  "buildingProfile": "Analyse de votre historique en cours — vos rangées personnalisées arrivent. En attendant, voici les titres populaires.",
   "hero": {
     "topPick": "Le choix de la soirée"
   }

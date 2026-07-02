@@ -87,6 +87,7 @@ export const recommendationItemSchema = z.object({
   explanation: z.string().nullable(),
   posterUrl: z.string().nullable(),
   components: z.record(z.number()),
+  watched: z.boolean(),
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 
@@ -119,6 +120,9 @@ const recommendationsResponseSchema = z.object({
   // True when retrieval runs on the local hash embedder (no embedding key): similarity is not
   // semantically meaningful, so the UI shows an honest banner and caps the fit label.
   embeddingsDegraded: z.boolean().default(false),
+  // True when the profile has history but its taste centroid isn't ready yet (titles still
+  // embedding) — the UI shows a "building your profile" note instead of a bare page.
+  profileBuilding: z.boolean().default(false),
 });
 
 const chatIntentSchema = z.object({
@@ -181,6 +185,15 @@ const chatOpeningSchema = z.object({ greeting: z.string().nullable() });
 const undoResultSchema = z.object({ undone: z.boolean() });
 
 const catalogSummarySchema = z.object({ created: z.number() });
+
+/** The only card-feedback signal for now — extensible, but deliberately no thumbs-up (K2). */
+export type FeedbackSignal = "not_interested";
+const feedbackResponseSchema = z.object({
+  titleId: z.string(),
+  signal: z.string(),
+  // Reuse the chat undo mechanism: hand this to `undoChatAction` to reverse the signal.
+  undoToken: z.string(),
+});
 
 export const traktConnectStartSchema = z.object({
   deviceCode: z.string(),
@@ -537,6 +550,11 @@ export const api = {
     request(`/profiles/${profileId}/chat/undo`, undoResultSchema, {
       method: "POST",
       body: JSON.stringify({ token }),
+    }),
+  sendTitleFeedback: (profileId: string, titleId: string, signal: FeedbackSignal) =>
+    request(`/profiles/${profileId}/titles/${titleId}/feedback`, feedbackResponseSchema, {
+      method: "POST",
+      body: JSON.stringify({ signal }),
     }),
   searchCatalog: (profileId: string, q: string) =>
     request(

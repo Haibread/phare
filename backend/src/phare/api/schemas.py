@@ -5,6 +5,7 @@ All JSON fields are camelCase on the wire (alias generator), populatable by fiel
 
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -130,6 +131,7 @@ class RecommendationItem(ApiModel):
     explanation: str | None = None
     poster_url: str | None = None
     components: dict[str, float]
+    watched: bool = False  # the profile has already seen this — the card shows a "Watched" badge
 
 
 class TitleDetail(ApiModel):
@@ -163,6 +165,9 @@ class RecommendationsResponse(ApiModel):
     # not semantically meaningful, so the client shows an honest banner and caps the fit label
     # (review M2). False whenever a real embedding provider is configured.
     embeddings_degraded: bool = False
+    # True when the profile has history but its taste centroid isn't ready yet (titles still
+    # embedding) — the client shows a "building your profile" state instead of a bare page (A12).
+    profile_building: bool = False
 
 
 class RecommendationLogItem(ApiModel):
@@ -255,6 +260,25 @@ class UndoRequest(ApiModel):
 
 class UndoResponse(ApiModel):
     undone: bool
+
+
+class FeedbackSignal(enum.StrEnum):
+    """A correction a user can send from a recommendation card. One negative member for now — no
+    thumbs-up, to avoid optimising for engagement (review K2) — but shaped to grow."""
+
+    not_interested = "not_interested"
+
+
+class FeedbackRequest(ApiModel):
+    # An unknown signal fails enum validation → 422, as the contract requires.
+    signal: FeedbackSignal
+
+
+class FeedbackResponse(ApiModel):
+    title_id: uuid.UUID
+    signal: FeedbackSignal
+    # Same undo mechanism as the chat writes: POST this token to /chat/undo to reverse the signal.
+    undo_token: str
 
 
 class ChatOpeningResponse(ApiModel):

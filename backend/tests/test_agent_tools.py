@@ -483,6 +483,45 @@ def test_explain_picks_with_no_prior_slate_notes_it(db_session: Session) -> None
     assert any("no earlier picks" in note for note in result.notes)
 
 
+def test_why_these_emits_no_new_strip_but_explains_the_picks(db_session: Session) -> None:
+    # B2: "why these?" re-emitted the whole strip (24 posters) and under-explained. Now the turn
+    # shows NO new strip, and the composer gets the leading picks + their reasons to explain.
+    from phare.recommend.log import log_chat
+    from phare.recommend.schema import Recommendation
+
+    profile_id = _seed(db_session)
+    titles = db_session.scalars(select(Title).order_by(Title.title)).all()[:3]
+    log_chat(
+        db_session,
+        profile_id,
+        [
+            Recommendation(
+                title_id=t.id,
+                title=t.title,
+                kind=t.kind.value,
+                year=2020,
+                genres=["Drama"],
+                score=1.0,
+            )
+            for t in titles
+        ],
+    )
+    workhorse = FakeLLMProvider(completion='{"calls":[{"tool":"explain_picks","args":{}}]}')
+    agent = FakeLLMProvider(completion="Because they match your taste.")
+    recommender = RecommendationService(
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        embed_model_version=LOCAL_MODEL_VERSION,
+        chat_llm=workhorse,
+    )
+    prepared = ChatService(recommender, agent).prepare(profile_id, "why these?", now=_NOW)
+
+    assert prepared.items == []  # no new strip re-emitted
+    assert prepared.compose_prompt is not None
+    assert titles[0].title in prepared.compose_prompt  # picks reach the composer to be explained
+    assert "first THREE" in prepared.compose_prompt  # told to cover the leading picks
+
+
 def test_recommend_coerces_a_bare_string_genre_arg(db_session: Session) -> None:
     # A model that returns include_genres as the bare string "comedy" (not ["comedy"]) must not
     # iterate it into ['c','o','m','e','d','y'] — that silently disabled the genre filter.

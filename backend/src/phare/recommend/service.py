@@ -8,16 +8,20 @@ and the chat agent — the chat agent just passes an extra candidate filter for 
 from __future__ import annotations
 
 import logging
+import math
 import uuid
+from collections import Counter
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
-from phare.db.models import TasteProfile, Title, TitleEmbedding
+from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.service import EmbeddingService
+from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider, MetadataProvider
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
@@ -31,6 +35,47 @@ from phare.taste.service import effective_profile
 logger = logging.getLogger(__name__)
 
 CandidateFilter = Callable[[list[Candidate]], list[Candidate]]
+
+# Page hygiene (review A7/A10). A title may appear at most twice across the whole page, applied in
+# row-priority order so the strongest rows keep it. And a "because you watched X" row thinner than
+# the floor (a single odd neighbour) reads as broken, so it's hidden — the floor targets those
+# auxiliary rows, never you_might_like / popular / user-state rows, which are the page's backbone.
+_APPEARANCE_BUDGET = 2
+MIN_ROW_ITEMS = 3
+_BECAUSE_PREFIX = "because:"
+
+
+def _apply_appearance_budget(rows: list[Row], budget: int) -> list[Row]:
+    """Cap each title to ``budget`` appearances across the page, keeping it in the earliest (highest
+    priority) rows and dropping the later repeats."""
+    counts: Counter[uuid.UUID] = Counter()
+    out: list[Row] = []
+    for row in rows:
+        kept = []
+        for item in row.items:
+            if counts[item.title_id] < budget:
+                kept.append(item)
+                counts[item.title_id] += 1
+        out.append(row.model_copy(update={"items": kept}))
+    return out
+
+
+# How far a chat mood pulls the taste centroid toward the mood text's embedding (0 = ignore mood,
+# 1 = ignore taste). A gentle nudge: taste still leads, the mood colours it (review A4).
+_MOOD_WEIGHT = 0.3
+
+
+def _unit(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(x * x for x in vector)) or 1.0
+    return [x / norm for x in vector]
+
+
+def _blend_direction(a: list[float], b: list[float], weight: float) -> list[float]:
+    """Blend two vectors' *directions* — magnitude-agnostic, since candidate ranking is by cosine.
+    Result points ``(1-weight)`` toward ``a`` and ``weight`` toward ``b``."""
+    ua, ub = _unit(a), _unit(b)
+    return [(1.0 - weight) * x + weight * y for x, y in zip(ua, ub, strict=True)]
+
 
 # Read-path embedding cap. The authoritative embed path is POST /catalog/embed (unbounded); the
 # lazy read-path top-up must stay bounded so a fresh import can't make the first request embed the
@@ -133,6 +178,37 @@ class RecommendationService:
             for c in candidates
         ]
 
+    def _bias_toward_mood(self, centroid: list[float], mood: str) -> list[float]:
+        """Nudge the taste centroid toward a chat mood by blending in the mood text's embedding
+        direction — the cheap "LLM steers, embeddings rank" hook for an ephemeral mood (review A4).
+        One embedding call, no extra completion. Skipped on the local hash embedder (its vectors
+        carry no meaning, so the blend would only add noise) and if the embed call fails.
+        """
+        if self.embed_model_version == LOCAL_MODEL_VERSION:
+            return centroid
+        try:
+            mood_vec = self.embed_provider.embed([mood])[0]
+        except Exception:  # noqa: BLE001 - a mood-embed hiccup must not sink the recommend turn
+            record_fallback("mood_bias", "embed_error")
+            return centroid
+        return _blend_direction(centroid, [float(x) for x in mood_vec], _MOOD_WEIGHT)
+
+    def profile_building(self, profile_id: uuid.UUID) -> bool:
+        """True when the profile has watch history but no taste centroid yet — its titles aren't
+        embedded, so the personalised rows are empty right after connecting a source. The UI shows a
+        "building your profile" state (with the popular row as a stopgap) instead of a bare page at
+        the most critical moment (review A12). Call after ``rows()`` so the lazy top-up has run."""
+        if self._centroid(profile_id) is not None:
+            return False
+        return (
+            self.session.scalar(
+                select(WatchEvent.id)
+                .where(WatchEvent.profile_id == profile_id, WatchEvent.excluded.is_(False))
+                .limit(1)
+            )
+            is not None
+        )
+
     def _centroid(self, profile_id: uuid.UUID) -> list[float] | None:
         """Memoized taste centroid for this request."""
         if profile_id not in self._centroid_cache:
@@ -177,6 +253,7 @@ class RecommendationService:
         explain_with_llm: bool = True,
         explainer: Explainer | None = None,
         runtime_source: MetadataProvider | None = None,
+        mood: str | None = None,
     ) -> list[Recommendation]:
         """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain.
 
@@ -191,6 +268,8 @@ class RecommendationService:
         centroid = self._centroid(profile_id)
         if centroid is None:
             return []
+        if mood:
+            centroid = self._bias_toward_mood(centroid, mood)
 
         avoids = [*(taste.get("hard_avoids") or []), *extra_hard_avoids]
         k = k if k is not None else self.row_size
@@ -294,21 +373,35 @@ class RecommendationService:
         you_might_like = self._dedup_against(
             self.you_might_like(profile_id, explainer=explainer), seen
         )
+        continue_watching = row_builders.continue_watching_row(
+            self.session, profile_id, limit=self.row_size, language=self.language
+        )
         candidate_rows = [
             # Most-personalized first — these render right under the hero top pick.
             *because,
-            row_builders.continue_watching_row(
-                self.session, profile_id, limit=self.row_size, language=self.language
-            ),
+            continue_watching,
             you_might_like,
+            # A show you're partway through belongs in continue_watching, not both (review A11).
             row_builders.watch_again_row(
-                self.session, profile_id, limit=self.row_size, language=self.language
+                self.session,
+                profile_id,
+                limit=self.row_size,
+                language=self.language,
+                exclude_ids=[item.title_id for item in continue_watching.items],
             ),
             row_builders.popular_row(
                 self.session, profile_id, limit=self.row_size, language=self.language
             ),
         ]
-        result = [row for row in candidate_rows if row.items]
+        # Cap cross-row repeats (The Wire in hero + you_might_like + popular + theme — review A7),
+        # then drop any "because you watched X" row left too thin to look intentional (A7/A10).
+        budgeted = _apply_appearance_budget(candidate_rows, _APPEARANCE_BUDGET)
+        result = [
+            row
+            for row in budgeted
+            if row.items
+            and not (row.key.startswith(_BECAUSE_PREFIX) and len(row.items) < MIN_ROW_ITEMS)
+        ]
         log_rows(self.session, profile_id, result)
         logger.info(
             "recommend.rows",

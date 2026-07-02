@@ -35,7 +35,7 @@ from phare.api.schemas import (
     UndoResponse,
 )
 from phare.core.auth import get_current_user
-from phare.core.i18n import Language
+from phare.core.i18n import Language, translate
 from phare.db.base import get_session
 from phare.db.models import Title, User
 from phare.providers.types import LLMProvider
@@ -103,15 +103,20 @@ def _sse(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _planning_label(message: str) -> str:
+def _planning_label(message: str, language: Language) -> str:
     """A friendly, instant acknowledgement of the request — a keyword parse (no LLM), so it can be
-    shown the moment the connection opens, while the planner model is still thinking."""
+    shown the moment the connection opens, while the planner model is still thinking. Localised."""
     intent = keyword_intent(message)
-    descriptor = ", ".join(intent.include_genres).lower()
-    runtime = f" under {intent.max_runtime} min" if intent.max_runtime else ""
-    if descriptor or runtime:
-        return f"Finding something {descriptor}{runtime}…".replace(" …", "…")
-    return "Working on it…"
+    bits = ", ".join(intent.include_genres).lower()
+    runtime = (
+        translate(language, "chat.runtimeUnder", minutes=intent.max_runtime)
+        if intent.max_runtime
+        else ""
+    )
+    descriptor = f"{bits}{runtime}".strip()
+    if descriptor:
+        return translate(language, "chat.statusFinding", descriptor=descriptor)
+    return translate(language, "chat.statusWorking")
 
 
 def _meta_payload(prepared: PreparedTurn) -> dict[str, object]:
@@ -158,7 +163,9 @@ def chat_stream(
 
     def events() -> Iterator[str]:
         # Instant: echo the request so the screen isn't blank during the planner call.
-        yield _sse("status", {"stage": "planning", "label": _planning_label(body.message)})
+        yield _sse(
+            "status", {"stage": "planning", "label": _planning_label(body.message, language)}
+        )
         try:
             prepared = service.prepare(
                 profile_id, body.message, history=history, active_intent=active_intent
@@ -170,7 +177,10 @@ def chat_stream(
             yield _sse("done", {})
             return
         yield _sse("meta", _meta_payload(prepared))  # picks + write-chips, the moment they exist
-        yield _sse("status", {"stage": "composing", "label": "Writing a reply…"})
+        yield _sse(
+            "status",
+            {"stage": "composing", "label": translate(language, "chat.statusComposing")},
+        )
         for chunk in stream_compose(prepared, agent_llm):
             yield _sse("delta", {"text": chunk})
         yield _sse("done", {})

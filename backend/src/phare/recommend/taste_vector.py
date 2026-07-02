@@ -29,6 +29,7 @@ _EVENT_WEIGHT: dict[EventType, float] = {
     EventType.watchlisted: 0.3,
     EventType.disliked: -1.0,
     EventType.abandoned: -1.2,
+    EventType.not_interested: -1.0,
 }
 
 # Recency is a *gentle tilt*, not a cliff. The centroid is STABLE taste — who you are — so a film

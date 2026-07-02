@@ -298,7 +298,20 @@ def test_chat_stream_offline_emits_meta_then_reply(db_session: Session) -> None:
     assert reply  # a (deterministic) reply was streamed
 
 
-def test_chat_stream_with_llm_streams_chunks(db_session: Session) -> None:
+def test_chat_stream_status_labels_are_localised(db_session: Session) -> None:
+    # F2: the SSE progress labels were hardcoded English even in a French UI. Now they translate.
+    user = make_account(db_session, email="statuslabel@example.test")
+    client = _client(db_session, user)
+    profile_id = _profile_with_data(client, user)
+
+    response = client.post(
+        f"/profiles/{profile_id}/chat/stream",
+        json={"message": "something funny"},
+        headers={"Accept-Language": "fr"},
+    )
+    statuses = [e["data"]["label"] for e in _sse_events(response.text) if e["event"] == "status"]
+    assert any("Je cherche" in s for s in statuses)  # planning label, in French
+    assert any("Je rédige" in s for s in statuses)  # composing label, in French
     user = make_account(db_session)
     overrides = {
         get_embedder: lambda: Embedder(

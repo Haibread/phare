@@ -12,6 +12,13 @@
     "request": "Demander"
   },
   "badge": {
-    "swing": "audace"
+    "swing": "audace",
+    "swingHelp": "Un choix hors de vos habitudes, glissé exprès pour la découverte.",
+    "watched": "vu"
+  },
+  "feedback": {
+    "notInterested": "Pas intéressé",
+    "removed": "Retiré de vos recommandations.",
+    "undo": "Annuler"
   }
 }

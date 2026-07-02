@@ -359,3 +359,98 @@ def test_home_rows_latency_is_bounded_by_budget(
 
     assert len(llm.prompts) <= 3
     assert elapsed < 0.5  # ~3 * 10ms of LLM time + DB work — not item-count * 10ms
+
+
+def test_mood_biases_the_embedding_query(db_session: Session) -> None:
+    # A4: an ephemeral chat mood must actually reach retrieval. It's embedded and blended into the
+    # taste centroid (one embed call, no completion) — so the mood text shows up as an embed input.
+    profile_id = _seeded_profile(db_session)
+    fake = FakeLLMProvider()
+    service = RecommendationService(
+        db_session, embed_provider=fake, embed_model_version="test-embed-v1", chat_llm=None
+    )
+    service.ensure_embeddings()  # embed the catalog under the (non-local) test version
+
+    base = len(fake.embed_inputs)
+    service.recommend(profile_id, mood="slow-burn atmospheric sci-fi", vote_mix=True)
+    embedded = [text for call in fake.embed_inputs[base:] for text in call]
+    assert "slow-burn atmospheric sci-fi" in embedded  # the mood reached the embedding query
+
+    base2 = len(fake.embed_inputs)
+    service.recommend(profile_id, vote_mix=True)  # same turn, no mood
+    embedded2 = [text for call in fake.embed_inputs[base2:] for text in call]
+    assert "slow-burn atmospheric sci-fi" not in embedded2  # unchanged without a mood
+
+
+def test_mood_is_ignored_on_the_local_hash_embedder(db_session: Session) -> None:
+    # Offline (local hash) vectors carry no meaning, so blending a mood would only add noise — skip
+    # it. (Fake embedder pinned to the local version so we can inspect its inputs.)
+    profile_id = _seeded_profile(db_session)
+    fake = FakeLLMProvider()
+    service = RecommendationService(
+        db_session, embed_provider=fake, embed_model_version=LOCAL_MODEL_VERSION, chat_llm=None
+    )
+    service.ensure_embeddings()
+    base = len(fake.embed_inputs)
+    service.recommend(profile_id, mood="something cosy", vote_mix=True)
+    embedded = [text for call in fake.embed_inputs[base:] for text in call]
+    assert "something cosy" not in embedded  # guarded off on the local-hash version
+
+
+def test_appearance_budget_caps_a_title_at_two_per_page() -> None:
+    # A7: the same title across three rows is kept in the first two (priority order), dropped from
+    # the third.
+    from phare.recommend.schema import Recommendation, Row
+    from phare.recommend.service import _apply_appearance_budget
+
+    tid = uuid.uuid4()
+
+    def _row(key: str) -> Row:
+        item = Recommendation(
+            title_id=tid, title="X", kind="movie", year=2020, genres=[], score=1.0
+        )
+        return Row(key=key, title=key, items=[item])
+
+    out = _apply_appearance_budget([_row("a"), _row("b"), _row("c")], 2)
+    assert [len(r.items) for r in out] == [1, 1, 0]
+
+
+def test_page_rows_respect_budget_and_min_size(db_session: Session) -> None:
+    # A7: no title appears more than twice across the page. A10: any surviving "because you watched"
+    # row has at least the floor of items (a 1-item because-row looks broken).
+    from collections import Counter
+
+    profile_id = _seeded_profile(db_session)
+    service = _service(db_session)
+    service.ensure_embeddings()
+    rows = service.rows(profile_id)
+
+    counts = Counter(item.title_id for row in rows for item in row.items)
+    assert counts and all(c <= 2 for c in counts.values())
+    for row in rows:
+        if row.key.startswith("because:"):
+            assert len(row.items) >= 3
+
+
+def test_continue_watching_and_watch_again_are_mutually_exclusive(db_session: Session) -> None:
+    # A11: a show you're partway through belongs in continue_watching, not also in watch_again — the
+    # same series in both rows is a visible contradiction. And both rows' items are flagged watched.
+    profile_id = _seeded_profile(db_session)
+    by_key = {row.key: row for row in _service(db_session).rows(profile_id)}
+
+    cont = by_key["continue_watching"]
+    again = by_key["watch_again"]
+    cont_ids = {i.title_id for i in cont.items}
+    again_ids = {i.title_id for i in again.items}
+    assert cont_ids and again_ids  # both rows present in the sample
+    assert not (cont_ids & again_ids)  # no title in both
+    assert all(i.watched for i in cont.items) and all(i.watched for i in again.items)
+
+
+def test_profile_building_flag_reflects_centroid_readiness(db_session: Session) -> None:
+    # A12: a profile with history but no embeddings yet has no centroid, so personalised rows are
+    # empty — flag it "building" (the UI shows a state + popular fallback) rather than a bare page.
+    profile_id = _seeded_profile(db_session)  # has watch history, nothing embedded yet
+    assert _service(db_session).profile_building(profile_id) is True
+    _service(db_session).ensure_embeddings()  # embed the catalog incl. watched titles
+    assert _service(db_session).profile_building(profile_id) is False  # centroid ready now

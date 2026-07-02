@@ -14,6 +14,7 @@ from phare.api import (
     auth,
     catalog,
     chat,
+    feedback,
     health,
     history,
     memory,
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(recommend.router, dependencies=guarded)
     app.include_router(titles.router, dependencies=guarded)
     app.include_router(chat.router, dependencies=guarded)
+    app.include_router(feedback.router, dependencies=guarded)
     app.include_router(actions.router, dependencies=guarded)
     app.include_router(memory.router, dependencies=guarded)
 

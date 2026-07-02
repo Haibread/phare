@@ -12,6 +12,13 @@
     "request": "Request"
   },
   "badge": {
-    "swing": "swing"
+    "swing": "swing",
+    "swingHelp": "A pick outside your usual habits, slipped in on purpose for discovery.",
+    "watched": "watched"
+  },
+  "feedback": {
+    "notInterested": "Not interested",
+    "removed": "Removed from your recommendations.",
+    "undo": "Undo"
   }
 }

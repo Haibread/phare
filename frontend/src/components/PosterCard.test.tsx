@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type RenderResult, fireEvent, render, screen } from "@testing-library/react";
+import { type RenderResult, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RecommendationItem, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
+import enTitle from "../locales/en/title.json";
+import frTitle from "../locales/fr/title.json";
 import { PosterCard } from "./PosterCard";
 import { RecRow } from "./RecRow";
 
@@ -29,6 +31,7 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
     explanation: "A cerebral sci-fi that fits your taste.",
     posterUrl: null,
     components: { score: 0.9 },
+    watched: false,
     ...overrides,
   };
 }
@@ -45,6 +48,32 @@ describe("PosterCard", () => {
     renderCard(<PosterCard item={recItem({ isSwing: true })} />);
     expect(screen.getByTestId("swing-badge")).toBeInTheDocument();
     expect(screen.getByText("A stretch")).toBeInTheDocument();
+  });
+
+  it("explains the swing badge via a tooltip and aria-describedby (K3)", () => {
+    renderCard(<PosterCard item={recItem({ isSwing: true })} />);
+    const badge = screen.getByTestId("swing-badge");
+    // Hover tooltip is present...
+    expect(badge).toHaveAttribute("title", enTitle.badge.swingHelp);
+    // ...and the badge is described (for assistive tech) by an element carrying the same text.
+    const describedBy = badge.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const help = document.getElementById(describedBy as string);
+    expect(help).toHaveTextContent(enTitle.badge.swingHelp);
+  });
+
+  it("carries the swing explanation in both locales (K3)", () => {
+    // FR must not be forgotten — the wire text is localized, not hard-coded.
+    expect(enTitle.badge.swingHelp.length).toBeGreaterThan(0);
+    expect(frTitle.badge.swingHelp.length).toBeGreaterThan(0);
+    expect(frTitle.badge.swingHelp).not.toBe(enTitle.badge.swingHelp);
+  });
+
+  it("badges a title the profile has already watched (A11)", () => {
+    renderCard(<PosterCard item={recItem({ watched: true })} />);
+    expect(screen.getByTestId("watched-badge")).toBeInTheDocument();
+    renderCard(<PosterCard item={recItem({ watched: false })} />);
+    expect(screen.getAllByTestId("watched-badge")).toHaveLength(1); // only the first card
   });
 
   it("renders real poster art when a posterUrl is present", () => {
@@ -133,6 +162,37 @@ describe("RecRow", () => {
     it("passes no anchor for a non-because row", () => {
       const spy = openFirstCardOf("you_might_like");
       expect(spy.mock.calls[0][4]).toBeNull();
+    });
+  });
+
+  describe("not interested (K2)", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("sends the signal, removes the card, and restores it on undo", async () => {
+      const item = recItem({ title: "Arrival" });
+      const send = vi.spyOn(api, "sendTitleFeedback").mockResolvedValue({
+        titleId: item.titleId,
+        signal: "not_interested",
+        undoToken: "event:e1",
+      });
+      const undo = vi.spyOn(api, "undoChatAction").mockResolvedValue({ undone: true });
+
+      renderCard(<PosterCard item={item} />);
+
+      // The affordance carries an accessible label and is discreet (a button, not text).
+      fireEvent.click(screen.getByTestId("not-interested"));
+      // The card leaves its slot for an undo placeholder, and the signal is sent.
+      expect(screen.getByTestId("rec-card-removed")).toBeInTheDocument();
+      await waitFor(() => expect(send).toHaveBeenCalledWith("p1", item.titleId, "not_interested"));
+
+      // Undo is enabled once the write returns its token, then reverses via the chat mechanism.
+      const undoBtn = screen.getByTestId("undo-not-interested");
+      await waitFor(() => expect(undoBtn).not.toBeDisabled());
+      fireEvent.click(undoBtn);
+      await waitFor(() => expect(undo).toHaveBeenCalledWith("p1", "event:e1"));
+      // The full card returns.
+      expect(await screen.findByTestId("not-interested")).toBeInTheDocument();
+      expect(screen.queryByTestId("rec-card-removed")).toBeNull();
     });
   });
 });

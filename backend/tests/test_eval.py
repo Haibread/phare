@@ -16,6 +16,7 @@ from phare.eval.harness import evaluate_all, evaluate_persona
 from phare.eval.personas import PERSONAS, Persona
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
+from phare.recommend import genres as genre_match
 from phare.recommend.service import RecommendationService
 
 # --- pure metrics -----------------------------------------------------------
@@ -136,7 +137,10 @@ def test_genre_filter_uses_a_free_key_not_exact_match(db_session: Session) -> No
         vote_mix=True,
     )
     assert recs, "expected a non-empty slate"
-    assert all("Science Fiction" in r.genres for r in recs)
+    # The invariant is that every returned title matches the requested "sci-fi" key — which now
+    # covers TV's "Sci-Fi & Fantasy" as well as film's "Science Fiction". Under the old exact-match
+    # code the filter was a no-op and the slate mixed in non-sci-fi titles.
+    assert all(genre_match.matches_any(["sci-fi"], r.genres) for r in recs)
 
 
 def test_affinity_operant_via_free_key_in_the_engine(db_session: Session) -> None:
@@ -162,7 +166,7 @@ def test_chat_planner_free_genre_is_actually_applied(db_session: Session) -> Non
     )
     reply = ChatService(service, chat_llm=planner_llm).respond(profile_id, "a slow-burn sci-fi")
     assert reply.items, "expected a non-empty chat slate"
-    assert all("Science Fiction" in item.genres for item in reply.items)
+    assert all(genre_match.matches_any(["sci-fi"], item.genres) for item in reply.items)
     scores = [item.score for item in reply.items]
     assert scores == sorted(scores, reverse=True)
 
