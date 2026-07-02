@@ -43,6 +43,12 @@ _SIM_REL_SPREAD = 4.0
 # Confidence floor factor: a lightly-evidenced taste profile can't yield a blanket "strong fit".
 # With taste confidence c, output confidence is capped at _CONF_FLOOR + (1 - _CONF_FLOOR) * c.
 _CONF_FLOOR = 0.35
+# A title with fewer than this many TMDB votes has no real quality signal yet (a just-released
+# autoseed), so its displayed confidence is capped below the top buckets — it can be recommended as
+# a discovery pick, never as a sure thing (review A9). Read at ranking time so a title that accrues
+# votes graduates on its own. None (unknown) is *not* treated as unproven — only a known-low count.
+_MIN_PROVEN_VOTES = 200
+_UNPROVEN_CONF_CAP = 0.5
 
 # Chat slate composition by vote count (how well-known a title is — TMDB rating count). This is a
 # deliberate *mix*, not a popularity ranking: ~half well-known, ~a third lesser-known, ~15% low-vote
@@ -207,7 +213,12 @@ def _select_diverse(
 
 
 def _confidence(
-    taste: Mapping[str, Any], *, is_swing: bool, sim_rel: float, affinity_norm: float
+    taste: Mapping[str, Any],
+    *,
+    is_swing: bool,
+    sim_rel: float,
+    affinity_norm: float,
+    unproven: bool = False,
 ) -> float:
     """Honest confidence, blending the signals we actually have:
 
@@ -220,7 +231,9 @@ def _confidence(
     - **taste confidence** — how much history backs the profile at all.
 
     A thin taste profile also *caps* the result: a barely-evidenced profile can't emit a blanket
-    "strong fit" (A8). Swings hedge low regardless — a reserved discovery pick is a deliberate bet.
+    "strong fit" (A8). An ``unproven`` title (barely any votes — a just-dropped release) is likewise
+    capped: recommending an unwatched-by-anyone title *with confidence* contradicts the whole point
+    of the meter (review A9). Swings hedge low regardless — a reserved discovery pick is a bet.
     """
     signals = [sim_rel]
     if taste.get("affinities"):
@@ -231,6 +244,8 @@ def _confidence(
     base = sum(signals) / len(signals)
     if taste_conf is not None:  # a lightly-evidenced profile can't claim high confidence
         base = min(base, _CONF_FLOOR + (1.0 - _CONF_FLOOR) * float(taste_conf))
+    if unproven:  # no quality signal yet — can't be a confident pick
+        base = min(base, _UNPROVEN_CONF_CAP)
     if is_swing:
         base *= 0.5
     return round(max(0.0, min(1.0, base)), 3)
@@ -306,6 +321,7 @@ def _to_rec(
             is_swing=is_swing,
             sim_rel=components["similarity_rel"],
             affinity_norm=components["affinity"],
+            unproven=candidate.vote_count is not None and candidate.vote_count < _MIN_PROVEN_VOTES,
         ),
         poster_path=candidate.poster_path,
         overview=candidate.overview,

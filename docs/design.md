@@ -43,7 +43,10 @@ chip (never a number — see *honesty over engagement*). Only `you_might_like` d
 taste-vector match — and from the pick's **pool-relative** similarity (where it sits among that
 query's candidates), not the raw cosine, which is compressed near the top and would read "strong
 fit" for everything (review H2/A8). A lightly-evidenced taste profile also *caps* the chip, so a
-thin history can't produce a blanket "strong fit". The heuristic rows expose an honest signal of
+thin history can't produce a blanket "strong fit"; and a title with almost no votes (a just-dropped
+release, no quality signal yet) is capped too, so it can surface as a discovery pick but never as a
+sure thing (review A9) — it graduates on its own as it accrues votes. The heuristic rows expose an
+honest signal of
 their *own* kind, not a fake taste score:
 
 - `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally

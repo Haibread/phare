@@ -245,3 +245,23 @@ def test_vote_mix_backfills_when_a_tier_is_empty() -> None:
     cands = [_cand(title=f"low{i}", sim=0.5, vote_count=20 + i) for i in range(6)]
     out = rerank(cands, {}, k=5, vote_mix=True)
     assert len(out) == 5
+
+
+def test_unproven_low_vote_title_confidence_is_capped() -> None:
+    # A9: a just-released title with almost no votes can't read as a confident pick, even top-of-
+    # pool and on-genre — recommending an unwatched-by-anyone title with confidence is dishonest.
+    taste: dict[str, Any] = {"affinities": {"Drama": 1.0}, "confidence": 0.9}
+    fresh = _cand(title="Fresh 2026", sim=0.9, genres=["Drama"], vote_count=30)
+    proven = _cand(title="Classic", sim=0.9, genres=["Drama"], vote_count=8000)
+    recs = {r.title: r for r in rerank([fresh, proven], taste, k=2, swing_slots=0)}
+    assert (recs["Fresh 2026"].confidence or 0) <= 0.5
+    assert (recs["Classic"].confidence or 0) > (recs["Fresh 2026"].confidence or 0)
+
+
+def test_unknown_vote_count_is_not_treated_as_unproven() -> None:
+    # None votes = unknown, not low — don't penalise a title we simply haven't refreshed yet.
+    taste: dict[str, Any] = {"affinities": {"Drama": 1.0}, "confidence": 0.9}
+    known = _cand(title="Known", sim=0.9, genres=["Drama"], vote_count=8000)
+    unknown = _cand(title="Unknown", sim=0.9, genres=["Drama"], vote_count=None)
+    recs = {r.title: r for r in rerank([known, unknown], taste, k=2, swing_slots=0)}
+    assert recs["Unknown"].confidence == recs["Known"].confidence  # not force-capped
