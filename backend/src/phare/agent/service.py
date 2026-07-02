@@ -363,11 +363,11 @@ def _compose_reply_template(result: ExecutionResult, language: Language = DEFAUL
     if result.actions:
         actions = "; ".join(a.summary for a in result.actions)
         bits.append(translate(language, "chat.gotIt", actions=actions))
-    for note in result.notes:
+    for note in (*result.notes, *result.failed_calls):
         bits.append(note[:1].upper() + note[1:] + ".")
     if result.items:
         bits.append(translate(language, "chat.herePicks"))
-    elif not result.actions and not result.notes:
+    elif not result.actions and not result.notes and not result.failed_calls:
         bits.append(translate(language, "chat.noMatch"))
     return " ".join(bits) if bits else translate(language, "chat.done")
 
@@ -381,7 +381,8 @@ with movies, TV, and the user's taste / watch history — nothing else.
 
 Write a natural reply (1-3 sentences) to the user's message, reflecting what just happened:
 - Actions taken on their behalf (confirm them naturally, don't list robotically): {actions}
-- Things that didn't work (mention briefly if any): {notes}
+- Things that did NOT happen — actions that failed or titles not found (say so honestly and
+  briefly; NEVER confirm one of these as done): {notes}
 - Titles being suggested — name the first one or two, NEVER describe plot: {titles}
 
 If the user's message is off-topic (not about movies/TV or their watching), briefly and politely
@@ -410,7 +411,7 @@ def build_compose_prompt(
     return (
         _COMPOSE_SYSTEM.format(
             actions="; ".join(a.summary for a in result.actions) or "(none)",
-            notes="; ".join(result.notes) or "(none)",
+            notes="; ".join((*result.notes, *result.failed_calls)) or "(none)",
             # Only the leading titles — they're what the user sees first, and a short list keeps the
             # reply naming the picks on screen instead of free-associating over a dozen.
             titles=", ".join(i.title for i in result.items[:6]) or "(none)",

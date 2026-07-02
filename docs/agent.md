@@ -90,7 +90,12 @@ The agent registers what you tell it immediately and surfaces each write as an *
 - "I bailed on *Show Y*" → `abandoned`; "can't stand musicals" → a durable taste override.
 
 `POST /chat/undo` reverses any action (delete the event/commitment/note, or revert a taste
-override) and re-derives taste.
+override) and re-derives taste. A malformed undo token segment is skipped cleanly — it never
+resolves to the zero UUID and targets a random row (review G4).
+
+If a tool **fails** (raises, or can't resolve a title), the failure is collected and fed to the
+composer, which is instructed to say so honestly and never confirm an action that didn't happen — a
+false "noted!" is worse than an admitted miss (review B3).
 
 ### Delivery: streaming + persistent history
 
