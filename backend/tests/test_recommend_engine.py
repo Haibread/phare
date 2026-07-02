@@ -430,3 +430,18 @@ def test_page_rows_respect_budget_and_min_size(db_session: Session) -> None:
     for row in rows:
         if row.key.startswith("because:"):
             assert len(row.items) >= 3
+
+
+def test_continue_watching_and_watch_again_are_mutually_exclusive(db_session: Session) -> None:
+    # A11: a show you're partway through belongs in continue_watching, not also in watch_again — the
+    # same series in both rows is a visible contradiction. And both rows' items are flagged watched.
+    profile_id = _seeded_profile(db_session)
+    by_key = {row.key: row for row in _service(db_session).rows(profile_id)}
+
+    cont = by_key["continue_watching"]
+    again = by_key["watch_again"]
+    cont_ids = {i.title_id for i in cont.items}
+    again_ids = {i.title_id for i in again.items}
+    assert cont_ids and again_ids  # both rows present in the sample
+    assert not (cont_ids & again_ids)  # no title in both
+    assert all(i.watched for i in cont.items) and all(i.watched for i in again.items)

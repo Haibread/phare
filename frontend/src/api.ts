@@ -87,6 +87,7 @@ export const recommendationItemSchema = z.object({
   explanation: z.string().nullable(),
   posterUrl: z.string().nullable(),
   components: z.record(z.number()),
+  watched: z.boolean(),
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 

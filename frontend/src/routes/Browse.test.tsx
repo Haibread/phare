@@ -15,6 +15,7 @@ function item(titleId: string, isSwing: boolean): RecommendationItem {
     explanation: null,
     posterUrl: null,
     components: { score: 0.9 },
+    watched: false,
   };
 }
 

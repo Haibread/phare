@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 
-from sqlalchemy import Float, cast, func, select
+from sqlalchemy import Float, cast, func, select, true
 from sqlalchemy.orm import Session
 
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
@@ -81,7 +82,12 @@ def loved_seed_titles(session: Session, profile_id: uuid.UUID, *, limit: int = 3
 
 
 def _rec(
-    title: Title, *, score: float, confidence: float | None, explanation: str
+    title: Title,
+    *,
+    score: float,
+    confidence: float | None,
+    explanation: str,
+    watched: bool = False,
 ) -> Recommendation:
     return Recommendation(
         title_id=title.id,
@@ -93,6 +99,7 @@ def _rec(
         confidence=confidence,
         explanation=explanation,
         poster_path=title.poster_path,
+        watched=watched,
     )
 
 
@@ -102,8 +109,12 @@ def watch_again_row(
     *,
     limit: int = 12,
     language: Language = DEFAULT_LANGUAGE,
+    exclude_ids: Collection[uuid.UUID] = (),
 ) -> Row:
-    """Titles the profile clearly liked — highest rating / liked / rewatched, deduped by title."""
+    """Titles the profile clearly liked — highest rating / liked / rewatched, deduped by title.
+
+    ``exclude_ids`` drops titles already in *continue watching* — a show you're partway through
+    belongs there, not in "watch again", so the same series can't sit in both (review A11)."""
     best_rating = func.max(cast(WatchEvent.rating, Float))
     rows = session.execute(
         select(Title, best_rating.label("rating"))
@@ -111,6 +122,7 @@ def watch_again_row(
         .where(
             WatchEvent.profile_id == profile_id,
             WatchEvent.excluded.is_(False),
+            Title.id.notin_(exclude_ids) if exclude_ids else true(),
             WatchEvent.type.in_(
                 [EventType.rated, EventType.liked, EventType.rewatched, EventType.watched]
             ),
@@ -129,6 +141,7 @@ def watch_again_row(
             score=float(rating) if rating is not None else 0.0,
             confidence=min((float(rating) / 10.0) if rating is not None else 0.6, 1.0),
             explanation=translate(language, "explain.watchAgain"),
+            watched=True,  # these are titles you've seen and liked
         )
         for title, rating in rows
     ]
@@ -193,6 +206,7 @@ def continue_watching_row(
             score=1.0,
             confidence=_recency_confidence(last, now=now),
             explanation=translate(language, "explain.continueWatching"),
+            watched=True,  # a show you're partway through — you've seen episodes of it
         )
         for title, last in rows
     ]

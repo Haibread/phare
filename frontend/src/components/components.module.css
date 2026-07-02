@@ -190,6 +190,20 @@
   color: var(--warning);
 }
 
+.watchedBadge {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  z-index: 1;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+  color: var(--text);
+}
+
 /* Rec row ---------------------------------------------------------------- */
 
 .row {

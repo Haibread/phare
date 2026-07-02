@@ -29,6 +29,7 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
     explanation: "A cerebral sci-fi that fits your taste.",
     posterUrl: null,
     components: { score: 0.9 },
+    watched: false,
     ...overrides,
   };
 }
@@ -45,6 +46,13 @@ describe("PosterCard", () => {
     renderCard(<PosterCard item={recItem({ isSwing: true })} />);
     expect(screen.getByTestId("swing-badge")).toBeInTheDocument();
     expect(screen.getByText("A stretch")).toBeInTheDocument();
+  });
+
+  it("badges a title the profile has already watched (A11)", () => {
+    renderCard(<PosterCard item={recItem({ watched: true })} />);
+    expect(screen.getByTestId("watched-badge")).toBeInTheDocument();
+    renderCard(<PosterCard item={recItem({ watched: false })} />);
+    expect(screen.getAllByTestId("watched-badge")).toHaveLength(1); // only the first card
   });
 
   it("renders real poster art when a posterUrl is present", () => {

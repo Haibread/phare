@@ -12,6 +12,7 @@
     "request": "Request"
   },
   "badge": {
-    "swing": "swing"
+    "swing": "swing",
+    "watched": "watched"
   }
 }

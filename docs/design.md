@@ -50,9 +50,14 @@ honest signal of
 their *own* kind, not a fake taste score:
 
 - `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally
-  your top-rated titles, sorted best-first.
+  your top-rated titles, sorted best-first. A show you're partway through is **excluded** here —
+  it belongs in `continue_watching`, and the same series in both rows is a visible contradiction
+  (review A11).
 - `continue_watching` → recency decay on the last episode you watched (half-life ~6 weeks): a fresh
   thread reads strong, an abandoned one cools off.
+
+Items the profile has already watched carry a `watched` flag, so the UI badges them "Watched" — most
+visibly in **search**, where a title you've seen can turn up and should say so (review A11).
 - `popular` → popularity magnitude on a log scale (a runaway hit reads stronger than a mild one).
 
 Because those last two aren't a *taste-fit* signal, the UI **doesn't render the fit meter** on the

@@ -40,6 +40,11 @@ export function PosterCard({
               {t("badge.swing")}
             </span>
           )}
+          {item.watched && (
+            <span className={styles.watchedBadge} data-testid="watched-badge">
+              {t("badge.watched")}
+            </span>
+          )}
           {showPoster ? (
             <img
               src={item.posterUrl ?? ""}

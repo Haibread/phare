@@ -130,6 +130,7 @@ class RecommendationItem(ApiModel):
     explanation: str | None = None
     poster_url: str | None = None
     components: dict[str, float]
+    watched: bool = False  # the profile has already seen this — the card shows a "Watched" badge
 
 
 class TitleDetail(ApiModel):

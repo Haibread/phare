@@ -12,6 +12,7 @@
     "request": "Demander"
   },
   "badge": {
-    "swing": "audace"
+    "swing": "audace",
+    "watched": "vu"
   }
 }

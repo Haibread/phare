@@ -73,6 +73,7 @@ def to_item(rec: Recommendation) -> RecommendationItem:
         explanation=rec.explanation,
         poster_url=_poster_url(rec.poster_path),
         components=rec.components,
+        watched=rec.watched,
     )
 
 

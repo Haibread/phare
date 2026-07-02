@@ -357,15 +357,21 @@ class RecommendationService:
         you_might_like = self._dedup_against(
             self.you_might_like(profile_id, explainer=explainer), seen
         )
+        continue_watching = row_builders.continue_watching_row(
+            self.session, profile_id, limit=self.row_size, language=self.language
+        )
         candidate_rows = [
             # Most-personalized first — these render right under the hero top pick.
             *because,
-            row_builders.continue_watching_row(
-                self.session, profile_id, limit=self.row_size, language=self.language
-            ),
+            continue_watching,
             you_might_like,
+            # A show you're partway through belongs in continue_watching, not both (review A11).
             row_builders.watch_again_row(
-                self.session, profile_id, limit=self.row_size, language=self.language
+                self.session,
+                profile_id,
+                limit=self.row_size,
+                language=self.language,
+                exclude_ids=[item.title_id for item in continue_watching.items],
             ),
             row_builders.popular_row(
                 self.session, profile_id, limit=self.row_size, language=self.language
