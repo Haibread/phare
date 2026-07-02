@@ -261,30 +261,36 @@ class Explainer:
     ) -> str:
         """One live LLM explanation with the spoiler post-check, falling back to the template.
 
-        The *outcome* is cached either way (blurb or template), so a title is attempted at most once
-        per taste version. Without this, a model whose output keeps tripping the spoiler guard would
-        re-burn the budget on every render and the cache would never warm.
+        *Stable* outcomes are cached (an accepted blurb, or a template chosen because the model
+        reliably narrates plot for this title — re-attempting either would just re-burn budget). A
+        *transient* LLM error is deliberately **not** cached, so the next render re-attempts once
+        the provider recovers, instead of serving the template for the whole taste version (G2).
         """
-        text = self._call_or_template(rec, taste)
-        if self.cache is not None:
+        text, outcome = self._call_or_template(rec, taste)
+        if self.cache is not None and outcome != "llm_error":
             self.cache.set(key, text)
         return text
 
-    def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> str:
+    def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> tuple[str, str]:
+        """Return ``(text, outcome)`` where outcome is ``ok`` / ``spoiler_rejected`` / ``llm_error``
+        — the caller uses it to decide whether the result is worth caching."""
         try:
             candidate = self.llm.complete(  # type: ignore[union-attr]
                 _llm_prompt(rec, taste, self.language), max_tokens=_REASON_MAX_TOKENS
             ).strip()
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
             record_fallback("explain", "llm_error", title=rec.title)
-            return _template(rec, taste, self.language)
+            return _template(rec, taste, self.language), "llm_error"
         safe = coerce_safe(candidate) if candidate else None
         if safe:
-            return safe
+            return safe, "ok"
         if candidate:
-            # A genuine plot-reveal marker — drop it and fall back to the safe template.
+            # A genuine plot-reveal marker — a stable outcome for this title; cache the template.
             record_fallback("explain", "spoiler_rejected", title=rec.title)
-        return _template(rec, taste, self.language)
+            return _template(rec, taste, self.language), "spoiler_rejected"
+        # Empty completion (a model hiccup, not a reliable spoiler) — transient, so don't cache it.
+        record_fallback("explain", "llm_error", title=rec.title)
+        return _template(rec, taste, self.language), "llm_error"
 
 
 def explain(

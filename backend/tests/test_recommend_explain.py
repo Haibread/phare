@@ -263,3 +263,61 @@ def test_lazy_reason_persists_and_then_replays_without_the_model(db_session: Ses
     )
     assert replay == first
     assert cold.prompts == []  # the durable cache spared the workhorse call
+
+
+# --- G2: a transient LLM error must not cache the template forever (mission M2.4) --------------
+
+
+class _FlakyThenGoodLLM:
+    """Raises on the first complete() call, succeeds after — a recovered provider."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, prompt: str, *, max_tokens: int | None = None, temperature=None) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("provider down")
+        return "Since you like cerebral sci-fi, this one lingers."
+
+    def embed(self, texts):  # pragma: no cover - Explainer never embeds
+        return [[0.0] * 1536 for _ in texts]
+
+
+class _SpoilerLLM:
+    """Always narrates plot, so every completion is rejected by the spoiler guard."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, prompt: str, *, max_tokens: int | None = None, temperature=None) -> str:
+        self.calls += 1
+        return "You'll love how the killer is revealed at the very end."
+
+    def embed(self, texts):  # pragma: no cover
+        return [[0.0] * 1536 for _ in texts]
+
+
+def test_transient_llm_error_is_not_cached_and_retries() -> None:
+    cache = TTLCache(ttl=9999, maxsize=16)
+    llm = _FlakyThenGoodLLM()
+    rec = _rec()
+    taste = {"summary": "cerebral sci-fi", "affinities": {"Science Fiction": 0.9}}
+
+    Explainer(llm=llm, cache=cache).explain([rec], taste)  # errors → template, NOT cached
+    second = Explainer(llm=llm, cache=cache).explain([rec], taste)  # retries → real blurb
+
+    assert llm.calls == 2  # the error didn't get cached, so the next render re-attempted
+    assert second[0].explanation and "cerebral" in second[0].explanation.lower()
+
+
+def test_spoiler_rejection_is_cached_and_not_retried() -> None:
+    cache = TTLCache(ttl=9999, maxsize=16)
+    llm = _SpoilerLLM()
+    rec = _rec()
+    taste = {"summary": "x"}
+
+    Explainer(llm=llm, cache=cache).explain([rec], taste)  # rejected → safe template, cached
+    Explainer(llm=llm, cache=cache).explain([rec], taste)  # cache hit → no second call
+
+    assert llm.calls == 1  # a reliable spoiler is a stable outcome; don't re-burn budget on it
