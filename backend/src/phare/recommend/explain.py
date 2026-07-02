@@ -9,7 +9,6 @@ free-text overview, so it cannot leak plot.
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 import uuid
 from collections.abc import Hashable, Iterator, Mapping, Sequence
@@ -20,13 +19,12 @@ from typing import Any, Protocol
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, translate
 from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
 from phare.recommend.schema import Anchor, Recommendation
-
-logger = logging.getLogger(__name__)
 
 
 class ReasonCache(Protocol):
@@ -278,14 +276,14 @@ class Explainer:
                 _llm_prompt(rec, taste, self.language), max_tokens=_REASON_MAX_TOKENS
             ).strip()
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
-            logger.warning("recommend.explain_failed", extra={"title": rec.title})
+            record_fallback("explain", "llm_error", title=rec.title)
             return _template(rec, taste, self.language)
         safe = coerce_safe(candidate) if candidate else None
         if safe:
             return safe
         if candidate:
             # A genuine plot-reveal marker — drop it and fall back to the safe template.
-            logger.warning("recommend.explain_rejected", extra={"title": rec.title})
+            record_fallback("explain", "spoiler_rejected", title=rec.title)
         return _template(rec, taste, self.language)
 
 
@@ -331,7 +329,7 @@ def stream_lazy_reason(
             chunks.append(chunk)
             yield chunk
     except Exception:  # noqa: BLE001 - a flaky model must not sink the request
-        logger.warning("recommend.reason_failed", extra={"title": rec.title})
+        record_fallback("explain_stream", "llm_error", title=rec.title)
         if not chunks:
             yield _template(rec, taste, language)
         return

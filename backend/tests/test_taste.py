@@ -61,7 +61,7 @@ def test_off_vocabulary_affinity_key_is_flagged(db_session: Session, caplog) -> 
     with caplog.at_level(logging.WARNING):
         taste = TasteService(db_session, llm, "test-model").generate(profile_id)
     assert taste.structured["affinities"]["Underwater Basket Weaving"] == 0.8  # saved + valid
-    assert any(r.message == "taste.affinity_key_unmatched" for r in caplog.records)
+    assert any(r.message == "taste_affinity.fallback" for r in caplog.records)
 
 
 def test_generate_builds_profile(db_session: Session) -> None:

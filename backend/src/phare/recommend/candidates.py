@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from sqlalchemy import select, true
 from sqlalchemy.orm import Session
 
+from phare.core.fallback import record_fallback
 from phare.db.models import Title, TitleEmbedding
 from phare.recommend import genres
 from phare.recommend.schema import Candidate
@@ -74,8 +75,10 @@ def generate_candidates(
     ).all()
 
     candidates: list[Candidate] = []
+    dropped_by_avoids = 0
     for title, dist in rows:
         if _is_hard_avoided(title, hard_avoids):
+            dropped_by_avoids += 1
             continue
         candidates.append(
             Candidate(
@@ -96,6 +99,12 @@ def generate_candidates(
         )
         if len(candidates) >= limit:
             break
+    # Hard-avoids emptied the pool (nearby titles existed, the avoids removed them all) — a
+    # thin/degraded slate the operator should see, not a mysteriously empty row (review A15/G1).
+    if not candidates and dropped_by_avoids:
+        record_fallback(
+            "candidates", "hard_avoids_emptied", dropped=dropped_by_avoids, avoids=len(hard_avoids)
+        )
     logger.debug(
         "recommend.candidates",
         extra={"profile_id": str(profile_id), "candidate_count": len(candidates)},

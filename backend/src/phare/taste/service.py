@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
 from phare.db.models import TasteProfile, Title, WatchEvent
 from phare.llm_json import extract_json
@@ -164,9 +165,8 @@ class TasteService:
             # deterministic profile from genre history (docs/design.md: works on a weak model)
             # rather than 500 the request. A raised exception (LLM unreachable) still propagates so
             # callers like the ingest auto-refresh can swallow it.
-            logger.warning(
-                "taste.unparseable_completion; using deterministic fallback",
-                extra={"profile_id": str(profile_id)},
+            record_fallback(
+                "taste_extraction", "unparseable_completion", profile_id=str(profile_id)
             )
             data = self._deterministic(profile_id)
 

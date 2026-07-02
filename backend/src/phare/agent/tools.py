@@ -8,7 +8,6 @@ mis-parse never silently poisons taste (auto-write + undo).
 
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -20,6 +19,7 @@ from phare.agent import commitments as commitments_store
 from phare.agent import memory as memory_store
 from phare.agent.schema import AgentAction, AgentPlan, ChatIntent
 from phare.catalog.service import CatalogMetadataSource, search_titles
+from phare.core.fallback import record_fallback
 from phare.db.models import (
     CommitmentStatus,
     EventType,
@@ -33,8 +33,6 @@ from phare.llm_json import as_str_list
 from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 from phare.taste.service import maybe_refresh_taste
-
-logger = logging.getLogger(__name__)
 
 # A qualitative signal maps to one or more canonical events. "loved" stacks watched + liked so it
 # both excludes the title and pulls the centroid hard; ratings come in via the numeric `rating` arg.
@@ -413,12 +411,12 @@ def execute_plan(ctx: ToolContext, plan: AgentPlan) -> ExecutionResult:
     for call in plan.calls:
         handler = _TOOLS.get(call.tool)
         if handler is None:
-            logger.warning("agent.unknown_tool", extra={"tool": call.tool})
+            record_fallback("agent_tool", "unknown_tool", tool=call.tool)
             continue
         try:
             handler(ctx, call.args, result)
         except Exception:  # noqa: BLE001 - one bad tool call must not sink the whole turn
-            logger.warning("agent.tool_failed", extra={"tool": call.tool})
+            record_fallback("agent_tool", "exception", tool=call.tool)
     if result.taste_dirty:
         # Taste extraction is mechanical JSON — use the recommender's (workhorse) model, not the
         # bigger agent model. No-ops when offline. The caller owns the commit.
