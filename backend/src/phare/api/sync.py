@@ -56,16 +56,24 @@ _PREWARM_WORKERS = 8
 def _prewarm_metadata(session: Session, metadata: MetadataProvider, batch: list[RawEvent]) -> None:
     """Concurrently fetch TMDB metadata for the batch's not-yet-stored titles, warming the shared
     cache. Only the read-side HTTP runs in threads — the DB writes stay on the single session."""
-    wanted: dict[int, TitleKind] = {}
+    # Keyed by (tmdb_id, kind): a movie and a show can share a tmdb_id, and they're distinct titles
+    # to resolve (review H3a).
+    wanted: set[tuple[int, TitleKind]] = set()
     for event in batch:
         if event.tmdb_id is not None:
             kind = TitleKind.movie if event.media_type is RawMediaType.movie else TitleKind.show
-            wanted.setdefault(event.tmdb_id, kind)
+            wanted.add((event.tmdb_id, kind))
     if not wanted:
         return
     # Skip titles already in the catalog — the ingest resolves those from the DB, no HTTP needed.
-    stored = set(session.scalars(select(Title.tmdb_id).where(Title.tmdb_id.in_(wanted))).all())
-    missing = [(tmdb_id, kind) for tmdb_id, kind in wanted.items() if tmdb_id not in stored]
+    tmdb_ids = {tmdb_id for tmdb_id, _ in wanted}
+    stored = {
+        (row.tmdb_id, row.kind)
+        for row in session.execute(
+            select(Title.tmdb_id, Title.kind).where(Title.tmdb_id.in_(tmdb_ids))
+        )
+    }
+    missing = [pair for pair in wanted if pair not in stored]
     if not missing:
         return
     with ThreadPoolExecutor(max_workers=_PREWARM_WORKERS) as pool:

@@ -81,10 +81,15 @@ class Title(Base):
     """A canonical movie or show, keyed by external ids (TMDB primary, IMDb secondary)."""
 
     __tablename__ = "title"
+    # TMDB's movie and TV id namespaces are disjoint — id 1398 is both *Stalker* (movie) and *The
+    # Sopranos* (show) — so tmdb_id is unique only *per kind*, never globally. A column-level
+    # UNIQUE(tmdb_id) collapsed such pairs onto one row and mis-attached events (review H3a).
+    __table_args__ = (UniqueConstraint("tmdb_id", "kind", name="uq_title_tmdb_kind"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     kind: Mapped[TitleKind] = mapped_column(Enum(TitleKind, name="title_kind"))
-    tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    tmdb_id: Mapped[int | None] = mapped_column(Integer)
+    # IMDb ids ARE globally unique across movies and shows, so this stays column-level unique.
     imdb_id: Mapped[str | None] = mapped_column(String(20), unique=True)
     title: Mapped[str] = mapped_column(String(500))
     year: Mapped[int | None] = mapped_column(Integer)
