@@ -7,6 +7,7 @@ import { AvailabilityProvider } from "../components/Availability";
 import { ConfidenceMeter } from "../components/ConfidenceMeter";
 import { RecRow } from "../components/RecRow";
 import { ErrorState, Loading } from "../components/states";
+import { EmbeddingsDegradedContext } from "../lib/degraded";
 import { posterTint } from "../lib/poster";
 import {
   useAvailability,
@@ -84,37 +85,44 @@ export function Browse(): React.JSX.Element {
 
   return (
     <AvailabilityProvider value={availabilityCtx}>
-      <div className={styles.page} data-testid="browse">
-        {hero && <Hero item={hero} />}
+      <EmbeddingsDegradedContext.Provider value={recs.data.embeddingsDegraded ?? false}>
+        <div className={styles.page} data-testid="browse">
+          {recs.data.embeddingsDegraded && (
+            <p className={styles.offlineBanner} data-testid="embeddings-degraded-banner">
+              {t("offlineBanner")}
+            </p>
+          )}
+          {hero && <Hero item={hero} />}
 
-        <Link to="/chat" className={styles.askChip} data-testid="ask-phare">
-          {t("askChip")}
-        </Link>
+          <Link to="/chat" className={styles.askChip} data-testid="ask-phare">
+            {t("askChip")}
+          </Link>
 
-        {rows.length === 0 ? (
-          <p className="muted" data-testid="recs-empty">
-            {t("empty")}
-          </p>
-        ) : (
-          rows.map((row) => <RecRow key={row.key} row={row} />)
-        )}
+          {rows.length === 0 ? (
+            <p className="muted" data-testid="recs-empty">
+              {t("empty")}
+            </p>
+          ) : (
+            rows.map((row) => <RecRow key={row.key} row={row} />)
+          )}
 
-        {dynamic.data?.rows.some((r) => r.items.length > 0) && (
-          <>
-            <h3 className={styles.pageTitle} style={{ marginTop: "var(--sp-5)" }}>
-              {t("todaysPicks")}
-              {dynamic.data.degraded && (
-                <span className={styles.basicBadge} data-testid="dynamic-degraded">
-                  {t("basicPicks")}
-                </span>
-              )}
-            </h3>
-            {dynamic.data.rows.map((row) => (
-              <RecRow key={row.key} row={row} />
-            ))}
-          </>
-        )}
-      </div>
+          {dynamic.data?.rows.some((r) => r.items.length > 0) && (
+            <>
+              <h3 className={styles.pageTitle} style={{ marginTop: "var(--sp-5)" }}>
+                {t("todaysPicks")}
+                {dynamic.data.degraded && (
+                  <span className={styles.basicBadge} data-testid="dynamic-degraded">
+                    {t("basicPicks")}
+                  </span>
+                )}
+              </h3>
+              {dynamic.data.rows.map((row) => (
+                <RecRow key={row.key} row={row} />
+              ))}
+            </>
+          )}
+        </div>
+      </EmbeddingsDegradedContext.Provider>
     </AvailabilityProvider>
   );
 }

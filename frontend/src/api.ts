@@ -116,6 +116,9 @@ const recommendationsResponseSchema = z.object({
   // True when a configured LLM couldn't name today's themed rows and the deterministic fallback
   // filled in — the UI flags "basic picks" instead of passing them off as AI-curated.
   degraded: z.boolean().default(false),
+  // True when retrieval runs on the local hash embedder (no embedding key): similarity is not
+  // semantically meaningful, so the UI shows an honest banner and caps the fit label.
+  embeddingsDegraded: z.boolean().default(false),
 });
 
 const chatIntentSchema = z.object({

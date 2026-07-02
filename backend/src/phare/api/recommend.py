@@ -24,6 +24,7 @@ from phare.core.i18n import DEFAULT_LANGUAGE, Language
 from phare.db.base import get_session
 from phare.db.models import Profile, RecommendationLog, User
 from phare.eval.conversion import conversion_stats
+from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider
 from phare.recommend.dynamic import dynamic_rows
 from phare.recommend.schema import Recommendation, Row
@@ -99,7 +100,10 @@ def get_recommendations(
     recommender = build_recommender(session, embedder, chat_llm, language)
     rows = recommender.rows(profile_id)
     session.commit()  # lazy embeddings (and any logging) persist
-    return RecommendationsResponse(rows=[to_row(row) for row in rows])
+    return RecommendationsResponse(
+        rows=[to_row(row) for row in rows],
+        embeddings_degraded=embedder.model_version == LOCAL_MODEL_VERSION,
+    )
 
 
 @router.get(

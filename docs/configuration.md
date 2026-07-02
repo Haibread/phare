@@ -185,6 +185,12 @@ quality.
 | Chat **write path** (register "I saw X", commitments, memory) | Full tool-using agent | **Read-only** — no writes (title resolution needs the model) |
 | Dynamic "Today's picks" rows | LLM-named themes | Deterministic calendar + top-genre fallback |
 
+**The UI is honest about it.** In offline mode the recommendations response carries
+`embeddingsDegraded: true`, so Browse shows a persistent "offline mode — recommendations are
+approximate" banner and **caps the fit label** (a pick can never read "strong fit" when the
+similarity behind it is a hash collision). This keeps "runs fully offline" from quietly presenting
+pseudo-random picks with the same confidence as real ones (review M2).
+
 The two spaces never mix: local and real vectors carry different model-version tags
 ([`embeddings/version.py`](../backend/src/phare/embeddings/version.py)) and retrieval only queries
 the active one. So you can run offline first, then add a key later.

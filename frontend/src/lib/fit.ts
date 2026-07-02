@@ -13,17 +13,21 @@ export interface Fit {
   filled: 1 | 2 | 3;
 }
 
-export function fitFor(confidence: number | null, isSwing: boolean): Fit {
+/** ``degraded`` = retrieval is running on the local hash embedder (no embedding key), so similarity
+ * is not semantically meaningful. In that mode the top "strong fit" bucket is never shown — an
+ * approximate pick must not read as a confident one (review M2). */
+export function fitFor(confidence: number | null, isSwing: boolean, degraded = false): Fit {
   if (isSwing) {
     return { labelKey: "fit.stretch", tone: "swing", filled: 1 };
   }
   if (confidence === null) {
     return { labelKey: "fit.worthALook", tone: "neutral", filled: 1 };
   }
-  if (confidence >= 0.66) {
+  if (confidence >= 0.66 && !degraded) {
     return { labelKey: "fit.strong", tone: "success", filled: 3 };
   }
   if (confidence >= 0.4) {
+    // Includes a would-be "strong" pick in degraded mode — capped to "worth a try", never the top.
     return { labelKey: "fit.worthATry", tone: "neutral", filled: 2 };
   }
   return { labelKey: "fit.longShot", tone: "neutral", filled: 1 };

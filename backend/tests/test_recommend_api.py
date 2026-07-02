@@ -70,6 +70,8 @@ def test_full_recommendations_journey(db_session: Session) -> None:
     assert all("score" in item["components"] for item in items)  # transparent breakdown on the wire
     # Camel-case serialisation holds across the new DTOs.
     assert "isSwing" in items[0]
+    # Offline embedder (no key): the response flags degraded retrieval so the UI can be honest (M2).
+    assert response.json()["embeddingsDegraded"] is True
 
 
 def test_recommendations_localise_row_titles_via_accept_language(db_session: Session) -> None:

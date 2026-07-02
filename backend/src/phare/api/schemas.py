@@ -159,6 +159,10 @@ class RecommendationsResponse(ApiModel):
     # filled in — the client flags "basic picks" instead of passing them off as AI-curated. Always
     # False for the static home rows (they're deterministic by design).
     degraded: bool = False
+    # True when retrieval is running on the local hash embedder (no embedding key): similarity is
+    # not semantically meaningful, so the client shows an honest banner and caps the fit label
+    # (review M2). False whenever a real embedding provider is configured.
+    embeddings_degraded: bool = False
 
 
 class RecommendationLogItem(ApiModel):
