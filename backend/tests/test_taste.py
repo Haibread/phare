@@ -18,6 +18,7 @@ from phare.ingest.sample import seed_sample_data
 from phare.providers.fakes import FakeLLMProvider
 from phare.taste.service import (
     TasteService,
+    _should_auto_refresh,
     effective_profile,
     maybe_refresh_taste,
     optional_llm_provider,
@@ -62,6 +63,27 @@ def test_off_vocabulary_affinity_key_is_flagged(db_session: Session, caplog) -> 
         taste = TasteService(db_session, llm, "test-model").generate(profile_id)
     assert taste.structured["affinities"]["Underwater Basket Weaving"] == 0.8  # saved + valid
     assert any(r.message == "taste_affinity.fallback" for r in caplog.records)
+
+
+def test_degraded_taste_profile_is_marked_and_re_extracted(db_session: Session) -> None:
+    # A14: a failed extraction fell back to the coarse genre-frequency profile and froze there. Now
+    # it's marked degraded, the auto-refresh re-attempts it, and a success clears the flag — while
+    # user overrides survive both transitions.
+    profile_id = _profile_with_history(db_session)
+    degraded = TasteService(db_session, FakeLLMProvider(completion="not json"), "m").generate(
+        profile_id
+    )
+    assert degraded.degraded is True
+    # A degraded profile forces a re-attempt regardless of how much history changed.
+    assert _should_auto_refresh(db_session, profile_id, datetime.now(UTC)) is True
+
+    degraded.user_overrides = {"likes": ["noir"]}
+    db_session.flush()
+    recovered = TasteService(db_session, FakeLLMProvider(completion=CANNED), "m").generate(
+        profile_id
+    )
+    assert recovered.degraded is False  # marker lifted on a successful extraction
+    assert recovered.user_overrides == {"likes": ["noir"]}  # hand edits survived
 
 
 def test_generate_builds_profile(db_session: Session) -> None:
