@@ -81,8 +81,15 @@ export function Browse(): React.JSX.Element {
     return <ErrorState error={recs.error} onRetry={() => recs.refetch()} />;
   }
 
-  const rows = recs.data.rows.filter((r) => r.items.length > 0);
-  const hero = pickHero(rows);
+  const allRows = recs.data.rows.filter((r) => r.items.length > 0);
+  const hero = pickHero(allRows);
+  // The hero is rendered as its own big card, so drop it from the rows below — otherwise it shows
+  // twice (hero + first pick of you_might_like), which is where "The Wire ×4" started (review A7).
+  const rows = hero
+    ? allRows
+        .map((r) => ({ ...r, items: r.items.filter((i) => i.titleId !== hero.titleId) }))
+        .filter((r) => r.items.length > 0)
+    : allRows;
 
   const availabilityCtx = {
     configured: availability.data?.configured ?? false,

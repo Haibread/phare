@@ -57,6 +57,12 @@ Because those last two aren't a *taste-fit* signal, the UI **doesn't render the 
 well-known" on some rows and "how well it fits you" on others would make one label mean several
 things (review H8). Only the taste-driven rows (`you_might_like`, `because…`, dynamic themes) show it.
 
+**Page hygiene:** a title appears at most **twice** across the whole page, applied in row-priority
+order so the strongest rows keep it (this is what stops "The Wire" turning up in the hero,
+you_might_like, popular *and* a theme — review A7); the frontend also drops the hero pick from the
+rows below so it isn't shown twice. A `because you watched X` row left with fewer than a few items
+(a lone odd neighbour) is hidden rather than shown looking broken (A10).
+
 A row with genuinely no opinion would pass `confidence = null`; the UI then shows the lowest
 neutral chip. (Today every row computes a real value, so that path is just the graceful fallback.)
 - **Dynamic LLM-generated rows** — an agent picks the day's rows from profile + mood + calendar

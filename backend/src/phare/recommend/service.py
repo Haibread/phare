@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import math
 import uuid
+from collections import Counter
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 
@@ -34,6 +35,30 @@ from phare.taste.service import effective_profile
 logger = logging.getLogger(__name__)
 
 CandidateFilter = Callable[[list[Candidate]], list[Candidate]]
+
+# Page hygiene (review A7/A10). A title may appear at most twice across the whole page, applied in
+# row-priority order so the strongest rows keep it. And a "because you watched X" row thinner than
+# the floor (a single odd neighbour) reads as broken, so it's hidden — the floor targets those
+# auxiliary rows, never you_might_like / popular / user-state rows, which are the page's backbone.
+_APPEARANCE_BUDGET = 2
+MIN_ROW_ITEMS = 3
+_BECAUSE_PREFIX = "because:"
+
+
+def _apply_appearance_budget(rows: list[Row], budget: int) -> list[Row]:
+    """Cap each title to ``budget`` appearances across the page, keeping it in the earliest (highest
+    priority) rows and dropping the later repeats."""
+    counts: Counter[uuid.UUID] = Counter()
+    out: list[Row] = []
+    for row in rows:
+        kept = []
+        for item in row.items:
+            if counts[item.title_id] < budget:
+                kept.append(item)
+                counts[item.title_id] += 1
+        out.append(row.model_copy(update={"items": kept}))
+    return out
+
 
 # How far a chat mood pulls the taste centroid toward the mood text's embedding (0 = ignore mood,
 # 1 = ignore taste). A gentle nudge: taste still leads, the mood colours it (review A4).
@@ -346,7 +371,15 @@ class RecommendationService:
                 self.session, profile_id, limit=self.row_size, language=self.language
             ),
         ]
-        result = [row for row in candidate_rows if row.items]
+        # Cap cross-row repeats (The Wire in hero + you_might_like + popular + theme — review A7),
+        # then drop any "because you watched X" row left too thin to look intentional (A7/A10).
+        budgeted = _apply_appearance_budget(candidate_rows, _APPEARANCE_BUDGET)
+        result = [
+            row
+            for row in budgeted
+            if row.items
+            and not (row.key.startswith(_BECAUSE_PREFIX) and len(row.items) < MIN_ROW_ITEMS)
+        ]
         log_rows(self.session, profile_id, result)
         logger.info(
             "recommend.rows",

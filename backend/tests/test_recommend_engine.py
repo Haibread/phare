@@ -395,3 +395,38 @@ def test_mood_is_ignored_on_the_local_hash_embedder(db_session: Session) -> None
     service.recommend(profile_id, mood="something cosy", vote_mix=True)
     embedded = [text for call in fake.embed_inputs[base:] for text in call]
     assert "something cosy" not in embedded  # guarded off on the local-hash version
+
+
+def test_appearance_budget_caps_a_title_at_two_per_page() -> None:
+    # A7: the same title across three rows is kept in the first two (priority order), dropped from
+    # the third.
+    from phare.recommend.schema import Recommendation, Row
+    from phare.recommend.service import _apply_appearance_budget
+
+    tid = uuid.uuid4()
+
+    def _row(key: str) -> Row:
+        item = Recommendation(
+            title_id=tid, title="X", kind="movie", year=2020, genres=[], score=1.0
+        )
+        return Row(key=key, title=key, items=[item])
+
+    out = _apply_appearance_budget([_row("a"), _row("b"), _row("c")], 2)
+    assert [len(r.items) for r in out] == [1, 1, 0]
+
+
+def test_page_rows_respect_budget_and_min_size(db_session: Session) -> None:
+    # A7: no title appears more than twice across the page. A10: any surviving "because you watched"
+    # row has at least the floor of items (a 1-item because-row looks broken).
+    from collections import Counter
+
+    profile_id = _seeded_profile(db_session)
+    service = _service(db_session)
+    service.ensure_embeddings()
+    rows = service.rows(profile_id)
+
+    counts = Counter(item.title_id for row in rows for item in row.items)
+    assert counts and all(c <= 2 for c in counts.values())
+    for row in rows:
+        if row.key.startswith("because:"):
+            assert len(row.items) >= 3
