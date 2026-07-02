@@ -155,6 +155,8 @@ def stream_title_explanation(
         year=title.year,
         genres=title.genres,
         score=0.0,
+        overview=title.overview,
+        keywords=list(title.keywords),
     )
 
     # Two-tier cache: in-process L1 over a Postgres L2, so an accepted reason survives restarts

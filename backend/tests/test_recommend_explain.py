@@ -335,3 +335,38 @@ def test_spoiler_markers_catch_english_and_french() -> None:
     # A safe, appeal-only blurb (either language) passes untouched.
     assert not has_spoiler_markers("A slow-burn atmospheric mystery right up your alley.")
     assert not has_spoiler_markers("Un thriller lent et atmosphérique, tout à fait votre goût.")
+
+
+# --- H4: the "why this" prompt is grounded and honest about a weak fit --------------------------
+
+
+def test_llm_prompt_is_grounded_in_synopsis_and_keywords() -> None:
+    llm = FakeLLMProvider(completion="A cerebral pick for you.")
+    rec = _rec(
+        overview="A linguist decodes an alien language to prevent a war.",
+        keywords=["aliens", "first contact", "linguistics"],
+    )
+    explain([rec], {"summary": "loves cerebral sci-fi"}, llm=llm)
+    prompt = llm.prompts[0]
+    assert "linguist decodes an alien language" in prompt  # synopsis grounds the model (H4)
+    assert "first contact" in prompt  # keywords too
+    assert "NEVER retell the plot" in prompt  # ...but it's told to describe appeal, not plot
+
+
+def test_llm_prompt_frames_a_swing_as_a_stretch() -> None:
+    llm = FakeLLMProvider(completion="A stretch worth trying.")
+    explain([_rec(is_swing=True)], {"summary": "x"}, llm=llm)
+    assert "stretch" in llm.prompts[0].lower()
+
+
+def test_llm_prompt_frames_a_weak_fit_honestly() -> None:
+    # A low pool-relative similarity must tell the model to be honest, not oversell (H4).
+    llm = FakeLLMProvider(completion="A stretch.")
+    explain([_rec(components={"similarity_rel": 0.2})], {"summary": "x"}, llm=llm)
+    assert "WEAK fit" in llm.prompts[0]
+
+
+def test_llm_prompt_frames_a_strong_fit_as_a_match() -> None:
+    llm = FakeLLMProvider(completion="A great match.")
+    explain([_rec(components={"similarity_rel": 0.9})], {"summary": "x"}, llm=llm)
+    assert "a strong match" in llm.prompts[0]

@@ -53,8 +53,9 @@ _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 # Bump when the explanation *prompt* changes. It's folded into the cache fingerprint so a wording
 # change invalidates every previously-cached blurb (in-process and the durable Postgres rows)
 # without a manual purge — otherwise a deploy keeps serving the old phrasing until taste happens to
-# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite.
-_PROMPT_VERSION = "2"
+# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite;
+# "3" = grounded in synopsis/keywords + honest weak-fit framing (review H4).
+_PROMPT_VERSION = "3"
 
 
 def _taste_fingerprint(taste: Mapping[str, Any], anchor: Anchor | None = None) -> str:
@@ -119,11 +120,17 @@ Rules:
   mood of theirs it connects to. A reader with different taste must get a different sentence — if
   yours would fit any viewer, it's wrong. Prefer opening with the connection — start from what
   they like, then the title (e.g. Since you lean toward X, this ...).
-- Describe appeal only: tone, themes, mood, the taste fit. NEVER mention plot events.
+- Ground your sentence in the synopsis/keywords when given, but describe appeal only: tone, themes,
+  mood, the taste fit. NEVER mention plot events or retell the story.
 - Never mention other people or users.
-- Be honest about confidence; for a "discovery pick" frame it as a stretch worth trying.
+- Be honest about the fit. If the fit is described as weak/a stretch below, say so plainly — call it
+  a gamble outside their usual taste; do NOT invent qualities to force a perfect-match pitch.
 - Output ONLY the sentence as plain text: no quotation marks around it, no markdown, no preamble.
 """
+
+# Below this pool-relative similarity, tell the model to frame the pick as a stretch rather than
+# oversell it — the "honesty over engagement" line the un-grounded prompt used to cross (review H4).
+_WEAK_FIT = 0.4
 
 
 def _template(
@@ -189,9 +196,30 @@ def _llm_prompt(
 ) -> str:
     summary = taste.get("summary") or "(no taste summary yet)"
     genres = ", ".join(rec.genres) or "unknown"
-    kind = "discovery pick (a stretch)" if rec.is_swing else "a strong match"
     hooks = _taste_hooks(rec, taste)
     hook_line = f"\nAnchor the sentence on this connection: {hooks}." if hooks else ""
+    # Ground the model in the actual content so it can't invent aligned qualities (review H4). The
+    # synopsis is for understanding only — the prompt forbids retelling plot, and the output is
+    # spoiler-screened. Truncate it so a long synopsis can't crowd the instruction out.
+    synopsis = (rec.overview or "").strip()
+    synopsis_line = (
+        f"\nSynopsis (grounding only — describe appeal, NEVER retell the plot): {synopsis[:360]}"
+        if synopsis
+        else ""
+    )
+    keywords = ", ".join(k for k in rec.keywords[:8] if k)
+    keyword_line = f"\nKeywords: {keywords}" if keywords else ""
+    # Real fit signal, so a weak pick is framed honestly instead of oversold. Swing → always a
+    # stretch; otherwise gauge by the pool-relative similarity (M1.4) when the breakdown carries it.
+    sim_rel = rec.components.get("similarity_rel")
+    if rec.is_swing:
+        fit = "a deliberate discovery pick — a stretch outside their usual taste"
+    elif sim_rel is not None and sim_rel < _WEAK_FIT:
+        fit = (
+            "a WEAK fit — be honest and frame it as a stretch/gamble, do NOT oversell it as a match"
+        )
+    else:
+        fit = "a strong match"
     anchor_line = ""
     if anchor is not None:
         anchor_genres = ", ".join(anchor.genres) if anchor.genres else "a title they loved"
@@ -202,10 +230,11 @@ def _llm_prompt(
         )
     directive = llm_output_directive(language)
     tail = f" {directive}" if directive else ""
+    title_line = f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}"
     return (
         f"{_SYSTEM}\nViewer taste: {summary}{hook_line}{anchor_line}\n"
-        f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}\n"
-        f"This is {kind}. Write the one sentence, addressed to the viewer as you.{tail}"
+        f"{title_line}{keyword_line}{synopsis_line}\n"
+        f"This is {fit}. Write the one sentence, addressed to the viewer as you.{tail}"
     )
 
 

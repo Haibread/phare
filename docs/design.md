@@ -17,6 +17,10 @@ filters) → re-ranker → explanations (LLM)`.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
 - **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.
+  **Grounded** in the title's synopsis + keywords so the model describes real appeal instead of
+  inventing aligned qualities, and told the actual fit strength so a weak pick is framed as a
+  stretch, not oversold (review H4). The synopsis is for grounding only — the prompt forbids
+  retelling plot and the output is spoiler-screened; the offline template never touches it.
 
 Why not LLM-as-ranker: it can't recall a large catalog, hallucinates titles, and is slower and
 costlier. It's good at reading fuzzy human signal — so that's all it does.
