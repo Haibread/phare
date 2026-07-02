@@ -445,3 +445,12 @@ def test_continue_watching_and_watch_again_are_mutually_exclusive(db_session: Se
     assert cont_ids and again_ids  # both rows present in the sample
     assert not (cont_ids & again_ids)  # no title in both
     assert all(i.watched for i in cont.items) and all(i.watched for i in again.items)
+
+
+def test_profile_building_flag_reflects_centroid_readiness(db_session: Session) -> None:
+    # A12: a profile with history but no embeddings yet has no centroid, so personalised rows are
+    # empty — flag it "building" (the UI shows a state + popular fallback) rather than a bare page.
+    profile_id = _seeded_profile(db_session)  # has watch history, nothing embedded yet
+    assert _service(db_session).profile_building(profile_id) is True
+    _service(db_session).ensure_embeddings()  # embed the catalog incl. watched titles
+    assert _service(db_session).profile_building(profile_id) is False  # centroid ready now

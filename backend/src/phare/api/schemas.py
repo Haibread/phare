@@ -164,6 +164,9 @@ class RecommendationsResponse(ApiModel):
     # not semantically meaningful, so the client shows an honest banner and caps the fit label
     # (review M2). False whenever a real embedding provider is configured.
     embeddings_degraded: bool = False
+    # True when the profile has history but its taste centroid isn't ready yet (titles still
+    # embedding) — the client shows a "building your profile" state instead of a bare page (A12).
+    profile_building: bool = False
 
 
 class RecommendationLogItem(ApiModel):

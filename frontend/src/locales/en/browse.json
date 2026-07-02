@@ -5,6 +5,7 @@
   "todaysPicks": "Today's picks",
   "basicPicks": "basic",
   "offlineBanner": "Offline mode: recommendations are approximate — add an embedding key for real quality.",
+  "buildingProfile": "Building your profile from your history — personalized rows will appear in a moment. Here's what's popular meanwhile.",
   "hero": {
     "topPick": "Top pick tonight"
   }

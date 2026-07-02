@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
-from phare.db.models import TasteProfile, Title, TitleEmbedding
+from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider, MetadataProvider
@@ -192,6 +192,22 @@ class RecommendationService:
             record_fallback("mood_bias", "embed_error")
             return centroid
         return _blend_direction(centroid, [float(x) for x in mood_vec], _MOOD_WEIGHT)
+
+    def profile_building(self, profile_id: uuid.UUID) -> bool:
+        """True when the profile has watch history but no taste centroid yet — its titles aren't
+        embedded, so the personalised rows are empty right after connecting a source. The UI shows a
+        "building your profile" state (with the popular row as a stopgap) instead of a bare page at
+        the most critical moment (review A12). Call after ``rows()`` so the lazy top-up has run."""
+        if self._centroid(profile_id) is not None:
+            return False
+        return (
+            self.session.scalar(
+                select(WatchEvent.id)
+                .where(WatchEvent.profile_id == profile_id, WatchEvent.excluded.is_(False))
+                .limit(1)
+            )
+            is not None
+        )
 
     def _centroid(self, profile_id: uuid.UUID) -> list[float] | None:
         """Memoized taste centroid for this request."""

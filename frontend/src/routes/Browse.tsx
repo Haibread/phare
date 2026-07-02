@@ -107,6 +107,11 @@ export function Browse(): React.JSX.Element {
               {t("offlineBanner")}
             </p>
           )}
+          {recs.data.profileBuilding && (
+            <p className={styles.buildingBanner} data-testid="profile-building-banner">
+              {t("buildingProfile")}
+            </p>
+          )}
           {hero && <Hero item={hero} />}
 
           <Link to="/chat" className={styles.askChip} data-testid="ask-phare">
