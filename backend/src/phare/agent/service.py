@@ -25,6 +25,7 @@ from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, tr
 from phare.llm_json import strip_reasoning
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider, stream_text
+from phare.recommend import genres
 from phare.recommend.log import log_chat
 from phare.recommend.schema import Candidate, Recommendation
 from phare.recommend.service import RecommendationService
@@ -69,10 +70,15 @@ def intent_filter(intent: ChatIntent):
                 if c.runtime_minutes is None or c.runtime_minutes <= intent.max_runtime
             ]
         if intent.include_genres:
-            wanted = {g.lower() for g in intent.include_genres}
-            matched = [c for c in result if wanted & {g.lower() for g in c.genres}]
-            # Don't return nothing just because the catalog is thin — fall back to runtime-only.
-            result = matched or result
+            matched = [c for c in result if genres.matches_any(intent.include_genres, c.genres)]
+            # Don't return nothing just because the catalog is thin — fall back to runtime-only, but
+            # make the miss visible (A3/G1) so a vocabulary bug can't hide behind an empty match.
+            if matched:
+                result = matched
+            else:
+                genres.record_genre_filter_fallback(
+                    intent.include_genres, {g for c in result for g in c.genres}
+                )
         return result
 
     return apply
