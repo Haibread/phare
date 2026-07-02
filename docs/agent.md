@@ -27,7 +27,10 @@ execution → reply`
   action names the resolved title + year so the reply states exactly what was recorded.
   `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
   recommendation log — never from the model's memory — so the reply explains the titles actually
-  shown; it sets no new picks, so the slate isn't re-logged.
+  shown. It emits **no new strip** (they're already on screen from the previous turn — review B2)
+  and feeds the composer the leading picks with their per-item fit reasons, so the answer covers the
+  first few honestly instead of re-posting a wall of posters. It sets no new picks, so nothing's
+  re-logged.
   `recommend` defaults to *new* titles (excludes everything watched); a **rewatch** request ("a
   comfort rewatch", "something I've seen", "watch again") sets `rewatch=true`, which flips the
   candidate source to titles you've already watched and reserves no discovery swing slot. The

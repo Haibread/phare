@@ -30,6 +30,7 @@ from phare.db.models import (
     WatchEvent,
 )
 from phare.llm_json import as_str_list
+from phare.recommend.explain import explain
 from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 from phare.taste.service import maybe_refresh_taste
@@ -74,6 +75,9 @@ class ExecutionResult:
     # Items re-surfaced for an explanation ("why these?") are already-logged picks, not new ones —
     # don't log them again.
     suppress_logging: bool = False
+    # This turn only *explains* the picks already on screen (explain_picks). The items feed the
+    # composer's answer but must NOT be re-emitted as a new strip — that's the 24-posters bug (B2).
+    resurfaced: bool = False
 
 
 def _resolve_title(ctx: ToolContext, query: str) -> Title | None:
@@ -384,20 +388,27 @@ def tool_explain_picks(ctx: ToolContext, args: dict, result: ExecutionResult) ->
         )
         .order_by(RecommendationLog.rank)
     ).all()
-    result.items = [
+    items = [
         Recommendation(
             title_id=title.id,
             title=title.title,
             kind=title.kind.value,
             year=title.year,
             genres=list(title.genres),
+            keywords=list(title.keywords),
+            overview=title.overview,
             score=float(score) if score is not None else 0.0,
             is_swing=is_swing,
             poster_path=title.poster_path,
         )
         for title, score, is_swing in rows
     ]
+    # Attach the deterministic template "why this" reasons (no LLM) so the composer has concrete,
+    # per-item fit to weave into the "why these?" answer instead of guessing (review B2).
+    taste = ctx.recommender.load_taste(ctx.profile_id)
+    result.items = explain(items, taste, llm=None, language=ctx.recommender.language)
     result.suppress_logging = True
+    result.resurfaced = True
 
 
 _TOOLS = {
