@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecommendationItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
@@ -22,6 +22,7 @@ export function PosterCard({
 }): React.JSX.Element {
   const { t } = useTranslation("title");
   const profileId = useProfileId();
+  const swingHelpId = useId(); // unique per card so each swing badge describes its own help text
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   // Local removal: the card leaves its row on "not interested" but stays in place as an undo slot,
@@ -97,9 +98,21 @@ export function PosterCard({
           style={showPoster ? undefined : { background: posterTint(item.titleId) }}
         >
           {item.isSwing && (
-            <span className={styles.swingBadge} data-testid="swing-badge">
-              {t("badge.swing")}
-            </span>
+            <>
+              {/* The badge is unlabelled without this: a "swing" means nothing until you're told it's
+                  a deliberate stretch. `title` gives the hover tooltip, aria-describedby the a11y one. */}
+              <span
+                className={styles.swingBadge}
+                data-testid="swing-badge"
+                title={t("badge.swingHelp")}
+                aria-describedby={swingHelpId}
+              >
+                {t("badge.swing")}
+              </span>
+              <span id={swingHelpId} className="sr-only" data-testid="swing-help">
+                {t("badge.swingHelp")}
+              </span>
+            </>
           )}
           {item.watched && (
             <span className={styles.watchedBadge} data-testid="watched-badge">
