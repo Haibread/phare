@@ -41,9 +41,10 @@ execution → reply`
   always leave an out", made deterministic rather than trusted to the model.
 - **Chat slate ordering.** Unlike the Browse rows, chat recommendations use a **vote-count mix**
   instead of reserved swing slots: the slate is composed as ~50% well-known / ~35% lesser-known /
-  ~15% low-vote (TMDB rating count tiers), then ordered most-voted-first. So chat reads as a
-  sensible "best-known first" list with a small discovery tail, rather than a similarity ranking
-  that surfaces obscure trending titles. Vote counts come from the catalog import.
+  ~15% low-vote (TMDB rating count tiers) — the mix decides *which* titles make the slate — then
+  ordered by **score (relevance), not by votes**, so the most relevant pick leads while the slate
+  still spans a range of known-ness. (Ordering by votes buried the best match at the bottom of the
+  strip; that was review finding A1.) Vote counts come from the catalog import.
 - **Recent conversation** — the planner and the composer both receive the last few turns of the
   chat so a turn isn't a cold start: references resolve ("even shorter" knows what it's shortening)
   and the reply builds on what was said instead of re-pitching the same titles. It's **short-term,

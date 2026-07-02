@@ -3,7 +3,7 @@
 Takes vector-similar candidates + the effective taste profile and produces an ordered slate:
 
 1. **Score** = similarity x taste-affinity, minus a popularity penalty (anti-degeneracy: don't
-   let blockbusters dominate).
+   let blockbusters dominate) and a quality penalty (hold back poorly-rated titles).
 2. **Diversity** = greedy MMR over genres so a slate isn't five of the same thing.
 3. **Swing slots** = a reserved few high-novelty picks, deliberately *not* chosen for accuracy
    (design.md: discovery is the point; pure accuracy yields a popularity machine).
@@ -20,18 +20,23 @@ from typing import Any
 from phare.recommend.schema import Candidate, Recommendation
 
 # Scoring weights. Similarity leads; affinity steers; popularity is a mild penalty (a cap, not a
-# boost — popularity must never be the thing that wins).
+# boost — popularity must never be the thing that wins); quality gently demotes poorly-rated titles.
 _W_SIMILARITY = 1.0
 _W_AFFINITY = 0.6
 _W_POPULARITY = 0.3
+_W_QUALITY = 0.2
 # Popularity at/above this counts as "blockbuster" and takes the full penalty.
 _POPULARITY_CAP = 80.0
+# TMDB mean rating below this takes a proportional quality penalty (0 at the floor, full at 0/10).
+# A floor, not a boost: a well-rated title is never *rewarded*, a badly-rated one is just held back.
+_QUALITY_FLOOR = 6.0
 # How hard genre repetition is punished during MMR selection.
 _DIVERSITY_LAMBDA = 0.5
 
 # Chat slate composition by vote count (how well-known a title is — TMDB rating count). This is a
 # deliberate *mix*, not a popularity ranking: ~half well-known, ~a third lesser-known, ~15% low-vote
-# for genuine discovery. The slate is then ordered most-voted-first (the chat UI's "rank by votes").
+# for genuine discovery. The mix controls *which* titles make the slate; the slate is then ordered
+# by score — relevance first, never by votes (which would bury the best match under the best-known).
 _POPULAR_VOTE_FLOOR = 2000  # at/above this a title is "well-known"
 _LOWVOTE_CEILING = 300  # below this it's "low-vote / discovery"
 _VOTE_MIX = (0.50, 0.35, 0.15)  # well-known, lesser-known, low-vote
@@ -61,7 +66,11 @@ def _select_vote_mix(
     scored: list[tuple[float, Candidate, dict[str, float]]], k: int
 ) -> list[tuple[float, Candidate, dict[str, float]]]:
     """Compose a slate of up to ``k`` as the ``_VOTE_MIX`` of well-known / lesser-known / low-vote,
-    best-scored within each tier, backfilled when a tier is short, then ordered by vote count."""
+    best-scored within each tier, backfilled when a tier is short, then ordered by score desc.
+
+    The vote mix decides *membership* (a deliberate spread of known-ness); ordering is by score, so
+    the most *relevant* pick leads — not the most-voted one (review A1: popularity was burying the
+    best match at the bottom of the strip)."""
     buckets: dict[int, list[tuple[float, Candidate, dict[str, float]]]] = {0: [], 1: [], 2: []}
     for item in scored:  # scored is already sorted by score desc, so each bucket is too
         buckets[_vote_tier(item[1])].append(item)
@@ -77,7 +86,7 @@ def _select_vote_mix(
                 chosen_ids.add(item[1].title_id)
                 if len(chosen) >= k:
                     break
-    chosen.sort(key=lambda item: item[1].vote_count or 0, reverse=True)  # rank by votes
+    chosen.sort(key=lambda item: item[0], reverse=True)  # rank by score (relevance), not votes
     return chosen[:k]
 
 
@@ -99,6 +108,13 @@ def _popularity_penalty(candidate: Candidate) -> float:
     return min(max(candidate.popularity, 0.0), _POPULARITY_CAP) / _POPULARITY_CAP
 
 
+def _quality_penalty(candidate: Candidate) -> float:
+    """0 for a title rated at/above the floor, up to 1 for a 0/10. Unknown rating → 0 (no guess)."""
+    if candidate.vote_average is None:
+        return 0.0
+    return max(0.0, (_QUALITY_FLOOR - candidate.vote_average) / _QUALITY_FLOOR)
+
+
 def score_candidate(
     candidate: Candidate, taste: Mapping[str, Any]
 ) -> tuple[float, dict[str, float]]:
@@ -107,11 +123,18 @@ def score_candidate(
     affinity = _affinity_score(candidate, taste.get("affinities", {}) or {})
     affinity_norm = (affinity + 1.0) / 2.0  # [-1,1] -> [0,1], 0.5 = neutral
     pop_penalty = _popularity_penalty(candidate)
-    score = _W_SIMILARITY * sim_norm + _W_AFFINITY * affinity_norm - _W_POPULARITY * pop_penalty
+    quality_penalty = _quality_penalty(candidate)
+    score = (
+        _W_SIMILARITY * sim_norm
+        + _W_AFFINITY * affinity_norm
+        - _W_POPULARITY * pop_penalty
+        - _W_QUALITY * quality_penalty
+    )
     components = {
         "similarity": round(sim_norm, 4),
         "affinity": round(affinity_norm, 4),
         "popularity_penalty": round(pop_penalty, 4),
+        "quality_penalty": round(quality_penalty, 4),
         "score": round(score, 4),
     }
     return score, components
@@ -181,8 +204,8 @@ def rerank(
     """Order candidates into a slate of up to ``k``, reserving ``swing_slots`` novelty picks.
 
     ``vote_mix=True`` (the chat path) ignores swing slots and instead composes a deliberate mix by
-    vote count — ~50/35/15 well-known / lesser-known / low-vote — ordered most-voted-first, so the
-    chat slate reads like a sensible "best known first" list with a discovery tail.
+    vote count — ~50/35/15 well-known / lesser-known / low-vote — ordered by score, so the chat
+    slate leads with the most *relevant* pick while still spanning a range of known-ness.
     """
     if not candidates:
         return []

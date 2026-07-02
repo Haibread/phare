@@ -20,6 +20,7 @@ def _cand(
     keywords: list[str] | None = None,
     popularity: float | None = None,
     vote_count: int | None = None,
+    vote_average: float | None = None,
 ) -> Candidate:
     return Candidate(
         title_id=uuid.uuid4(),
@@ -31,6 +32,7 @@ def _cand(
         runtime_minutes=120,
         popularity=popularity,
         vote_count=vote_count,
+        vote_average=vote_average,
         overview=None,
         similarity=sim,
     )
@@ -110,7 +112,13 @@ def test_empty_candidates() -> None:
 
 def test_score_components_are_transparent() -> None:
     score, components = score_candidate(_cand(title="t", sim=0.0, popularity=40.0), {})
-    assert set(components) == {"similarity", "affinity", "popularity_penalty", "score"}
+    assert set(components) == {
+        "similarity",
+        "affinity",
+        "popularity_penalty",
+        "quality_penalty",
+        "score",
+    }
     assert components["similarity"] == 0.5  # sim 0.0 -> normalised 0.5
     assert components["popularity_penalty"] == 0.5  # 40 / cap(80)
 
@@ -118,15 +126,33 @@ def test_score_components_are_transparent() -> None:
 # --- vote-mix (the chat slate): mix by vote count, ordered most-voted-first ------------------
 
 
-def test_vote_mix_orders_the_slate_by_vote_count() -> None:
+def test_vote_mix_orders_the_slate_by_score_not_votes() -> None:
+    # The vote mix picks *which* titles are on the slate (a spread of known-ness); ordering is by
+    # score, so the best match leads even when it's the least-voted (review A1: votes were burying
+    # the strongest pick at the bottom of the strip).
     cands = [
         _cand(title="obscure", sim=0.9, vote_count=50),
         _cand(title="megahit", sim=0.1, vote_count=30_000),
         _cand(title="midsize", sim=0.5, vote_count=900),
     ]
     out = rerank(cands, {}, k=3, vote_mix=True)
-    # Despite "obscure" having the best similarity, the slate reads most-voted-first.
-    assert [r.title for r in out] == ["megahit", "midsize", "obscure"]
+    # Score = (sim+1)/2 with no penalties → obscure 0.95 > midsize 0.75 > megahit 0.55.
+    assert [r.title for r in out] == ["obscure", "midsize", "megahit"]
+
+
+def test_quality_penalty_demotes_poorly_rated_title() -> None:
+    # Two equally-similar, equally-obscure titles; the badly-rated one is held back below the
+    # well-rated one. A floor, not a boost — vote_average never *lifts* a title above its peers.
+    good = _cand(title="Acclaimed", sim=0.4, genres=["Drama"], vote_average=7.5)
+    bad = _cand(title="Panned", sim=0.4, genres=["Drama"], vote_average=4.0)
+    recs = rerank([bad, good], {}, k=2, swing_slots=0)
+    assert recs[0].title == "Acclaimed"
+
+
+def test_quality_penalty_is_zero_without_a_rating() -> None:
+    # No vote_average → no penalty at all (never guess a title is bad because TMDB is silent).
+    _, components = score_candidate(_cand(title="t", sim=0.4), {})
+    assert components["quality_penalty"] == 0.0
 
 
 def test_vote_mix_composes_a_mix_not_just_the_most_popular() -> None:

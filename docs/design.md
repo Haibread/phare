@@ -11,7 +11,8 @@ filters) → re-ranker → explanations (LLM)`.
 - **Candidate generation:** vector search around the taste vector + hard filters (exclude
   watched, apply hard-avoids, apply chat intent filters).
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
-  **recency-decayed** taste, then **anti-degeneracy**: cap popularity, enforce diversity,
+  **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
+  (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
   guarantee catalog coverage over time.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.

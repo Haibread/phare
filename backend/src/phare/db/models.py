@@ -96,6 +96,10 @@ class Title(Base):
     popularity: Mapped[float | None] = mapped_column(Float)
     # TMDB rating count — proxy for how well-known a title is; used to tier chat recommendations.
     vote_count: Mapped[int | None] = mapped_column(Integer)
+    # TMDB mean rating in [0, 10] — a crude quality floor the re-ranker penalises below (a
+    # well-known but poorly-rated title shouldn't lead a slate). Distinct from vote_count (how
+    # *many* rated, not how *well*). Nullable: filled by import/refresh, never guessed.
+    vote_average: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

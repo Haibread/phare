@@ -97,6 +97,7 @@ def generate_candidates(
                 runtime_minutes=title.runtime_minutes,
                 popularity=title.popularity,
                 vote_count=title.vote_count,
+                vote_average=title.vote_average,
                 overview=title.overview,
                 poster_path=title.poster_path,
                 similarity=1.0 - float(dist),

@@ -21,6 +21,7 @@ class Candidate(BaseModel):
     runtime_minutes: int | None
     popularity: float | None
     vote_count: int | None = None  # TMDB rating count — proxy for how well-known a title is
+    vote_average: float | None = None  # TMDB mean rating [0, 10] — the re-ranker's quality floor
     overview: str | None
     poster_path: str | None = None
     similarity: float  # cosine similarity to the taste centroid, in [-1, 1]
