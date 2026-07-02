@@ -36,8 +36,11 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 
 Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
 chip (never a number — see *honesty over engagement*). Only `you_might_like` derives it from the
-taste-vector match; the heuristic rows expose an honest signal of their *own* kind, not a fake
-taste score:
+taste-vector match — and from the pick's **pool-relative** similarity (where it sits among that
+query's candidates), not the raw cosine, which is compressed near the top and would read "strong
+fit" for everything (review H2/A8). A lightly-evidenced taste profile also *caps* the chip, so a
+thin history can't produce a blanket "strong fit". The heuristic rows expose an honest signal of
+their *own* kind, not a fake taste score:
 
 - `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally
   your top-rated titles, sorted best-first.

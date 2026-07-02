@@ -85,10 +85,11 @@ def test_popularity_penalty_demotes_blockbuster() -> None:
 
 
 def test_diversity_breaks_single_genre_dominance() -> None:
-    # Five high-similarity dramas + one slightly-lower comedy. A pure score sort would bury the
-    # comedy; MMR must surface it into a 3-slot slate.
+    # Five dramas + one comedy of competitive (not pool-minimum) similarity. A pure score sort would
+    # bury the comedy under the drama pile; MMR must surface it into a 3-slot slate. (Sims sit in a
+    # tight band so the comedy is a real contender once placed relative to the pool — H2.)
     dramas = [_cand(title=f"Drama{i}", sim=0.6 - i * 0.01, genres=["Drama"]) for i in range(5)]
-    comedy = _cand(title="Comedy", sim=0.5, genres=["Comedy"])
+    comedy = _cand(title="Comedy", sim=0.59, genres=["Comedy"])
     recs = rerank([*dramas, comedy], {}, k=3, swing_slots=0)
     assert "Comedy" in [r.title for r in recs]
 
@@ -117,12 +118,56 @@ def test_confidence_reflects_affinity_spread() -> None:
     assert (recs["Liked"].confidence or 0) > (recs["Offaxis"].confidence or 0)
 
 
-def test_confidence_is_similarity_only_without_taste() -> None:
-    # With no taste profile, affinity carries no signal — confidence shouldn't be dragged toward
-    # neutral; it stays the pure similarity read.
-    cand = _cand(title="t", sim=0.6, genres=["Drama"])
-    (rec,) = rerank([cand], {}, k=1, swing_slots=0)
-    assert rec.confidence == round((0.6 + 1.0) / 2.0, 3)
+def test_confidence_tracks_relative_similarity_without_taste() -> None:
+    # With no taste profile, affinity carries no signal — confidence is the *pool-relative* sim
+    # read (H2/A8), so picks separate into different buckets instead of all reading one label.
+    cands = [_cand(title=f"t{i}", sim=s, genres=["Drama"]) for i, s in enumerate([0.9, 0.5, 0.1])]
+    recs = {r.title: r for r in rerank(cands, {}, k=3, swing_slots=0)}
+    assert (
+        (recs["t0"].confidence or 0) > (recs["t1"].confidence or 0) > (recs["t2"].confidence or 0)
+    )
+
+
+def test_similarity_is_normalized_relative_to_pool() -> None:
+    # H2: compressed cosines (0.75..0.84) barely move on the absolute scale, so scoring off them
+    # makes everything look equally good. Placed relative to the pool, they spread across [0,1]. The
+    # raw absolute value stays in components["similarity"]; ["similarity_rel"] is what scores.
+    sims = [0.75, 0.78, 0.80, 0.82, 0.84]
+    cands = [_cand(title=f"t{i}", sim=s) for i, s in enumerate(sims)]
+    recs = rerank(cands, {}, k=5, swing_slots=0)
+    rels = sorted(r.components["similarity_rel"] for r in recs)
+    assert rels[0] < 0.4 and rels[-1] > 0.6  # genuinely spread, not a flat 0.87..0.92
+    assert all({"similarity", "similarity_rel"} <= set(r.components) for r in recs)
+
+
+def test_relative_similarity_is_neutral_for_tiny_or_flat_pool() -> None:
+    # Nothing to normalise against → neutral 0.5 for all (never invent a spread).
+    two = rerank([_cand(title="a", sim=0.9), _cand(title="b", sim=0.1)], {}, k=2, swing_slots=0)
+    assert all(r.components["similarity_rel"] == 0.5 for r in two)  # pool < 3
+    flat = rerank([_cand(title=f"t{i}", sim=0.8) for i in range(4)], {}, k=4, swing_slots=0)
+    assert all(r.components["similarity_rel"] == 0.5 for r in flat)  # zero spread
+
+
+def test_confidence_capped_by_thin_history() -> None:
+    # A8: a barely-evidenced profile (taste confidence 0.2) can't emit "strong fit" for anything —
+    # output confidence is capped at 0.35 + 0.65*0.2 = 0.48, even for a top-of-pool, on-genre pick.
+    taste = {"affinities": {"Drama": 1.0}, "confidence": 0.2}
+    cands = [_cand(title=f"t{i}", sim=s, genres=["Drama"]) for i, s in enumerate([0.95, 0.5, 0.2])]
+    recs = rerank(cands, taste, k=3, swing_slots=0)
+    assert all((r.confidence or 0) <= 0.48 for r in recs)
+
+
+def test_confidence_distribution_spans_multiple_buckets() -> None:
+    # A8/H2: confidence used to read one label for the whole slate. With pool-relative similarity it
+    # spreads. Bucket by the frontend thresholds (fit.ts: >=0.66 strong, >=0.4 mid, else low).
+    cands = [
+        _cand(title=f"t{i}", sim=s, genres=["Drama"]) for i, s in enumerate([0.9, 0.6, 0.3, 0.1])
+    ]
+    recs = rerank(cands, {}, k=4, swing_slots=0)
+    buckets = {
+        2 if (r.confidence or 0) >= 0.66 else 1 if (r.confidence or 0) >= 0.4 else 0 for r in recs
+    }
+    assert len(buckets) >= 2
 
 
 def test_swing_slots_clamped_to_available() -> None:
@@ -138,6 +183,7 @@ def test_score_components_are_transparent() -> None:
     score, components = score_candidate(_cand(title="t", sim=0.0, popularity=40.0), {})
     assert set(components) == {
         "similarity",
+        "similarity_rel",
         "affinity",
         "popularity_penalty",
         "quality_penalty",

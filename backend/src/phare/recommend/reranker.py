@@ -34,6 +34,16 @@ _QUALITY_FLOOR = 6.0
 # How hard genre repetition is punished during MMR selection.
 _DIVERSITY_LAMBDA = 0.5
 
+# Per-query similarity normalization. Raw cosines from a general embedder are compressed near the
+# top (a real 0.75–0.84 spread reads as a flat 0.87–0.92 after (sim+1)/2), so scoring and confidence
+# off the absolute value make everything look equally good (review H2/A8). Instead, place each
+# candidate *relative to its pool*: sim_rel = clamp01(0.5 + (sim - mean) / (SPREAD * std)). SPREAD=4
+# maps ~±2σ onto [0,1], so the spread of a query's candidates fills the scale.
+_SIM_REL_SPREAD = 4.0
+# Confidence floor factor: a lightly-evidenced taste profile can't yield a blanket "strong fit".
+# With taste confidence c, output confidence is capped at _CONF_FLOOR + (1 - _CONF_FLOOR) * c.
+_CONF_FLOOR = 0.35
+
 # Chat slate composition by vote count (how well-known a title is — TMDB rating count). This is a
 # deliberate *mix*, not a popularity ranking: ~half well-known, ~a third lesser-known, ~15% low-vote
 # for genuine discovery. The mix controls *which* titles make the slate; the slate is then ordered
@@ -122,23 +132,46 @@ def _quality_penalty(candidate: Candidate) -> float:
     return max(0.0, (_QUALITY_FLOOR - candidate.vote_average) / _QUALITY_FLOOR)
 
 
+def _relative_similarities(sims: Sequence[float]) -> list[float]:
+    """Place each raw similarity relative to its pool: ``clamp01(0.5 + (sim-mean)/(SPREAD*std))``.
+
+    Neutral fallback (0.5 for all) when there's nothing to normalise against: a pool smaller than 3,
+    or a near-zero spread (every candidate equally similar). Pure — depends only on the pool passed.
+    """
+    n = len(sims)
+    if n < 3:
+        return [0.5] * n
+    mean = sum(sims) / n
+    std = (sum((s - mean) ** 2 for s in sims) / n) ** 0.5
+    if std < 1e-6:
+        return [0.5] * n
+    return [max(0.0, min(1.0, 0.5 + (s - mean) / (_SIM_REL_SPREAD * std))) for s in sims]
+
+
 def score_candidate(
-    candidate: Candidate, taste: Mapping[str, Any]
+    candidate: Candidate, taste: Mapping[str, Any], *, sim_rel: float | None = None
 ) -> tuple[float, dict[str, float]]:
-    """Deterministic score + a transparent component breakdown."""
-    sim_norm = (candidate.similarity + 1.0) / 2.0  # cosine [-1,1] -> [0,1]
+    """Deterministic score + a transparent component breakdown.
+
+    ``sim_rel`` is the candidate's pool-relative similarity (see :func:`_relative_similarities`); it
+    is what scores, so a query's spread of candidates actually separates. When omitted (a lone
+    candidate scored outside a pool) it falls back to the absolute normalised similarity.
+    """
+    sim_norm = (candidate.similarity + 1.0) / 2.0  # cosine [-1,1] -> [0,1], absolute
+    sim_effective = sim_norm if sim_rel is None else sim_rel
     affinity = _affinity_score(candidate, taste.get("affinities", {}) or {})
     affinity_norm = (affinity + 1.0) / 2.0  # [-1,1] -> [0,1], 0.5 = neutral
     pop_penalty = _popularity_penalty(candidate)
     quality_penalty = _quality_penalty(candidate)
     score = (
-        _W_SIMILARITY * sim_norm
+        _W_SIMILARITY * sim_effective
         + _W_AFFINITY * affinity_norm
         - _W_POPULARITY * pop_penalty
         - _W_QUALITY * quality_penalty
     )
     components = {
-        "similarity": round(sim_norm, 4),
+        "similarity": round(sim_norm, 4),  # absolute (kept for existing readers of the breakdown)
+        "similarity_rel": round(sim_effective, 4),  # pool-relative — this is what scores now
         "affinity": round(affinity_norm, 4),
         "popularity_penalty": round(pop_penalty, 4),
         "quality_penalty": round(quality_penalty, 4),
@@ -174,27 +207,30 @@ def _select_diverse(
 
 
 def _confidence(
-    candidate: Candidate, taste: Mapping[str, Any], *, is_swing: bool, affinity_norm: float
+    taste: Mapping[str, Any], *, is_swing: bool, sim_rel: float, affinity_norm: float
 ) -> float:
     """Honest confidence, blending the signals we actually have:
 
-    - **similarity** — does it look like what they watch;
+    - **relative similarity** — where this pick sits *within its pool*, not an absolute cosine
+      (compressed near the top, so it reads "strong fit" for everything — review H2/A8);
     - **affinity** — does it hit a genre they like (the *steering* signal); folding this in is what
-      stops a whole row collapsing to one label, since affinity varies title-to-title while raw
-      similarity barely does. Only counted when a taste profile exists — with none, similarity is
-      all we honestly have, so we don't drag every pick toward neutral;
+      stops a whole row collapsing to one label, since affinity varies title-to-title. Only counted
+      when a taste profile exists — with none, similarity is all we honestly have, so we don't drag
+      every pick toward neutral;
     - **taste confidence** — how much history backs the profile at all.
 
-    Swings hedge low regardless: a reserved discovery pick is a deliberate gamble, and says so.
+    A thin taste profile also *caps* the result: a barely-evidenced profile can't emit a blanket
+    "strong fit" (A8). Swings hedge low regardless — a reserved discovery pick is a deliberate bet.
     """
-    sim_norm = (candidate.similarity + 1.0) / 2.0
-    signals = [sim_norm]
+    signals = [sim_rel]
     if taste.get("affinities"):
         signals.append(affinity_norm)
     taste_conf = taste.get("confidence")
     if taste_conf is not None:
         signals.append(float(taste_conf))
     base = sum(signals) / len(signals)
+    if taste_conf is not None:  # a lightly-evidenced profile can't claim high confidence
+        base = min(base, _CONF_FLOOR + (1.0 - _CONF_FLOOR) * float(taste_conf))
     if is_swing:
         base *= 0.5
     return round(max(0.0, min(1.0, base)), 3)
@@ -217,9 +253,10 @@ def rerank(
     if not candidates:
         return []
 
+    sim_rels = _relative_similarities([c.similarity for c in candidates])
     scored: list[tuple[float, Candidate, dict[str, float]]] = []
-    for candidate in candidates:
-        score, components = score_candidate(candidate, taste)
+    for candidate, sim_rel in zip(candidates, sim_rels, strict=True):
+        score, components = score_candidate(candidate, taste, sim_rel=sim_rel)
         scored.append((score, candidate, components))
     scored.sort(key=lambda item: item[0], reverse=True)
 
@@ -265,7 +302,10 @@ def _to_rec(
         score=round(score, 4),
         is_swing=is_swing,
         confidence=_confidence(
-            candidate, taste, is_swing=is_swing, affinity_norm=components["affinity"]
+            taste,
+            is_swing=is_swing,
+            sim_rel=components["similarity_rel"],
+            affinity_norm=components["affinity"],
         ),
         poster_path=candidate.poster_path,
         components=components,
