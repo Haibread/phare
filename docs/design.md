@@ -9,7 +9,9 @@ filters) → re-ranker → explanations (LLM)`.
   signals others throw away: **abandonment, low ratings, rewatches, free-text feedback** — into
   a structured taste profile.
 - **Candidate generation:** vector search around the taste vector + hard filters (exclude
-  watched, apply hard-avoids, apply chat intent filters).
+  watched, apply hard-avoids, apply chat intent filters). The pgvector HNSW index is *approximate*,
+  so the search widens `hnsw.ef_search` and breaks distance ties on the stable catalog id — the
+  same profile gets the same candidates every load, keeping the re-ranker below deterministic.
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,

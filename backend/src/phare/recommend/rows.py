@@ -132,7 +132,7 @@ def watch_again_row(
             (best_rating >= 7.0)
             | func.bool_or(WatchEvent.type.in_([EventType.liked, EventType.rewatched]))
         )
-        .order_by(best_rating.desc().nulls_last())
+        .order_by(best_rating.desc().nulls_last(), Title.tmdb_id.asc().nulls_last(), Title.id)
         .limit(limit)
     ).all()
     items = [
@@ -162,7 +162,7 @@ def popular_row(
     rows = session.scalars(
         select(Title)
         .where(Title.id.notin_(watched), Title.popularity.isnot(None))
-        .order_by(Title.popularity.desc())
+        .order_by(Title.popularity.desc(), Title.tmdb_id.asc().nulls_last(), Title.id)
         .limit(limit)
     ).all()
     items = [
@@ -196,7 +196,7 @@ def continue_watching_row(
             Title.kind == TitleKind.show,
         )
         .group_by(Title.id)
-        .order_by(last_activity.desc().nulls_last())
+        .order_by(last_activity.desc().nulls_last(), Title.tmdb_id.asc().nulls_last(), Title.id)
         .limit(limit)
     ).all()
     now = datetime.now(UTC)
