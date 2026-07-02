@@ -63,6 +63,10 @@ execution → reply`
   prose. The runtime ceiling lives only in the intent and never reaches the transcript, so without
   this "even shorter" can't tighten below the prior cap — the planner re-emits the full refined
   recommend args, carrying over what still applies and adjusting only what the message changed.
+- **Mood biases retrieval** — an ephemeral mood ("slow-burn", "something cosy") isn't just a label:
+  when a real embedder is configured, the mood text is embedded once and blended (gently) into the
+  taste centroid, so retrieval leans toward it while taste still leads ("LLM steers, embeddings
+  rank" — review A4). Skipped on the offline hash embedder, where the vectors carry no meaning.
 - **Reply** is written by the model (natural language), grounded in what the tools actually did —
   it never invents titles. Falls back to a deterministic template if the model call fails. When a
   turn produces **no picks and no actions** (e.g. an empty candidate pool), the model is skipped

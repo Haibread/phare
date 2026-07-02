@@ -97,6 +97,9 @@ class FakeLLMProvider:
         self.completion = completion
         self.complete_delay = complete_delay
         self.embed_calls = 0
+        # Records each embed() call's input texts, so retrieval tests can assert a chat mood
+        # actually reached the embedding query (review A4).
+        self.embed_inputs: list[list[str]] = []
         self.prompts: list[str] = []
         # Records the ``max_tokens`` passed to each complete/stream call, so cost-cap tests can
         # assert the call sites actually bound the response length.
@@ -124,6 +127,7 @@ class FakeLLMProvider:
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         self.embed_calls += 1
+        self.embed_inputs.append(list(texts))
         return [self._vector(text) for text in texts]
 
     def _vector(self, text: str) -> list[float]:

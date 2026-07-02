@@ -189,6 +189,8 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         rewatch=intent.rewatch,
         vote_mix=True,  # chat slates mix well-known/lesser-known/low-vote, ordered by votes
         explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
+        # Ephemeral mood ("slow-burn", "something cosy") nudges retrieval toward it (review A4).
+        mood=intent.mood,
         # Only on a runtime-capped turn: backfill the pool's missing runtimes from TMDB so the cap
         # can actually filter (the broad import omits runtime). No-op without a metadata provider.
         runtime_source=ctx.metadata if intent.max_runtime is not None else None,

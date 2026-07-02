@@ -359,3 +359,39 @@ def test_home_rows_latency_is_bounded_by_budget(
 
     assert len(llm.prompts) <= 3
     assert elapsed < 0.5  # ~3 * 10ms of LLM time + DB work — not item-count * 10ms
+
+
+def test_mood_biases_the_embedding_query(db_session: Session) -> None:
+    # A4: an ephemeral chat mood must actually reach retrieval. It's embedded and blended into the
+    # taste centroid (one embed call, no completion) — so the mood text shows up as an embed input.
+    profile_id = _seeded_profile(db_session)
+    fake = FakeLLMProvider()
+    service = RecommendationService(
+        db_session, embed_provider=fake, embed_model_version="test-embed-v1", chat_llm=None
+    )
+    service.ensure_embeddings()  # embed the catalog under the (non-local) test version
+
+    base = len(fake.embed_inputs)
+    service.recommend(profile_id, mood="slow-burn atmospheric sci-fi", vote_mix=True)
+    embedded = [text for call in fake.embed_inputs[base:] for text in call]
+    assert "slow-burn atmospheric sci-fi" in embedded  # the mood reached the embedding query
+
+    base2 = len(fake.embed_inputs)
+    service.recommend(profile_id, vote_mix=True)  # same turn, no mood
+    embedded2 = [text for call in fake.embed_inputs[base2:] for text in call]
+    assert "slow-burn atmospheric sci-fi" not in embedded2  # unchanged without a mood
+
+
+def test_mood_is_ignored_on_the_local_hash_embedder(db_session: Session) -> None:
+    # Offline (local hash) vectors carry no meaning, so blending a mood would only add noise — skip
+    # it. (Fake embedder pinned to the local version so we can inspect its inputs.)
+    profile_id = _seeded_profile(db_session)
+    fake = FakeLLMProvider()
+    service = RecommendationService(
+        db_session, embed_provider=fake, embed_model_version=LOCAL_MODEL_VERSION, chat_llm=None
+    )
+    service.ensure_embeddings()
+    base = len(fake.embed_inputs)
+    service.recommend(profile_id, mood="something cosy", vote_mix=True)
+    embedded = [text for call in fake.embed_inputs[base:] for text in call]
+    assert "something cosy" not in embedded  # guarded off on the local-hash version

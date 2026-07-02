@@ -8,6 +8,7 @@ and the chat agent — the chat agent just passes an extra candidate filter for 
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -15,9 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import TasteProfile, Title, TitleEmbedding
 from phare.embeddings.service import EmbeddingService
+from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider, MetadataProvider
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
@@ -31,6 +34,23 @@ from phare.taste.service import effective_profile
 logger = logging.getLogger(__name__)
 
 CandidateFilter = Callable[[list[Candidate]], list[Candidate]]
+
+# How far a chat mood pulls the taste centroid toward the mood text's embedding (0 = ignore mood,
+# 1 = ignore taste). A gentle nudge: taste still leads, the mood colours it (review A4).
+_MOOD_WEIGHT = 0.3
+
+
+def _unit(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(x * x for x in vector)) or 1.0
+    return [x / norm for x in vector]
+
+
+def _blend_direction(a: list[float], b: list[float], weight: float) -> list[float]:
+    """Blend two vectors' *directions* — magnitude-agnostic, since candidate ranking is by cosine.
+    Result points ``(1-weight)`` toward ``a`` and ``weight`` toward ``b``."""
+    ua, ub = _unit(a), _unit(b)
+    return [(1.0 - weight) * x + weight * y for x, y in zip(ua, ub, strict=True)]
+
 
 # Read-path embedding cap. The authoritative embed path is POST /catalog/embed (unbounded); the
 # lazy read-path top-up must stay bounded so a fresh import can't make the first request embed the
@@ -133,6 +153,21 @@ class RecommendationService:
             for c in candidates
         ]
 
+    def _bias_toward_mood(self, centroid: list[float], mood: str) -> list[float]:
+        """Nudge the taste centroid toward a chat mood by blending in the mood text's embedding
+        direction — the cheap "LLM steers, embeddings rank" hook for an ephemeral mood (review A4).
+        One embedding call, no extra completion. Skipped on the local hash embedder (its vectors
+        carry no meaning, so the blend would only add noise) and if the embed call fails.
+        """
+        if self.embed_model_version == LOCAL_MODEL_VERSION:
+            return centroid
+        try:
+            mood_vec = self.embed_provider.embed([mood])[0]
+        except Exception:  # noqa: BLE001 - a mood-embed hiccup must not sink the recommend turn
+            record_fallback("mood_bias", "embed_error")
+            return centroid
+        return _blend_direction(centroid, [float(x) for x in mood_vec], _MOOD_WEIGHT)
+
     def _centroid(self, profile_id: uuid.UUID) -> list[float] | None:
         """Memoized taste centroid for this request."""
         if profile_id not in self._centroid_cache:
@@ -177,6 +212,7 @@ class RecommendationService:
         explain_with_llm: bool = True,
         explainer: Explainer | None = None,
         runtime_source: MetadataProvider | None = None,
+        mood: str | None = None,
     ) -> list[Recommendation]:
         """Shared pipeline: centroid -> candidates -> (filter) -> rerank -> explain.
 
@@ -191,6 +227,8 @@ class RecommendationService:
         centroid = self._centroid(profile_id)
         if centroid is None:
             return []
+        if mood:
+            centroid = self._bias_toward_mood(centroid, mood)
 
         avoids = [*(taste.get("hard_avoids") or []), *extra_hard_avoids]
         k = k if k is not None else self.row_size
