@@ -23,7 +23,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     # Idempotent so a re-run (or a DB already carrying the value) is a no-op. Adding a value to an
-    # enum is allowed inside Alembic's transaction as long as the value isn't *used* in the same one.
+    # enum is fine inside Alembic's transaction, as long as the value isn't *used* in that same one.
     op.execute("ALTER TYPE event_type ADD VALUE IF NOT EXISTS 'not_interested'")
 
 
