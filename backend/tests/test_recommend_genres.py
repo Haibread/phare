@@ -51,6 +51,13 @@ def test_unrelated_terms_do_not_match() -> None:
     assert not genres.term_matches("comedy", "Horror")
 
 
+def test_in_vocabulary_covers_free_taste_keys() -> None:
+    # The closed vocabulary the taste extractor draws from — genre names + tone descriptors.
+    assert genres.in_vocabulary("Science Fiction")
+    assert genres.in_vocabulary("Mind-bending Sci-Fi")  # resolves to the "mind-bending" descriptor
+    assert not genres.in_vocabulary("Underwater Basket Weaving")
+
+
 # --- the planner-path filter (this is the path A2 broke: it never normalized) -------------------
 
 

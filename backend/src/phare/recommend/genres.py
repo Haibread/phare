@@ -73,10 +73,79 @@ _ALIASES.update(
 )
 
 
+# The closed vocabulary the taste extractor is asked to draw affinity/hard-avoid keys from, so they
+# line up with what candidates are actually tagged with (review H1: free keys matched nothing).
+# Genres carry the real steering weight (they match candidate genres); the descriptors are a small
+# controlled tone/era set so a key like "Mind-bending Sci-Fi" still resolves to something known.
+CANONICAL_GENRES: tuple[str, ...] = (
+    "Action",
+    "Adventure",
+    "Animation",
+    "Comedy",
+    "Crime",
+    "Documentary",
+    "Drama",
+    "Family",
+    "Fantasy",
+    "History",
+    "Horror",
+    "Music",
+    "Mystery",
+    "Romance",
+    "Science Fiction",
+    "Thriller",
+    "War",
+    "Western",
+    "Sci-Fi & Fantasy",
+    "War & Politics",
+    "Action & Adventure",
+    "Kids",
+    "Reality",
+)
+AFFINITY_KEYWORDS: tuple[str, ...] = (
+    "slow-burn",
+    "fast-paced",
+    "atmospheric",
+    "cerebral",
+    "mind-bending",
+    "character-driven",
+    "plot-driven",
+    "dark",
+    "feel-good",
+    "violent",
+    "gory",
+    "wholesome",
+    "romantic",
+    "nostalgic",
+    "stylish",
+    "gritty",
+    "epic",
+    "minimalist",
+    "franchise",
+    "blockbuster",
+    "indie",
+    "arthouse",
+    "cult",
+    "prestige",
+    "campy",
+    "psychological",
+    "dystopian",
+    "coming-of-age",
+    "true-story",
+    "ensemble",
+)
+CLOSED_VOCABULARY: tuple[str, ...] = CANONICAL_GENRES + AFFINITY_KEYWORDS
+
+
 def canonical(term: str) -> str:
     """Normalize a genre/term and resolve a known alias to its canonical form (else the norm)."""
     norm = _normalize(term)
     return _ALIASES.get(norm, norm)
+
+
+def in_vocabulary(term: str) -> bool:
+    """True if a taste key resolves to something in the closed vocabulary under the match rule."""
+    return any(term_matches(term, allowed) for allowed in CLOSED_VOCABULARY)
 
 
 def term_matches(term: str, token: str) -> bool:
@@ -108,3 +177,10 @@ def record_genre_filter_fallback(wanted: Sequence[str], catalog_genres: Iterable
         extra={"wanted": list(wanted), "catalog_genres_sample": sample},
     )
     _fallback_counter.add(1, {"component": "genre_filter", "reason": "no_match"})
+
+
+def record_affinity_key_unmatched(key: str) -> None:
+    """A taste affinity/hard-avoid key resolves to nothing in the closed vocabulary — so it can't
+    steer scoring (review H1). Make it visible instead of letting the profile silently go inert."""
+    logger.warning("taste.affinity_key_unmatched", extra={"key": key})
+    _fallback_counter.add(1, {"component": "taste_affinity", "reason": "key_unmatched"})

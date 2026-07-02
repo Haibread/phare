@@ -53,6 +53,30 @@ def test_affinity_reorders_equal_similarity() -> None:
     assert recs[0].title == "Scary"  # positive affinity wins the tie
 
 
+def test_affinity_operant_via_free_key() -> None:
+    # H1: a free affinity key ("Sci-Fi") used to miss the catalog's "Science Fiction" tag on exact
+    # match, leaving affinity flat at neutral (0.5) for everyone. Now it lines up via the matcher.
+    taste: dict[str, Any] = {"affinities": {"Sci-Fi": 0.9}}
+    scifi = _cand(title="Arrival", sim=0.4, genres=["Science Fiction"])
+    comedy = _cand(title="Superbad", sim=0.4, genres=["Comedy"])
+    recs = {r.title: r for r in rerank([scifi, comedy], taste, k=2, swing_slots=0)}
+    assert recs["Arrival"].components["affinity"] > recs["Superbad"].components["affinity"]
+    assert recs["Superbad"].components["affinity"] == 0.5  # no match → neutral, not a false hit
+
+
+def test_affinity_distribution_has_nonzero_variance() -> None:
+    # Anti-regression for H1 (affinity was a constant 0.5 for the whole pool). With a marked profile
+    # over a varied pool, the affinity component must actually vary title-to-title.
+    taste: dict[str, Any] = {"affinities": {"Science Fiction": 0.9, "Horror": -0.6}}
+    pool = [
+        _cand(title="a", sim=0.4, genres=["Science Fiction"]),
+        _cand(title="b", sim=0.4, genres=["Horror"]),
+        _cand(title="c", sim=0.4, genres=["Comedy"]),
+    ]
+    recs = rerank(pool, taste, k=3, swing_slots=0)
+    assert len({r.components["affinity"] for r in recs}) >= 2
+
+
 def test_popularity_penalty_demotes_blockbuster() -> None:
     niche = _cand(title="Indie", sim=0.4, genres=["Drama"], popularity=1.0)
     blockbuster = _cand(title="Blockbuster", sim=0.4, genres=["Action"], popularity=100.0)

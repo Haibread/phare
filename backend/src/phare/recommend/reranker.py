@@ -17,6 +17,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from phare.recommend import genres
 from phare.recommend.schema import Candidate, Recommendation
 
 # Scoring weights. Similarity leads; affinity steers; popularity is a mild penalty (a cap, not a
@@ -91,13 +92,19 @@ def _select_vote_mix(
 
 
 def _affinity_score(candidate: Candidate, affinities: Mapping[str, float]) -> float:
-    """Net taste affinity for a candidate's genres/keywords, clamped to [-1, 1]."""
+    """Net taste affinity for a candidate's genres/keywords, clamped to [-1, 1].
+
+    An affinity key contributes its weight once if it matches *any* of the candidate's tokens under
+    the shared genre-match rule (alias + substring), so free keys like "Sci-Fi" line up with a
+    "Science Fiction" tag instead of scoring 0 on an exact-string miss (review H1)."""
     if not affinities:
         return 0.0
-    lowered = {key.lower(): float(value) for key, value in affinities.items()}
-    total = 0.0
-    for token in (*candidate.genres, *candidate.keywords):
-        total += lowered.get(token.lower(), 0.0)
+    tokens = [*candidate.genres, *candidate.keywords]
+    if not tokens:
+        return 0.0
+    total = sum(
+        float(weight) for key, weight in affinities.items() if genres.matches_any((key,), tokens)
+    )
     return max(-1.0, min(1.0, total))
 
 

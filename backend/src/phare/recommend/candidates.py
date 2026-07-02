@@ -8,7 +8,6 @@ as a hard avoid. Scoring/steering happens later in the re-ranker.
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from collections.abc import Sequence
 
@@ -16,6 +15,7 @@ from sqlalchemy import select, true
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleEmbedding
+from phare.recommend import genres
 from phare.recommend.schema import Candidate
 from phare.recommend.taste_vector import watched_title_ids
 
@@ -25,22 +25,13 @@ logger = logging.getLogger(__name__)
 def _is_hard_avoided(title: Title, avoids: Sequence[str]) -> bool:
     """A title is avoided if any hard-avoid term matches its title, a genre, or a keyword.
 
-    Matched on word boundaries, not raw substrings: avoiding "war" must not also drop "Warrior"
-    or "Steward". Multi-word terms ("true crime") match as a phrase.
+    Uses the shared genre-match rule (:mod:`phare.recommend.genres`): alias-resolved equality, or a
+    substring of length >= 4 either way. So a free avoid like "Mindless franchise sequels" catches a
+    title tagged "franchise" (substring), while "war" still won't drop "Warrior" (< 4 → equality
+    required) — the same rule the taste affinities score by (review H1).
     """
-    haystack = {
-        title.title.lower(),
-        *(g.lower() for g in title.genres),
-        *(k.lower() for k in title.keywords),
-    }
-    for avoid in avoids:
-        needle = avoid.strip().lower()
-        if not needle:
-            continue
-        pattern = re.compile(rf"\b{re.escape(needle)}\b")
-        if any(pattern.search(text) for text in haystack):
-            return True
-    return False
+    tokens = [title.title, *title.genres, *title.keywords]
+    return any(genres.matches_any((avoid,), tokens) for avoid in avoids if avoid.strip())
 
 
 def generate_candidates(

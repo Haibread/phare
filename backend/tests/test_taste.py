@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -45,6 +46,22 @@ def _account_with_history(session: Session) -> User:
     seed_sample_data(session, user.profile.id)
     session.flush()
     return user
+
+
+def test_off_vocabulary_affinity_key_is_flagged(db_session: Session, caplog) -> None:
+    # H1: an affinity key outside the closed vocabulary can't steer scoring. The profile is still
+    # saved (never break on it), but the miss is surfaced instead of going silently inert.
+    profile_id = _profile_with_history(db_session)
+    canned = (
+        '{"summary":"x","likes":[],"dislikes":[],"hard_avoids":[],'
+        '"affinities":{"Underwater Basket Weaving":0.8},'
+        '"comfort_axis":null,"discovery_tolerance":0.5,"confidence":0.6}'
+    )
+    llm = FakeLLMProvider(completion=canned)
+    with caplog.at_level(logging.WARNING):
+        taste = TasteService(db_session, llm, "test-model").generate(profile_id)
+    assert taste.structured["affinities"]["Underwater Basket Weaving"] == 0.8  # saved + valid
+    assert any(r.message == "taste.affinity_key_unmatched" for r in caplog.records)
 
 
 def test_generate_builds_profile(db_session: Session) -> None:

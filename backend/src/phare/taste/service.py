@@ -22,6 +22,7 @@ from phare.db.models import TasteProfile, Title, WatchEvent
 from phare.llm_json import extract_json
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
+from phare.recommend import genres
 from phare.taste.schema import TasteProfileData
 
 logger = logging.getLogger(__name__)
@@ -30,17 +31,30 @@ logger = logging.getLogger(__name__)
 # response so a chatty model can't run up the token bill on it.
 _TASTE_MAX_TOKENS = 700
 
-_PROMPT_HEADER = """You analyze a viewer's watch history and produce a structured taste profile.
+_ALLOWED_GENRES = ", ".join(genres.CANONICAL_GENRES)
+_ALLOWED_KEYWORDS = ", ".join(genres.AFFINITY_KEYWORDS)
+
+# ``affinities`` and ``hard_avoids`` are the keys that actually steer scoring, so they must line up
+# with what catalog titles are tagged with — a free key ("Mind-bending Sci-Fi") matched nothing and
+# left the profile inert (review H1). Constrain them to a closed vocabulary; ``summary`` / ``likes``
+# / ``dislikes`` stay free-form natural language so the displayed profile isn't impoverished.
+_PROMPT_HEADER = f"""You analyze a viewer's watch history and produce a structured taste profile.
 
 Output ONLY a JSON object with these keys:
 - summary: one short paragraph describing their taste, in plain language
-- likes: array of strings (what they gravitate toward)
-- dislikes: array of strings
-- hard_avoids: array of strings (never recommend these)
-- affinities: object mapping genre/keyword/era/tone -> weight in [-1, 1]
+- likes: array of strings (what they gravitate toward), free-form
+- dislikes: array of strings, free-form
+- hard_avoids: array of strings to NEVER recommend — each MUST come from the controlled vocabulary
+- affinities: object mapping a taste dimension -> weight in [-1, 1]. Every key MUST come from the
+  controlled vocabulary below so it lines up with the catalog; prefer genre names (they carry the
+  most weight in scoring).
 - comfort_axis: short string for their comfort/rewatch leanings (or null)
 - discovery_tolerance: number in [0, 1] (appetite for unfamiliar picks)
 - confidence: number in [0, 1] based on how much history is available
+
+Controlled vocabulary for `affinities` keys and `hard_avoids`:
+- genres: {_ALLOWED_GENRES}
+- descriptors: {_ALLOWED_KEYWORDS}
 
 Guidance: weight recent activity more; treat abandoned/low-rated titles as strong negative
 signal and rewatches as comfort signal. Be specific. History (most recent first):
@@ -155,6 +169,12 @@ class TasteService:
                 extra={"profile_id": str(profile_id)},
             )
             data = self._deterministic(profile_id)
+
+        # Flag any affinity key that resolves to nothing in the closed vocabulary — it can't steer
+        # scoring (review H1), so surface it instead of letting the profile quietly go inert.
+        for key in data.affinities:
+            if not genres.in_vocabulary(key):
+                genres.record_affinity_key_unmatched(key)
 
         taste = self.session.scalar(
             select(TasteProfile).where(TasteProfile.profile_id == profile_id)
