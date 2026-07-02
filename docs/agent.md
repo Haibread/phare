@@ -20,7 +20,12 @@ execution → reply`
 - **Tools** ([`agent/tools.py`](../backend/src/phare/agent/tools.py)) — thin wrappers over the
   engine: `recommend`, `explain_picks`, `log_signal`, `set_commitment`, `resolve_commitment`,
   `remember`, `update_taste`. Title references resolve through the catalog search (local + live
-  TMDB). `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
+  TMDB). For a **signal write** (`log_signal` — "I loved Get Out") resolution is disambiguated,
+  because writing onto the wrong title silently corrupts taste: it prefers a title just recommended
+  in this conversation, else the most-voted exact-name match, and if two titles are equally
+  plausible it **writes nothing and asks which one** rather than guessing (review H3b). The confirmed
+  action names the resolved title + year so the reply states exactly what was recorded.
+  `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
   recommendation log — never from the model's memory — so the reply explains the titles actually
   shown; it sets no new picks, so the slate isn't re-logged.
   `recommend` defaults to *new* titles (excludes everything watched); a **rewatch** request ("a
