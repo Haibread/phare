@@ -2,7 +2,13 @@
 
 A compact snapshot of what's built and what's next. Update as features land.
 
-## Built (verified)
+> **"verified" here means covered by a test that asserts the *promised behavior*** — not merely that
+> the code exists and its plumbing tests pass. Several relevance claims below were "built" long
+> before they were verified in that sense; the review lots 1–2 (see the last two bullets) are what
+> closed that gap with alignment/behavior tests. When you add an entry, only call it verified if a
+> test would fail were the behavior to regress.
+
+## Built
 
 - **Backend skeleton** — FastAPI app factory, pydantic-settings config, structured JSON
   logging, OpenTelemetry (traces/metrics/logs over OTLP, auto-off without an endpoint),
@@ -103,12 +109,30 @@ A compact snapshot of what's built and what's next. Update as features land.
   `LLM_REASONING_MODEL` grants reasoning models token headroom (and strips the think block from the
   streamed reply) so the structured paths actually parse. See
   [`configuration.md`](configuration.md#when-a-configured-model-misbehaves).
-- **Recommendation polish** — confidence now folds the taste-affinity (steering) signal in, so a row
-  spreads across fit labels instead of reading as a wall of "Strong fit"; the taste-driven rows
-  (because-you-watched + you-might-like) dedup against each other so the page isn't the same dozen
-  titles repeated; the chat strip drops any title named in the current message ("I loved X" no longer
-  recommends X back); and the sample catalog ships real TMDB poster art (works offline — the image
-  CDN needs no key).
+- **Recommendation polish** — the taste-driven rows (because-you-watched + you-might-like) dedup
+  against each other so the page isn't the same dozen titles repeated; the chat strip drops any title
+  named in the current message ("I loved X" no longer recommends X back); and the sample catalog ships
+  real TMDB poster art (works offline — the image CDN needs no key). *(The confidence-spread work
+  first attempted here was superseded by the per-query normalization in the ranking-core lot below.)*
+- **Ranking core — relevance (review lot 1, verified).** The chat slate is ordered by score, not
+  vote count, with a `vote_average` quality floor (A1); the chat genre filter normalizes free genre
+  words to the catalog vocabulary and signals a no-match (A2/A3); taste affinities/hard-avoids
+  actually steer scoring via a closed vocabulary + shared matcher, no longer a flat 0.5 (H1);
+  similarity is normalized **per query** and confidence is calibrated + capped by a thin history, so
+  a slate spreads across fit labels instead of a wall of "Strong fit" (H2/A8); titles are keyed by
+  `(tmdb_id, kind)` so a movie and a same-id show can't be merged (H3a); and a chat signal
+  disambiguates the title (conversation context → popularity, else ask) before writing (H3b). Locked
+  by alignment tests that assert score order, a free genre key filtering, and non-constant affinity —
+  a regression fails CI (H7/K1).
+- **Honesty & observability (review lot 2, verified).** One `record_fallback` convention emits a
+  structured log + a `phare.fallback{component,reason}` metric on every degrade-and-continue path
+  (G1); tool failures surface to the composer so it never confirms an action that didn't happen, and
+  a malformed ref never targets the zero UUID (B3/G4); a degraded taste profile is marked and
+  re-attempted (A14); a transient explanation failure isn't cached like a real one (G2); spoiler
+  safety covers the chat reply and French, not just English blurbs (B7); the "why this" prompt is
+  grounded in synopsis/keywords and may admit a weak fit (H4); offline (hash-embedder) mode shows an
+  honest banner and caps the fit label (M2); and the `popular` row no longer shows its confidence as
+  a taste-fit gauge (H8).
 
 ## Run it
 
