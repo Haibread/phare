@@ -99,6 +99,15 @@ def test_hard_avoid_matches_on_word_boundaries_not_substrings() -> None:
     )
 
 
+def test_hard_avoid_free_key_matches_via_substring() -> None:
+    # H1: a free hard-avoid ("Mindless franchise sequels") now catches a title tagged "franchise"
+    # via the shared substring rule (>= 4 chars), where exact/word-boundary matching missed it.
+    franchise = _title("Some Sequel", genres=["Action", "Adventure"], keywords=["franchise"])
+    indie = _title("Quiet Drama", genres=["Drama"], keywords=["character study"])
+    assert _is_hard_avoided(franchise, ["Mindless franchise sequels"]) is True
+    assert _is_hard_avoided(indie, ["Mindless franchise sequels"]) is False
+
+
 # --- end-to-end: the derived weight actually shifts the centroid --------------
 
 

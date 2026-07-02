@@ -17,6 +17,7 @@ from phare.db.models import (
     CommitmentStatus,
     EventType,
     Profile,
+    RecommendationLog,
     TasteProfile,
     Title,
     TitleKind,
@@ -153,6 +154,65 @@ def test_log_signal_unresolvable_writes_nothing(db_session: Session) -> None:
     assert db_session.scalars(select(WatchEvent)).all() == []
     assert result.actions == []
     assert any("couldn't find" in n for n in result.notes)
+
+
+def test_log_signal_resolves_exact_popular_title_over_obscure_near_name(
+    db_session: Session,
+) -> None:
+    # Review H3b: "loved Get Out" logged onto "The Get Out" (2026, obscure) instead of Get Out
+    # (2017). Exact-name + popularity now resolves the right one, and the summary names it + year.
+    profile_id = _seed(db_session)
+    get_out = Title(kind=TitleKind.movie, tmdb_id=301, title="Get Out", year=2017, vote_count=8000)
+    decoy = Title(kind=TitleKind.movie, tmdb_id=302, title="The Get Out", year=2026, vote_count=30)
+    db_session.add_all([get_out, decoy])
+    db_session.flush()
+    result = _run(db_session, profile_id, "log_signal", {"title": "Get Out", "signal": "loved"})
+
+    events = db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id)).all()
+    assert events and all(e.title_id == get_out.id for e in events)
+    assert any("Get Out" in a.summary and "2017" in a.summary for a in result.actions)
+
+
+def test_log_signal_prefers_a_recently_recommended_title(db_session: Session) -> None:
+    # Two films both named "Solaris"; the more-voted one would win a blind search, but the agent
+    # just recommended the 1972 one in chat — conversation context wins (review H3b).
+    profile_id = _seed(db_session)
+    old = Title(kind=TitleKind.movie, tmdb_id=401, title="Solaris", year=1972, vote_count=2000)
+    new = Title(kind=TitleKind.movie, tmdb_id=402, title="Solaris", year=2002, vote_count=5000)
+    db_session.add_all([old, new])
+    db_session.flush()
+    db_session.add(
+        RecommendationLog(
+            profile_id=profile_id, title_id=old.id, row_key="chat", rank=0, source="chat"
+        )
+    )
+    db_session.flush()
+    result = _run(db_session, profile_id, "log_signal", {"title": "Solaris", "signal": "loved"})
+
+    events = db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id)).all()
+    assert events and all(e.title_id == old.id for e in events)  # the recommended 1972, not 2002
+    assert result.actions and result.actions[0].kind == "logged_signal"
+
+
+def test_log_signal_ambiguous_asks_instead_of_writing(db_session: Session) -> None:
+    # Two equally-plausible titles (same name, similar popularity) and no conversation context: the
+    # tool must NOT guess — it writes nothing and asks which one (review H3b).
+    profile_id = _seed(db_session)
+    db_session.add_all(
+        [
+            Title(kind=TitleKind.movie, tmdb_id=501, title="The Thing", year=1982, vote_count=3000),
+            Title(kind=TitleKind.movie, tmdb_id=502, title="The Thing", year=2011, vote_count=2900),
+        ]
+    )
+    db_session.flush()
+    result = _run(db_session, profile_id, "log_signal", {"title": "The Thing", "signal": "loved"})
+
+    assert (
+        db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id)).all()
+        == []
+    )
+    assert result.actions == []
+    assert any("The Thing" in n for n in result.notes)
 
 
 def test_commitment_and_resolution_flow(db_session: Session) -> None:

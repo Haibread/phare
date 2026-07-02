@@ -20,7 +20,12 @@ execution → reply`
 - **Tools** ([`agent/tools.py`](../backend/src/phare/agent/tools.py)) — thin wrappers over the
   engine: `recommend`, `explain_picks`, `log_signal`, `set_commitment`, `resolve_commitment`,
   `remember`, `update_taste`. Title references resolve through the catalog search (local + live
-  TMDB). `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
+  TMDB). For a **signal write** (`log_signal` — "I loved Get Out") resolution is disambiguated,
+  because writing onto the wrong title silently corrupts taste: it prefers a title just recommended
+  in this conversation, else the most-voted exact-name match, and if two titles are equally
+  plausible it **writes nothing and asks which one** rather than guessing (review H3b). The confirmed
+  action names the resolved title + year so the reply states exactly what was recorded.
+  `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
   recommendation log — never from the model's memory — so the reply explains the titles actually
   shown; it sets no new picks, so the slate isn't re-logged.
   `recommend` defaults to *new* titles (excludes everything watched); a **rewatch** request ("a
@@ -41,9 +46,10 @@ execution → reply`
   always leave an out", made deterministic rather than trusted to the model.
 - **Chat slate ordering.** Unlike the Browse rows, chat recommendations use a **vote-count mix**
   instead of reserved swing slots: the slate is composed as ~50% well-known / ~35% lesser-known /
-  ~15% low-vote (TMDB rating count tiers), then ordered most-voted-first. So chat reads as a
-  sensible "best-known first" list with a small discovery tail, rather than a similarity ranking
-  that surfaces obscure trending titles. Vote counts come from the catalog import.
+  ~15% low-vote (TMDB rating count tiers) — the mix decides *which* titles make the slate — then
+  ordered by **score (relevance), not by votes**, so the most relevant pick leads while the slate
+  still spans a range of known-ness. (Ordering by votes buried the best match at the bottom of the
+  strip; that was review finding A1.) Vote counts come from the catalog import.
 - **Recent conversation** — the planner and the composer both receive the last few turns of the
   chat so a turn isn't a cold start: references resolve ("even shorter" knows what it's shortening)
   and the reply builds on what was said instead of re-pitching the same titles. It's **short-term,

@@ -23,6 +23,7 @@ from phare.db.models import ROW_KEY_MAX_LEN
 from phare.llm_json import as_str_list, extract_json
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider
+from phare.recommend import genres
 from phare.recommend.explain import _taste_fingerprint
 from phare.recommend.log import log_rows
 from phare.recommend.schema import Candidate, Row
@@ -166,15 +167,18 @@ def propose_themes(
         return _fallback_themes(taste, now, language), True
 
 
-def _genre_filter(genres: Sequence[str]):
+def _genre_filter(theme_genres: Sequence[str]):
     """Keep candidates matching any theme genre; fall back to all if that would empty the pool."""
-    if not genres:
+    if not theme_genres:
         return None
-    wanted = {g.lower() for g in genres}
 
     def apply(candidates: list[Candidate]) -> list[Candidate]:
-        matched = [c for c in candidates if wanted & {g.lower() for g in c.genres}]
-        return matched or candidates
+        matched = [c for c in candidates if genres.matches_any(theme_genres, c.genres)]
+        if matched:
+            return matched
+        # Nothing matched — keep the full pool but make the miss visible (A3/G1).
+        genres.record_genre_filter_fallback(theme_genres, {g for c in candidates for g in c.genres})
+        return candidates
 
     return apply
 

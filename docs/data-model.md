@@ -9,6 +9,12 @@ One canonical title per work, keyed by **TMDB (primary) + IMDb (secondary)**. Ev
 resolves to it; source-specific ids never leak past ingestion. TMDB is also the source of
 embedding inputs (overview, genres, keywords, cast/crew, tone) and the `popular` signal.
 
+TMDB's movie and TV id spaces are **disjoint** — the same numeric id can name a film and an
+unrelated show (1398 is both *Stalker* and *The Sopranos*) — so a title is unique on
+**`(tmdb_id, kind)`**, never `tmdb_id` alone, and every title lookup carries the kind. (IMDb ids
+*are* globally unique, so `imdb_id` stays singularly unique.) Getting this wrong silently merged a
+movie and a show and mis-attached watch history — review H3a.
+
 ## TV is a tree
 
 `show → season → episode`. **Recommend at show level**; collect signal at every level and roll
@@ -59,6 +65,15 @@ Per profile: a structured object (likes / dislikes / **hard-avoids** / weighted 
 comfort axis / discovery tolerance) + a human-readable summary + a **confidence** (drives "we're
 guessing" honesty). User edits live separately and **always win**, surviving regeneration.
 Recency decay applies wherever taste is computed.
+
+`affinities` keys and `hard-avoids` are the fields that actually **steer scoring**, so the
+extractor draws them from a **closed vocabulary** (canonical TMDB genres + a small controlled set
+of tone/era descriptors) and they're matched against a candidate's genres/keywords by a shared,
+tolerant rule (alias-resolved equality, or a ≥4-char substring). `likes` / `dislikes` / `summary`
+stay free-form. This is what makes affinity actually weigh on the ranking instead of silently
+reading neutral for everyone — a free key like `"Sci-Fi"` now lines up with the catalog's
+`"Science Fiction"` tag (review H1). A key that resolves to nothing in the vocabulary is kept but
+logged (`taste.affinity_key_unmatched`) so a dead profile is visible, not silent.
 
 ## Agent memory (commitments + notes)
 

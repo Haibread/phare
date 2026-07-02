@@ -81,10 +81,15 @@ class Title(Base):
     """A canonical movie or show, keyed by external ids (TMDB primary, IMDb secondary)."""
 
     __tablename__ = "title"
+    # TMDB's movie and TV id namespaces are disjoint — id 1398 is both *Stalker* (movie) and *The
+    # Sopranos* (show) — so tmdb_id is unique only *per kind*, never globally. A column-level
+    # UNIQUE(tmdb_id) collapsed such pairs onto one row and mis-attached events (review H3a).
+    __table_args__ = (UniqueConstraint("tmdb_id", "kind", name="uq_title_tmdb_kind"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     kind: Mapped[TitleKind] = mapped_column(Enum(TitleKind, name="title_kind"))
-    tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    tmdb_id: Mapped[int | None] = mapped_column(Integer)
+    # IMDb ids ARE globally unique across movies and shows, so this stays column-level unique.
     imdb_id: Mapped[str | None] = mapped_column(String(20), unique=True)
     title: Mapped[str] = mapped_column(String(500))
     year: Mapped[int | None] = mapped_column(Integer)
@@ -96,6 +101,10 @@ class Title(Base):
     popularity: Mapped[float | None] = mapped_column(Float)
     # TMDB rating count — proxy for how well-known a title is; used to tier chat recommendations.
     vote_count: Mapped[int | None] = mapped_column(Integer)
+    # TMDB mean rating in [0, 10] — a crude quality floor the re-ranker penalises below (a
+    # well-known but poorly-rated title shouldn't lead a slate). Distinct from vote_count (how
+    # *many* rated, not how *well*). Nullable: filled by import/refresh, never guessed.
+    vote_average: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

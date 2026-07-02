@@ -86,7 +86,9 @@ def search_titles(
         for meta in metas:
             if meta.tmdb_id is None:
                 continue
-            title = session.scalar(select(Title).where(Title.tmdb_id == meta.tmdb_id))
+            title = session.scalar(
+                select(Title).where(Title.tmdb_id == meta.tmdb_id, Title.kind == meta.kind)
+            )
             if title is not None and title.id not in seen:
                 seen.add(title.id)
                 results.append(title)
@@ -106,21 +108,25 @@ def search_titles(
 def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
     """Insert any titles not already present (by ``tmdb_id``); refresh popularity on the rest.
 
-    Returns the number of newly created titles. Metadata refresh is limited to ``popularity`` and
-    ``vote_count`` so a re-import keeps the global popularity/known-ness signals current without
-    clobbering anything an embed already depends on (a content change would need a re-embed; out of
-    scope here).
+    Returns the number of newly created titles. Metadata refresh is limited to ``popularity``,
+    ``vote_count`` and ``vote_average`` so a re-import keeps the global popularity/known-ness/
+    quality signals current without clobbering anything an embed already depends on (a content
+    change would need a re-embed; out of scope here).
     """
     created = 0
     for meta in metas:
         if meta.tmdb_id is None:
             continue
-        existing = session.scalar(select(Title).where(Title.tmdb_id == meta.tmdb_id))
+        existing = session.scalar(
+            select(Title).where(Title.tmdb_id == meta.tmdb_id, Title.kind == meta.kind)
+        )
         if existing is not None:
             if meta.popularity is not None:
                 existing.popularity = meta.popularity
             if meta.vote_count is not None:
                 existing.vote_count = meta.vote_count
+            if meta.vote_average is not None:
+                existing.vote_average = meta.vote_average
             # Backfill a poster when we didn't have one; it doesn't affect embeddings.
             if existing.poster_path is None and meta.poster_path is not None:
                 existing.poster_path = meta.poster_path
@@ -175,13 +181,13 @@ def refresh_from_tmdb(
     the broad seed uses for quality) would exclude exactly the content this is meant to catch.
     Dedupes the two lists by ``tmdb_id`` and drops anything with no overview (the embed input).
     """
-    by_tmdb_id: dict[int, TitleMetadata] = {}
+    by_tmdb_id: dict[tuple[int, TitleKind], TitleMetadata] = {}
     for kind in kinds:
         for page in range(1, pages + 1):
             for meta in (*source.trending(kind, page), *source.now_playing(kind, page)):
                 if meta.tmdb_id is None or not (meta.overview or "").strip():
                     continue
-                by_tmdb_id.setdefault(meta.tmdb_id, meta)
+                by_tmdb_id.setdefault((meta.tmdb_id, meta.kind), meta)
     created = upsert_titles(session, list(by_tmdb_id.values()))
     logger.info(
         "catalog.refresh",
@@ -206,7 +212,7 @@ def broad_import_from_tmdb(
     title carries several) and drops titles with no overview, since that's the embedding input.
     Stops a genre early once discover runs dry rather than walking all ``pages_per_genre``.
     """
-    by_tmdb_id: dict[int, TitleMetadata] = {}
+    by_tmdb_id: dict[tuple[int, TitleKind], TitleMetadata] = {}
     for kind in kinds:
         for genre_id in source.genres(kind):
             for page in range(1, pages_per_genre + 1):
@@ -218,7 +224,7 @@ def broad_import_from_tmdb(
                 for meta in metas:
                     if meta.tmdb_id is None or not (meta.overview or "").strip():
                         continue
-                    by_tmdb_id.setdefault(meta.tmdb_id, meta)
+                    by_tmdb_id.setdefault((meta.tmdb_id, meta.kind), meta)
     created = upsert_titles(session, list(by_tmdb_id.values()))
     logger.info(
         "catalog.broad_import",

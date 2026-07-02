@@ -37,6 +37,54 @@ def _count(session: Session, model: type) -> int:
     return session.scalar(select(func.count()).select_from(model)) or 0
 
 
+def test_same_tmdb_id_movie_and_show_are_distinct_titles(db_session: Session) -> None:
+    # TMDB's movie and TV id spaces overlap: 1398 is *Stalker* (movie) AND *The Sopranos* (show). A
+    # kind-less lookup + column-level UNIQUE(tmdb_id) collapsed them onto one row, so a "movie 1398"
+    # event attached to the show (review H3a). They must now be two distinct titles.
+    profile_id = _profile(db_session)
+    metadata = FakeMetadataProvider(
+        titles={
+            (1398, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, tmdb_id=1398, title="Stalker", year=1979
+            ),
+            (1398, TitleKind.show): TitleMetadata(
+                kind=TitleKind.show, tmdb_id=1398, title="The Sopranos", year=1999
+            ),
+        }
+    )
+    svc = IngestionService(db_session, metadata)
+    # Seed the show first (a kind-less lookup would wrongly find it), then a MOVIE event for 1398.
+    svc.ingest(
+        profile_id,
+        [
+            RawEvent(
+                source="s",
+                media_type=RawMediaType.show,
+                type=EventType.watched,
+                tmdb_id=1398,
+                external_ref="e:show",
+            )
+        ],
+    )
+    svc.ingest(
+        profile_id,
+        [
+            RawEvent(
+                source="s",
+                media_type=RawMediaType.movie,
+                type=EventType.watched,
+                tmdb_id=1398,
+                external_ref="e:movie",
+            )
+        ],
+    )
+    titles = db_session.scalars(select(Title).where(Title.tmdb_id == 1398)).all()
+    assert {t.kind for t in titles} == {TitleKind.movie, TitleKind.show}  # two rows, not one
+    movie = next(t for t in titles if t.kind is TitleKind.movie)
+    movie_event = db_session.scalar(select(WatchEvent).where(WatchEvent.external_ref == "e:movie"))
+    assert movie_event is not None and movie_event.title_id == movie.id  # attached to the movie
+
+
 def test_movie_creates_title_and_event(db_session: Session) -> None:
     profile_id = _profile(db_session)
     event = RawEvent(

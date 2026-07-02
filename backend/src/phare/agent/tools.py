@@ -81,6 +81,70 @@ def _resolve_title(ctx: ToolContext, query: str) -> Title | None:
     return matches[0] if matches else None
 
 
+# The top title must be at least this many times more voted than the runner-up to resolve a signal
+# without asking — otherwise two plausible titles of similar popularity are treated as ambiguous.
+_AMBIGUITY_RATIO = 3.0
+
+
+def _recent_chat_titles(ctx: ToolContext, *, limit: int = 30) -> list[Title]:
+    """Titles the agent recently put in front of the user in chat (most recent first, deduped).
+
+    This is the conversation context: when the user reacts to "Get Out", the one the agent just
+    recommended is almost certainly the one they mean — a far stronger signal than a TMDB search."""
+    rows = ctx.session.execute(
+        select(Title)
+        .join(RecommendationLog, RecommendationLog.title_id == Title.id)
+        .where(
+            RecommendationLog.profile_id == ctx.profile_id,
+            RecommendationLog.source == "chat",
+        )
+        .order_by(RecommendationLog.shown_at.desc())
+        .limit(limit)
+    ).scalars()
+    seen: set[uuid.UUID] = set()
+    unique: list[Title] = []
+    for title in rows:
+        if title.id not in seen:
+            seen.add(title.id)
+            unique.append(title)
+    return unique
+
+
+def _resolve_signal_title(ctx: ToolContext, query: str) -> tuple[Title | None, bool]:
+    """Resolve a title the user is logging a signal for, and say whether we're sure enough to write.
+
+    Order (review H3b — writing a signal on the wrong title corrupts the taste memory silently):
+    1. a title recently recommended in *this conversation* whose name matches exactly (best signal);
+    2. otherwise search, prefer an exact-name match, then most-voted — but if the top two are of
+       similar popularity (no clear winner), return ``confident=False`` so the caller asks rather
+       than guesses.
+    """
+    normalized = query.strip().lower()
+    if not normalized:
+        return None, False
+    for title in _recent_chat_titles(ctx):
+        if title.title.strip().lower() == normalized:
+            return title, True
+    candidates = search_titles(ctx.session, query, ctx.metadata, limit=6)
+    if not candidates:
+        return None, False
+    exact = [c for c in candidates if c.title.strip().lower() == normalized]
+    if len(exact) == 1:
+        return exact[0], True
+    ranked = sorted(exact or candidates, key=lambda c: c.vote_count or 0, reverse=True)
+    top = ranked[0]
+    if len(ranked) == 1:
+        return top, True
+    runner_up_votes = ranked[1].vote_count or 0
+    confident = (top.vote_count or 0) >= max(1, runner_up_votes) * _AMBIGUITY_RATIO
+    return top, confident
+
+
+def _title_label(title: Title) -> str:
+    """Human label naming exactly what was (or would be) written — 'Get Out (2017)'."""
+    return f"{title.title} ({title.year})" if title.year else title.title
+
+
 def _write_event(
     ctx: ToolContext,
     title_id: uuid.UUID,
@@ -135,9 +199,17 @@ def tool_log_signal(ctx: ToolContext, args: dict, result: ExecutionResult) -> No
     signal = str(args.get("signal", "watched")).lower()
     text = args.get("note")
     rating = args.get("rating")
-    title = _resolve_title(ctx, query) if query else None
+    title, confident = _resolve_signal_title(ctx, query) if query else (None, False)
     if title is None:
         result.notes.append(f"couldn't find a title matching '{query}'")
+        return
+    if not confident:
+        # Ambiguous — do NOT write (a wrong signal silently poisons taste, review H3b). Ask which
+        # one; the user's next message names it, and the recommended-context path then resolves it.
+        result.notes.append(
+            f"more than one title matches '{query}' — did you mean {_title_label(title)}? "
+            "I haven't logged it yet"
+        )
         return
     event_types = _SIGNAL_EVENTS.get(signal, [EventType.watched])
     created: list[uuid.UUID] = []
@@ -157,7 +229,8 @@ def tool_log_signal(ctx: ToolContext, args: dict, result: ExecutionResult) -> No
     result.actions.append(
         AgentAction(
             kind="logged_signal",
-            summary=f"logged {title.title} as {signal}",
+            # Name the resolved title + year so the reply confirms exactly what was written (H3b).
+            summary=f"logged {_title_label(title)} as {signal}",
             undo_token=",".join(f"event:{cid}" for cid in created),
         )
     )

@@ -67,7 +67,9 @@ class IngestionService:
     def __init__(self, session: Session, metadata: MetadataProvider) -> None:
         self.session = session
         self.metadata = metadata
-        self._title_cache: dict[int, Title] = {}
+        # Keyed by (tmdb_id, kind): TMDB's movie/TV id spaces overlap, so tmdb_id alone would
+        # collide a movie and a show onto one cache entry (review H3a).
+        self._title_cache: dict[tuple[int, TitleKind], Title] = {}
 
     def ingest(self, profile_id: uuid.UUID, events: Iterable[RawEvent]) -> IngestResult:
         result = IngestResult()
@@ -102,11 +104,13 @@ class IngestionService:
     def _get_or_create_title(
         self, tmdb_id: int, kind: TitleKind, result: IngestResult
     ) -> Title | None:
-        if cached := self._title_cache.get(tmdb_id):
+        if cached := self._title_cache.get((tmdb_id, kind)):
             return cached
-        existing = self.session.scalar(select(Title).where(Title.tmdb_id == tmdb_id))
+        existing = self.session.scalar(
+            select(Title).where(Title.tmdb_id == tmdb_id, Title.kind == kind)
+        )
         if existing is not None:
-            self._title_cache[tmdb_id] = existing
+            self._title_cache[(tmdb_id, kind)] = existing
             return existing
         meta = self.metadata.get_title(tmdb_id, kind)
         if meta is None:
@@ -128,7 +132,7 @@ class IngestionService:
         self.session.add(title)
         self.session.flush()
         result.titles_created += 1
-        self._title_cache[tmdb_id] = title
+        self._title_cache[(tmdb_id, kind)] = title
         return title
 
     def _get_or_create_season(self, title: Title, number: int) -> Season:

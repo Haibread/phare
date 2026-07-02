@@ -42,6 +42,8 @@ class PersonaResult:
 def _seed_persona_history(session: Session, profile_id: uuid.UUID, persona: Persona) -> None:
     seed_sample_catalog(session)
     for rank, (tmdb_id, rating) in enumerate(persona.watched):
+        # Personas reference movie tmdb_ids in the fixed sample catalog (no movie/show id collision
+        # there), so a kind-less lookup is unambiguous here — unlike the ingest/catalog paths (H3a).
         title = session.scalar(select(Title).where(Title.tmdb_id == tmdb_id))
         if title is None:  # pragma: no cover - personas reference real sample ids
             continue

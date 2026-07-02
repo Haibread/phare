@@ -11,7 +11,8 @@ filters) → re-ranker → explanations (LLM)`.
 - **Candidate generation:** vector search around the taste vector + hard filters (exclude
   watched, apply hard-avoids, apply chat intent filters).
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
-  **recency-decayed** taste, then **anti-degeneracy**: cap popularity, enforce diversity,
+  **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
+  (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
   guarantee catalog coverage over time.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
@@ -35,8 +36,11 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 
 Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
 chip (never a number — see *honesty over engagement*). Only `you_might_like` derives it from the
-taste-vector match; the heuristic rows expose an honest signal of their *own* kind, not a fake
-taste score:
+taste-vector match — and from the pick's **pool-relative** similarity (where it sits among that
+query's candidates), not the raw cosine, which is compressed near the top and would read "strong
+fit" for everything (review H2/A8). A lightly-evidenced taste profile also *caps* the chip, so a
+thin history can't produce a blanket "strong fit". The heuristic rows expose an honest signal of
+their *own* kind, not a fake taste score:
 
 - `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally
   your top-rated titles, sorted best-first.
