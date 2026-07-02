@@ -108,9 +108,10 @@ false "noted!" is worse than an admitted miss (review B3).
 ### Delivery: streaming + persistent history
 
 `POST /chat/stream` runs the same turn as `POST /chat` but returns **Server-Sent Events** so the UI
-never sits on a blank "Thinking…" for the whole turn: a `meta` event carries the picks + undoable
-write-chips as soon as the tools finish, then `delta` events stream the reply text token-by-token,
-then `done`. Writes are committed *before* streaming begins, so the stream itself is read-only;
+never sits on a blank "Thinking…" for the whole turn: an instant **localised** `status` (a keyword
+acknowledgement — "Finding something funny…" / "Je cherche…") while the planner runs, a `meta` event
+carrying the picks + undoable write-chips as soon as the tools finish, another `status` while the
+reply is composed, then `delta` events stream the reply text token-by-token, then `done`. Writes are committed *before* streaming begins, so the stream itself is read-only;
 `POST /chat` stays for non-streaming callers (and is what the tests assert against). Providers that
 implement `stream` are used token-by-token; others fall back to one blocking `complete`, and a
 streaming error degrades to the deterministic template — a flaky composer never leaves an empty

@@ -131,6 +131,14 @@ _MESSAGES: dict[str, dict[Language, str]] = {
         "fr": "Voici quelques suggestions {descriptor}{runtime} qui pourraient vous plaire.",
     },
     "chat.runtimeUnder": {"en": " under {minutes} minutes", "fr": " de moins de {minutes} minutes"},
+    # SSE progress labels for the chat stream — shown while the planner runs, then while the reply
+    # is composed, so the screen is never a blank "…" (review B4/F2).
+    "chat.statusFinding": {
+        "en": "Finding something {descriptor}…",
+        "fr": "Je cherche quelque chose {descriptor}…",
+    },
+    "chat.statusWorking": {"en": "Working on it…", "fr": "Je m'en occupe…"},
+    "chat.statusComposing": {"en": "Writing a reply…", "fr": "Je rédige la réponse…"},
     # Dynamic-row fallback theme titles (used offline / when the LLM proposes nothing).
     "theme.februaryRomance": {"en": "February romance", "fr": "Romance de février"},
     "theme.summerBlockbusters": {"en": "Summer blockbusters", "fr": "Blockbusters de l'été"},
