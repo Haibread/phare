@@ -158,11 +158,27 @@ def _template(
             because = translate(language, "explain.becauseAffinity", matched=matched)
         else:
             genres = matched
-            because = translate(language, "explain.becauseProfile")
+            because = _because_profile(rec, language)
     else:
         genres = ", ".join(rec.genres[:2]) if rec.genres else spanning
-        because = translate(language, "explain.becauseProfile")
+        because = _because_profile(rec, language)
     return translate(language, "explain.base", genres=genres, kind=kind, era=era, because=because)
+
+
+# Below "strong fit" (matches fit.ts), a template must not claim "fits your profile" on a shaky
+# pick — it hedges instead (review B5). Variants are picked by a deterministic title hash so a strip
+# doesn't repeat one line; keep the counts in sync with the explain.because* keys in i18n.
+_HEDGE_BELOW = 0.66
+_PROFILE_VARIANTS = 3
+_HEDGE_VARIANTS = 2
+
+
+def _because_profile(rec: Recommendation, language: Language) -> str:
+    """A varied, confidence-aware 'because you'll like it' tail (review B5)."""
+    picked = int(hashlib.sha256(rec.title.encode()).hexdigest(), 16)
+    if rec.confidence is not None and rec.confidence < _HEDGE_BELOW:
+        return translate(language, f"explain.becauseHedged.{picked % _HEDGE_VARIANTS}")
+    return translate(language, f"explain.becauseProfile.{picked % _PROFILE_VARIANTS}")
 
 
 def _matched_affinity(rec: Recommendation, taste: Mapping[str, Any]) -> str | None:

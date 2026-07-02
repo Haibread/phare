@@ -370,3 +370,32 @@ def test_llm_prompt_frames_a_strong_fit_as_a_match() -> None:
     llm = FakeLLMProvider(completion="A great match.")
     explain([_rec(components={"similarity_rel": 0.9})], {"summary": "x"}, llm=llm)
     assert "a strong match" in llm.prompts[0]
+
+
+# --- B5: vary the chat template tails, and hedge low-confidence picks --------------------------
+
+
+def test_template_tails_vary_by_title_and_are_deterministic() -> None:
+    # A strip of a dozen must not read the same tail a dozen times. High-confidence off-axis picks
+    # (no matched affinity) get varied "fits you" tails, chosen by a deterministic title hash.
+    taste = {"affinities": {"Horror": 0.9}}  # Drama titles have no matched affinity
+    tails = {
+        explain([_rec(title=f"Title {i}", genres=["Drama"], confidence=0.9)], taste, llm=None)[
+            0
+        ].explanation
+        for i in range(12)
+    }
+    assert len(tails) >= 3  # several distinct phrasings
+
+    a = explain([_rec(title="Fixed", genres=["Drama"], confidence=0.9)], taste, llm=None)[0]
+    b = explain([_rec(title="Fixed", genres=["Drama"], confidence=0.9)], taste, llm=None)[0]
+    assert a.explanation == b.explanation  # same title → same variant
+
+
+def test_template_hedges_a_low_confidence_pick() -> None:
+    # Don't claim "fits your profile" on a shaky pick — hedge. Same title, only confidence differs.
+    taste = {"affinities": {"Horror": 0.9}}
+    [strong] = explain([_rec(title="Same", genres=["Drama"], confidence=0.9)], taste, llm=None)
+    [weak] = explain([_rec(title="Same", genres=["Drama"], confidence=0.3)], taste, llm=None)
+    assert strong.explanation != weak.explanation
+    assert "fits your profile" not in (weak.explanation or "")
