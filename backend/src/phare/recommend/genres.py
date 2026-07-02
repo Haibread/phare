@@ -13,24 +13,11 @@ their alias-resolved canonical forms are equal, **or** one is a substring of the
 
 from __future__ import annotations
 
-import logging
 import re
 from collections.abc import Iterable, Sequence
 
-from opentelemetry import metrics
-
 from phare.agent.intent import _MOOD_TO_GENRE
-
-logger = logging.getLogger(__name__)
-
-_meter = metrics.get_meter("phare.recommend")
-# Shared fallback counter (review G1: every silent fallback must be countable). M2.1 folds this into
-# a generic ``record_fallback`` helper; the metric name + attributes are already the target shape.
-_fallback_counter = _meter.create_counter(
-    "phare.fallback",
-    unit="1",
-    description="A component fell back to a degraded path (attributes: component, reason).",
-)
+from phare.core.fallback import record_fallback
 
 _SEP_RE = re.compile(r"[/_-]+")
 _WS_RE = re.compile(r"\s+")
@@ -170,17 +157,12 @@ def record_genre_filter_fallback(wanted: Sequence[str], catalog_genres: Iterable
 
     A silent fallback (review A3) is what turned the vocabulary bug (A2) into "mediocre for no
     reason": you can't tell a thin catalog from a broken filter. Logs the wanted genres + a sample
-    of what the catalog actually had, and bumps the shared ``phare.fallback`` counter."""
+    of what the catalog actually had, via the shared fallback convention (G1)."""
     sample = sorted({g for g in catalog_genres if g})[:12]
-    logger.warning(
-        "genre_filter.no_match",
-        extra={"wanted": list(wanted), "catalog_genres_sample": sample},
-    )
-    _fallback_counter.add(1, {"component": "genre_filter", "reason": "no_match"})
+    record_fallback("genre_filter", "no_match", wanted=list(wanted), catalog_genres_sample=sample)
 
 
 def record_affinity_key_unmatched(key: str) -> None:
     """A taste affinity/hard-avoid key resolves to nothing in the closed vocabulary — so it can't
     steer scoring (review H1). Make it visible instead of letting the profile silently go inert."""
-    logger.warning("taste.affinity_key_unmatched", extra={"key": key})
-    _fallback_counter.add(1, {"component": "taste_affinity", "reason": "key_unmatched"})
+    record_fallback("taste_affinity", "key_unmatched", key=key)

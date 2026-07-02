@@ -308,5 +308,7 @@ def _to_rec(
             affinity_norm=components["affinity"],
         ),
         poster_path=candidate.poster_path,
+        overview=candidate.overview,
+        keywords=list(candidate.keywords),
         components=components,
     )

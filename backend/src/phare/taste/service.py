@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
 from phare.db.models import TasteProfile, Title, WatchEvent
 from phare.llm_json import extract_json
@@ -156,17 +157,18 @@ class TasteService:
         # temperature=0: taste extraction is structured JSON, not prose — the same history should
         # always distil to the same profile (and the same parse), so don't let sampling wobble it.
         raw = self.llm.complete(prompt, max_tokens=_TASTE_MAX_TOKENS, temperature=0.0)
+        degraded = False
         try:
             data = TasteProfileData.model_validate(extract_json(raw))
         except (ValueError, ValidationError):
+            degraded = True
             # The model answered but with no parseable JSON — e.g. a reasoning model that spent its
             # token budget thinking, or one that ignored the "JSON only" contract. Degrade to a
             # deterministic profile from genre history (docs/design.md: works on a weak model)
             # rather than 500 the request. A raised exception (LLM unreachable) still propagates so
             # callers like the ingest auto-refresh can swallow it.
-            logger.warning(
-                "taste.unparseable_completion; using deterministic fallback",
-                extra={"profile_id": str(profile_id)},
+            record_fallback(
+                "taste_extraction", "unparseable_completion", profile_id=str(profile_id)
             )
             data = self._deterministic(profile_id)
 
@@ -188,7 +190,10 @@ class TasteService:
         taste.confidence = data.confidence
         taste.model_version = self.model_version
         taste.generated_at = datetime.now(UTC)
-        # user_overrides intentionally left untouched — hand edits survive regeneration.
+        # Mark (or clear) the degraded flag: a fallback profile is re-attempted next refresh; a
+        # successful extraction lifts it (review A14). Overrides are left untouched — hand edits
+        # survive regeneration either way.
+        taste.degraded = degraded
         self.session.flush()
         return taste
 
@@ -230,6 +235,8 @@ def _should_auto_refresh(session: Session, profile_id: uuid.UUID, now: datetime)
     Regenerating the whole profile because one episode synced is wasteful — a single event barely
     moves a 150-event taste read. So the auto-refresh fires only when the change is material:
     - no profile yet (or never generated) → always (the first extraction);
+    - the current profile is ``degraded`` (the LLM extraction had failed, coarse fallback in place)
+      → always, to re-attempt now the provider may have recovered (review A14);
     - at least ``taste_refresh_min_events`` new events since the last generation → enough drift to
       re-read now;
     - else, once the profile is older than ``taste_refresh_min_interval_seconds`` *and* something
@@ -240,6 +247,10 @@ def _should_auto_refresh(session: Session, profile_id: uuid.UUID, now: datetime)
     settings = get_settings()
     taste = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
     if taste is None or taste.generated_at is None:
+        return True
+    if taste.degraded:
+        # The current profile is the coarse fallback (extraction had failed) — re-attempt now that
+        # we're here, in case the provider has recovered, regardless of how much history changed.
         return True
     new_events = _new_events_since(session, profile_id, taste.generated_at)
     if new_events >= settings.taste_refresh_min_events:

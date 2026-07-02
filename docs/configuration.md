@@ -16,7 +16,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `MIGRATE_ON_STARTUP` | `false` | Run Alembic upgrade on boot. On for compose/E2E; keep off in prod and migrate explicitly. |
 | `DATABASE_URL` | `postgresql+psycopg://phare:phare@localhost:5432/phare` | Postgres (with pgvector). |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed SPA origins (comma-separated **or** JSON list). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_ | OTLP endpoint. Unset = no exporter wired (self-contained dev/tests). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_ | OTLP endpoint. Unset = no exporter wired (self-contained dev/tests). See [`observability.md`](observability.md) for the `phare.fallback` degradation signal. |
 | **LLM + embeddings** | | |
 | `LLM_API_KEY` | _(unset)_ | OpenAI-compatible key. **Unset = fully offline fallback** (see below). |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | Point at any OpenAI-compatible endpoint (Ollama, LM Studio, etc.). |
@@ -184,6 +184,12 @@ quality.
 | Chat intent | LLM mood/intent parsing | Keyword rules ("funny", "90 min", …) |
 | Chat **write path** (register "I saw X", commitments, memory) | Full tool-using agent | **Read-only** — no writes (title resolution needs the model) |
 | Dynamic "Today's picks" rows | LLM-named themes | Deterministic calendar + top-genre fallback |
+
+**The UI is honest about it.** In offline mode the recommendations response carries
+`embeddingsDegraded: true`, so Browse shows a persistent "offline mode — recommendations are
+approximate" banner and **caps the fit label** (a pick can never read "strong fit" when the
+similarity behind it is a hash collision). This keeps "runs fully offline" from quietly presenting
+pseudo-random picks with the same confidence as real ones (review M2).
 
 The two spaces never mix: local and real vectors carry different model-version tags
 ([`embeddings/version.py`](../backend/src/phare/embeddings/version.py)) and retrieval only queries

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from phare.core.fallback import record_fallback
 from phare.db.models import Title, TitleEmbedding
 from phare.providers.types import LLMProvider
 
@@ -61,10 +62,9 @@ class EmbeddingService:
         """
         titles = list(self._titles_missing_embedding(limit=limit))
         if limit is not None and len(titles) == limit:
-            logger.warning(
-                "embeddings.deferred",
-                extra={"embedded_count": limit, "hint": "run POST /catalog/embed for the rest"},
-            )
+            # The read-path top-up hit its cap — more titles remain unembedded, so this render's
+            # recommendations only cover part of the catalog (review A15/G1).
+            record_fallback("embeddings", "backfill_deferred", embedded_count=limit)
         for start in range(0, len(titles), batch_size):
             batch = titles[start : start + batch_size]
             vectors = self.llm.embed([build_embedding_text(t) for t in batch])

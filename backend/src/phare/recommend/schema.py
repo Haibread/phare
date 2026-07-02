@@ -53,6 +53,11 @@ class Recommendation(BaseModel):
     confidence: float | None = None
     explanation: str | None = None
     poster_path: str | None = None
+    # Internal-only (never mapped to the API DTO): the overview + keywords ground the LLM "why this"
+    # prompt so it describes real appeal instead of inventing aligned qualities (review H4). The
+    # template explanation never touches the overview, so it still can't leak plot.
+    overview: str | None = None
+    keywords: list[str] = []
     # Transparent score breakdown — the engine is never a black box (principle 2).
     components: dict[str, float] = {}
 

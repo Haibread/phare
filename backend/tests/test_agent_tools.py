@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from phare.agent import memory as memory_store
 from phare.agent import planner
+from phare.agent import tools as agent_tools
 from phare.agent.schema import AgentPlan, ToolCall
-from phare.agent.service import ChatService
-from phare.agent.tools import ToolContext, execute_plan, undo_action
+from phare.agent.service import ChatService, build_compose_prompt
+from phare.agent.tools import ToolContext, _as_uuid, execute_plan, undo_action
 from phare.db.models import (
     CommitmentStatus,
     EventType,
@@ -213,6 +214,32 @@ def test_log_signal_ambiguous_asks_instead_of_writing(db_session: Session) -> No
     )
     assert result.actions == []
     assert any("The Thing" in n for n in result.notes)
+
+
+def test_tool_exception_surfaces_to_the_composer(db_session: Session, monkeypatch) -> None:
+    # B3: a tool that raises used to be swallowed, so the composer could still say "done!". Now the
+    # failure lands in failed_calls and is fed to the composer prompt to keep the reply honest.
+    profile_id = _seed(db_session)
+
+    def _boom(ctx, args, result):  # noqa: ANN001, ARG001
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setitem(agent_tools._TOOLS, "boom", _boom)
+    result = _run(db_session, profile_id, "boom", {})
+
+    assert result.failed_calls  # not silently swallowed
+    prompt = build_compose_prompt("hi", result)
+    assert "boom" in prompt  # the failed action is named for the composer
+
+
+def test_undo_ignores_a_malformed_ref_instead_of_targeting_the_zero_uuid(
+    db_session: Session,
+) -> None:
+    # G4: _as_uuid used to coerce a bad ref to UUID(int=0), silently aiming at a non-existent row.
+    assert _as_uuid("not-a-uuid") is None
+    assert _as_uuid(str(uuid.uuid4())) is not None
+    profile_id = _seed(db_session)
+    assert undo_action(db_session, profile_id, "event:garbage") is False  # clean no-op, no crash
 
 
 def test_commitment_and_resolution_flow(db_session: Session) -> None:
@@ -603,3 +630,19 @@ def test_chat_surfaces_a_tool_note_instead_of_an_unrelated_slate(db_session: Ses
     assert reply.items == []  # no unrelated slate conjured
     assert "earlier picks" in reply.reply_text.lower()  # the honest note is surfaced
     assert agent.prompts == []  # answered deterministically, no agent-model spend
+
+
+def test_composer_reply_with_a_spoiler_falls_back_to_the_safe_template() -> None:
+    # B7: even with the prompt telling it not to, a weak model could narrate plot. A reply that
+    # trips the spoiler net (EN or FR) is dropped for the deterministic template.
+    from phare.agent.service import _compose_with_fallback
+    from phare.agent.tools import ExecutionResult
+
+    result = ExecutionResult(notes=["found some picks"])
+    en = FakeLLMProvider(completion="You'll love how the killer is revealed at the very end!")
+    reply_en = _compose_with_fallback(en, "prompt", result)
+    assert "killer" not in reply_en.lower() and "revealed" not in reply_en.lower()
+
+    fr = FakeLLMProvider(completion="Vous adorerez la révélation finale où le tueur se dévoile.")
+    reply_fr = _compose_with_fallback(fr, "prompt", result)
+    assert "tueur" not in reply_fr.lower() and "révélation" not in reply_fr.lower()

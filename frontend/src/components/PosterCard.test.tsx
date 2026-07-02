@@ -104,6 +104,13 @@ describe("RecRow", () => {
     expect(screen.queryByTestId("fit")).toBeNull();
   });
 
+  it("hides the fit label on the popular row", () => {
+    // H8: the popular row's confidence is popularity magnitude, not taste fit — showing it as the
+    // same affinity gauge as a personalised row makes one number mean two different things.
+    renderCard(<RecRow row={{ key: "popular", title: "Popular", items: [recItem({})] }} />);
+    expect(screen.queryByTestId("fit")).toBeNull();
+  });
+
   describe("because-you-watched anchor", () => {
     afterEach(() => vi.restoreAllMocks());
 

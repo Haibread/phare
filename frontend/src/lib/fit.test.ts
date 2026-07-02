@@ -21,4 +21,15 @@ describe("fitFor", () => {
   it("handles a missing confidence without throwing", () => {
     expect(fitFor(null, false).tone).toBe("neutral");
   });
+
+  it("caps a would-be strong fit to 'worth a try' in offline mode", () => {
+    // Local hash embedder: similarity is meaningless, so a high confidence must not read as strong.
+    expect(fitFor(0.9, false, true)).toEqual({
+      labelKey: "fit.worthATry",
+      tone: "neutral",
+      filled: 2,
+    });
+    // A low confidence is unaffected — it was never claiming much.
+    expect(fitFor(0.2, false, true).filled).toBe(1);
+  });
 });

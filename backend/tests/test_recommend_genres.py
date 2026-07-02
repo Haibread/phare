@@ -79,4 +79,7 @@ def test_genre_filter_no_match_falls_back_and_logs(caplog) -> None:
     with caplog.at_level(logging.WARNING):
         kept = intent_filter(intent)([only_comedy])
     assert kept == [only_comedy]  # fallback: nothing dropped
-    assert any(r.message == "genre_filter.no_match" for r in caplog.records)
+    # Emitted via the shared fallback convention (G1): "<component>.fallback" + a reason field.
+    assert any(
+        r.message == "genre_filter.fallback" and r.reason == "no_match" for r in caplog.records
+    )

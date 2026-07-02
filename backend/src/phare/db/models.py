@@ -371,6 +371,10 @@ class TasteProfile(Base):
     structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     user_overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     confidence: Mapped[float | None] = mapped_column(Float)
+    # True when this profile came from the deterministic (genre-frequency) fallback because the LLM
+    # extraction failed — a provider blip shouldn't freeze a coarse profile forever, so the auto
+    # refresh re-attempts extraction while this is set (review A14).
+    degraded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

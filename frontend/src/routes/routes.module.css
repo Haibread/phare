@@ -149,6 +149,15 @@
   color: var(--text-muted);
 }
 
+.offlineBanner {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.8rem;
+}
+
 .basicBadge {
   margin-left: var(--sp-2);
   padding: 0.1rem 0.45rem;

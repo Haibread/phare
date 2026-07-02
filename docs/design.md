@@ -17,6 +17,10 @@ filters) → re-ranker → explanations (LLM)`.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
 - **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.
+  **Grounded** in the title's synopsis + keywords so the model describes real appeal instead of
+  inventing aligned qualities, and told the actual fit strength so a weak pick is framed as a
+  stretch, not oversold (review H4). The synopsis is for grounding only — the prompt forbids
+  retelling plot and the output is spoiler-screened; the offline template never touches it.
 
 Why not LLM-as-ranker: it can't recall a large catalog, hallucinates titles, and is slower and
 costlier. It's good at reading fuzzy human signal — so that's all it does.
@@ -47,6 +51,11 @@ their *own* kind, not a fake taste score:
 - `continue_watching` → recency decay on the last episode you watched (half-life ~6 weeks): a fresh
   thread reads strong, an abandoned one cools off.
 - `popular` → popularity magnitude on a log scale (a runaway hit reads stronger than a mild one).
+
+Because those last two aren't a *taste-fit* signal, the UI **doesn't render the fit meter** on the
+`continue_watching` and `popular` rows — the same worded gauge meaning "how far in" or "how
+well-known" on some rows and "how well it fits you" on others would make one label mean several
+things (review H8). Only the taste-driven rows (`you_might_like`, `because…`, dynamic themes) show it.
 
 A row with genuinely no opinion would pass `confidence = null`; the UI then shows the lowest
 neutral chip. (Today every row computes a real value, so that path is just the graceful fallback.)

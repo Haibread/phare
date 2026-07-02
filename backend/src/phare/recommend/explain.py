@@ -9,7 +9,6 @@ free-text overview, so it cannot leak plot.
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 import uuid
 from collections.abc import Hashable, Iterator, Mapping, Sequence
@@ -20,13 +19,12 @@ from typing import Any, Protocol
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, translate
 from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
 from phare.recommend.schema import Anchor, Recommendation
-
-logger = logging.getLogger(__name__)
 
 
 class ReasonCache(Protocol):
@@ -55,8 +53,9 @@ _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 # Bump when the explanation *prompt* changes. It's folded into the cache fingerprint so a wording
 # change invalidates every previously-cached blurb (in-process and the durable Postgres rows)
 # without a manual purge — otherwise a deploy keeps serving the old phrasing until taste happens to
-# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite.
-_PROMPT_VERSION = "2"
+# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite;
+# "3" = grounded in synopsis/keywords + honest weak-fit framing (review H4).
+_PROMPT_VERSION = "3"
 
 
 def _taste_fingerprint(taste: Mapping[str, Any], anchor: Anchor | None = None) -> str:
@@ -75,9 +74,19 @@ def _taste_fingerprint(taste: Mapping[str, Any], anchor: Anchor | None = None) -
 _MAX_EXPLANATION_LEN = 320
 _SPOILER_MARKERS = re.compile(
     r"\b(turns out|plot twist|the twist|is revealed|revealed to be|the killer|the murderer|"
-    r"dies|is killed|killed off|betrays|the ending|ending reveals|spoiler)\b",
+    r"dies|is killed|killed off|betrays|the ending|ending reveals|spoiler|"
+    # French — the product is bilingual, so an EN-only net was blind to half the replies (B7). A
+    # conservative list; the prompt instruction is the real defence, this is just a backstop.
+    r"le tueur|le meurtrier|il meurt|elle meurt|est tué|est tuée|se révèle|la révélation|"
+    r"le twist|trahit|le dénouement|à la fin il|à la fin elle)\b",
     re.IGNORECASE,
 )
+
+
+def has_spoiler_markers(text: str) -> bool:
+    """True if the text names a plot reveal. Marker-only (no length rule), so it suits a
+    multi-sentence chat reply as well as a one-line blurb (review B7)."""
+    return _SPOILER_MARKERS.search(text) is not None
 
 
 def is_spoiler_safe(text: str) -> bool:
@@ -111,11 +120,17 @@ Rules:
   mood of theirs it connects to. A reader with different taste must get a different sentence — if
   yours would fit any viewer, it's wrong. Prefer opening with the connection — start from what
   they like, then the title (e.g. Since you lean toward X, this ...).
-- Describe appeal only: tone, themes, mood, the taste fit. NEVER mention plot events.
+- Ground your sentence in the synopsis/keywords when given, but describe appeal only: tone, themes,
+  mood, the taste fit. NEVER mention plot events or retell the story.
 - Never mention other people or users.
-- Be honest about confidence; for a "discovery pick" frame it as a stretch worth trying.
+- Be honest about the fit. If the fit is described as weak/a stretch below, say so plainly — call it
+  a gamble outside their usual taste; do NOT invent qualities to force a perfect-match pitch.
 - Output ONLY the sentence as plain text: no quotation marks around it, no markdown, no preamble.
 """
+
+# Below this pool-relative similarity, tell the model to frame the pick as a stretch rather than
+# oversell it — the "honesty over engagement" line the un-grounded prompt used to cross (review H4).
+_WEAK_FIT = 0.4
 
 
 def _template(
@@ -181,9 +196,30 @@ def _llm_prompt(
 ) -> str:
     summary = taste.get("summary") or "(no taste summary yet)"
     genres = ", ".join(rec.genres) or "unknown"
-    kind = "discovery pick (a stretch)" if rec.is_swing else "a strong match"
     hooks = _taste_hooks(rec, taste)
     hook_line = f"\nAnchor the sentence on this connection: {hooks}." if hooks else ""
+    # Ground the model in the actual content so it can't invent aligned qualities (review H4). The
+    # synopsis is for understanding only — the prompt forbids retelling plot, and the output is
+    # spoiler-screened. Truncate it so a long synopsis can't crowd the instruction out.
+    synopsis = (rec.overview or "").strip()
+    synopsis_line = (
+        f"\nSynopsis (grounding only — describe appeal, NEVER retell the plot): {synopsis[:360]}"
+        if synopsis
+        else ""
+    )
+    keywords = ", ".join(k for k in rec.keywords[:8] if k)
+    keyword_line = f"\nKeywords: {keywords}" if keywords else ""
+    # Real fit signal, so a weak pick is framed honestly instead of oversold. Swing → always a
+    # stretch; otherwise gauge by the pool-relative similarity (M1.4) when the breakdown carries it.
+    sim_rel = rec.components.get("similarity_rel")
+    if rec.is_swing:
+        fit = "a deliberate discovery pick — a stretch outside their usual taste"
+    elif sim_rel is not None and sim_rel < _WEAK_FIT:
+        fit = (
+            "a WEAK fit — be honest and frame it as a stretch/gamble, do NOT oversell it as a match"
+        )
+    else:
+        fit = "a strong match"
     anchor_line = ""
     if anchor is not None:
         anchor_genres = ", ".join(anchor.genres) if anchor.genres else "a title they loved"
@@ -194,10 +230,11 @@ def _llm_prompt(
         )
     directive = llm_output_directive(language)
     tail = f" {directive}" if directive else ""
+    title_line = f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}"
     return (
         f"{_SYSTEM}\nViewer taste: {summary}{hook_line}{anchor_line}\n"
-        f"Title: {rec.title} ({rec.year or 'n/a'}) — genres: {genres}\n"
-        f"This is {kind}. Write the one sentence, addressed to the viewer as you.{tail}"
+        f"{title_line}{keyword_line}{synopsis_line}\n"
+        f"This is {fit}. Write the one sentence, addressed to the viewer as you.{tail}"
     )
 
 
@@ -263,30 +300,36 @@ class Explainer:
     ) -> str:
         """One live LLM explanation with the spoiler post-check, falling back to the template.
 
-        The *outcome* is cached either way (blurb or template), so a title is attempted at most once
-        per taste version. Without this, a model whose output keeps tripping the spoiler guard would
-        re-burn the budget on every render and the cache would never warm.
+        *Stable* outcomes are cached (an accepted blurb, or a template chosen because the model
+        reliably narrates plot for this title — re-attempting either would just re-burn budget). A
+        *transient* LLM error is deliberately **not** cached, so the next render re-attempts once
+        the provider recovers, instead of serving the template for the whole taste version (G2).
         """
-        text = self._call_or_template(rec, taste)
-        if self.cache is not None:
+        text, outcome = self._call_or_template(rec, taste)
+        if self.cache is not None and outcome != "llm_error":
             self.cache.set(key, text)
         return text
 
-    def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> str:
+    def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> tuple[str, str]:
+        """Return ``(text, outcome)`` where outcome is ``ok`` / ``spoiler_rejected`` / ``llm_error``
+        — the caller uses it to decide whether the result is worth caching."""
         try:
             candidate = self.llm.complete(  # type: ignore[union-attr]
                 _llm_prompt(rec, taste, self.language), max_tokens=_REASON_MAX_TOKENS
             ).strip()
         except Exception:  # noqa: BLE001 - never let a flaky LLM sink the whole row
-            logger.warning("recommend.explain_failed", extra={"title": rec.title})
-            return _template(rec, taste, self.language)
+            record_fallback("explain", "llm_error", title=rec.title)
+            return _template(rec, taste, self.language), "llm_error"
         safe = coerce_safe(candidate) if candidate else None
         if safe:
-            return safe
+            return safe, "ok"
         if candidate:
-            # A genuine plot-reveal marker — drop it and fall back to the safe template.
-            logger.warning("recommend.explain_rejected", extra={"title": rec.title})
-        return _template(rec, taste, self.language)
+            # A genuine plot-reveal marker — a stable outcome for this title; cache the template.
+            record_fallback("explain", "spoiler_rejected", title=rec.title)
+            return _template(rec, taste, self.language), "spoiler_rejected"
+        # Empty completion (a model hiccup, not a reliable spoiler) — transient, so don't cache it.
+        record_fallback("explain", "llm_error", title=rec.title)
+        return _template(rec, taste, self.language), "llm_error"
 
 
 def explain(
@@ -331,7 +374,7 @@ def stream_lazy_reason(
             chunks.append(chunk)
             yield chunk
     except Exception:  # noqa: BLE001 - a flaky model must not sink the request
-        logger.warning("recommend.reason_failed", extra={"title": rec.title})
+        record_fallback("explain_stream", "llm_error", title=rec.title)
         if not chunks:
             yield _template(rec, taste, language)
         return

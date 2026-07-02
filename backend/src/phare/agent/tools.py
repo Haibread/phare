@@ -8,7 +8,6 @@ mis-parse never silently poisons taste (auto-write + undo).
 
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -20,6 +19,7 @@ from phare.agent import commitments as commitments_store
 from phare.agent import memory as memory_store
 from phare.agent.schema import AgentAction, AgentPlan, ChatIntent
 from phare.catalog.service import CatalogMetadataSource, search_titles
+from phare.core.fallback import record_fallback
 from phare.db.models import (
     CommitmentStatus,
     EventType,
@@ -33,8 +33,6 @@ from phare.llm_json import as_str_list
 from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 from phare.taste.service import maybe_refresh_taste
-
-logger = logging.getLogger(__name__)
 
 # A qualitative signal maps to one or more canonical events. "loved" stacks watched + liked so it
 # both excludes the title and pulls the centroid hard; ratings come in via the numeric `rating` arg.
@@ -68,6 +66,9 @@ class ExecutionResult:
     items: list[Recommendation] = field(default_factory=list)
     actions: list[AgentAction] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # e.g. "couldn't find 'Zxqyt'"
+    # Tool calls that raised — surfaced to the composer so the reply is honest about actions that
+    # didn't happen, instead of confirming a write that never landed (review B3).
+    failed_calls: list[str] = field(default_factory=list)
     intent: ChatIntent = field(default_factory=ChatIntent)
     taste_dirty: bool = False
     # Items re-surfaced for an explanation ("why these?") are already-logged picks, not new ones —
@@ -413,12 +414,13 @@ def execute_plan(ctx: ToolContext, plan: AgentPlan) -> ExecutionResult:
     for call in plan.calls:
         handler = _TOOLS.get(call.tool)
         if handler is None:
-            logger.warning("agent.unknown_tool", extra={"tool": call.tool})
+            record_fallback("agent_tool", "unknown_tool", tool=call.tool)
             continue
         try:
             handler(ctx, call.args, result)
         except Exception:  # noqa: BLE001 - one bad tool call must not sink the whole turn
-            logger.warning("agent.tool_failed", extra={"tool": call.tool})
+            record_fallback("agent_tool", "exception", tool=call.tool)
+            result.failed_calls.append(f"the {call.tool} action didn't complete")
     if result.taste_dirty:
         # Taste extraction is mechanical JSON — use the recommender's (workhorse) model, not the
         # bigger agent model. No-ops when offline. The caller owns the commit.
@@ -433,37 +435,44 @@ def undo_action(session: Session, profile_id: uuid.UUID, token: str) -> bool:
     changed = False
     for part in token.split(","):
         kind, _, ref = part.partition(":")
+        if kind == "taste":
+            changed = _undo_taste(session, profile_id, ref) or changed
+            continue
+        parsed = _as_uuid(ref)
+        if parsed is None:  # malformed token segment — skip it cleanly, never target the zero UUID
+            record_fallback("agent_undo", "malformed_ref", ref=ref)
+            continue
         if kind == "event":
-            event = session.get(WatchEvent, _as_uuid(ref))
+            event = session.get(WatchEvent, parsed)
             if event is not None and event.profile_id == profile_id:
                 session.delete(event)
                 changed = True
         elif kind == "commitment":
-            commitment = session.get(WatchCommitment, _as_uuid(ref))
+            commitment = session.get(WatchCommitment, parsed)
             if commitment is not None and commitment.profile_id == profile_id:
                 session.delete(commitment)
                 changed = True
         elif kind == "commitment-status":
-            commitment = session.get(WatchCommitment, _as_uuid(ref))
+            commitment = session.get(WatchCommitment, parsed)
             if commitment is not None and commitment.profile_id == profile_id:
                 commitment.status = CommitmentStatus.pending
                 commitment.resolved_at = None
                 changed = True
         elif kind == "note":
-            note = memory_store.get_note(session, _as_uuid(ref))
+            note = memory_store.get_note(session, parsed)
             if note is not None and note.profile_id == profile_id:
                 session.delete(note)
                 changed = True
-        elif kind == "taste":
-            changed = _undo_taste(session, profile_id, ref) or changed
     return changed
 
 
-def _as_uuid(ref: str) -> uuid.UUID:
+def _as_uuid(ref: str) -> uuid.UUID | None:
+    """Parse a token segment into a UUID, or ``None`` if malformed — never the zero UUID, which
+    would silently target a (non-existent) row instead of failing (review G4)."""
     try:
         return uuid.UUID(ref)
     except ValueError:
-        return uuid.UUID(int=0)
+        return None
 
 
 def _undo_taste(session: Session, profile_id: uuid.UUID, ref: str) -> bool:

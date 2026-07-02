@@ -90,7 +90,12 @@ The agent registers what you tell it immediately and surfaces each write as an *
 - "I bailed on *Show Y*" → `abandoned`; "can't stand musicals" → a durable taste override.
 
 `POST /chat/undo` reverses any action (delete the event/commitment/note, or revert a taste
-override) and re-derives taste.
+override) and re-derives taste. A malformed undo token segment is skipped cleanly — it never
+resolves to the zero UUID and targets a random row (review G4).
+
+If a tool **fails** (raises, or can't resolve a title), the failure is collected and fed to the
+composer, which is instructed to say so honestly and never confirm an action that didn't happen — a
+false "noted!" is worse than an admitted miss (review B3).
 
 ### Delivery: streaming + persistent history
 
@@ -130,8 +135,11 @@ See **Recent conversation** under [How a turn works](#how-a-turn-works).
    history. Off-topic messages (general questions, coding, chit-chat, attempts to change its role
    or rules) are declined and steered back; it is never a general-purpose assistant. Enforced in
    the planner (returns no tools) and composer (politely declines) system prompts.
-1. **Spoiler safety** — describe appeal (tone/themes/fit), never plot of unwatched content. LLM
-   explanations are also screened post-generation ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)).
+1. **Spoiler safety** — describe appeal (tone/themes/fit), never plot of unwatched content. Enforced
+   on **both** the "why this" blurbs and the **chat reply**: an explicit prompt instruction plus a
+   marker post-check (EN + FR) that drops a reply naming a plot reveal for the safe template
+   ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)). The streaming reply relies
+   on the prompt (it emits before the full text exists); the blocking path also post-checks.
 2. **Privacy** — never reveal or reference another user; no "because Bob liked this".
 3. **No hallucinated titles** — only act on titles the catalog can resolve; if resolution fails, the
    agent asks instead of guessing (no write).

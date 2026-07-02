@@ -8,7 +8,6 @@ to a catalog title needs the model.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime
 
@@ -25,11 +24,10 @@ from phare.agent.schema import (
     format_active_intent,
     format_history,
 )
+from phare.core.fallback import record_fallback
 from phare.db.models import TasteProfile, Title
 from phare.llm_json import extract_json
 from phare.providers.types import LLMProvider
-
-logger = logging.getLogger(__name__)
 
 # The plan is a small JSON object (a few tool calls); cap the response so the workhorse can't
 # over-generate on the planning step.
@@ -149,6 +147,7 @@ def plan(
         # filter lands one turn and vanishes the next. Determinism here is the whole point.
         parsed = extract_json(llm.complete(prompt, max_tokens=_PLAN_MAX_TOKENS, temperature=0.0))
         if not isinstance(parsed, dict) or "calls" not in parsed:
+            record_fallback("planner", "malformed_response", profile_id=str(profile_id))
             return AgentPlan(calls=[ToolCall(tool="recommend")], degraded=True)
         calls = [
             ToolCall(tool=str(c["tool"]), args=dict(c.get("args", {})))
@@ -157,5 +156,5 @@ def plan(
         ]
         return AgentPlan(calls=calls)  # may be empty → off-topic decline, handled by the service
     except Exception:  # noqa: BLE001 - a flaky planner must not break the chat turn
-        logger.warning("agent.plan_failed; defaulting to recommend")
+        record_fallback("planner", "parse_error", profile_id=str(profile_id))
         return AgentPlan(calls=[ToolCall(tool="recommend")], degraded=True)

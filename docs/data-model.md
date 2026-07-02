@@ -66,6 +66,11 @@ comfort axis / discovery tolerance) + a human-readable summary + a **confidence*
 guessing" honesty). User edits live separately and **always win**, surviving regeneration.
 Recency decay applies wherever taste is computed.
 
+When the LLM extraction fails, the profile falls back to a genre-frequency read and is flagged
+**`degraded`**; the auto-refresh then re-attempts extraction on the next trigger (in case the
+provider recovered) instead of freezing the coarse profile, and clears the flag on success — user
+overrides survive throughout (review A14).
+
 `affinities` keys and `hard-avoids` are the fields that actually **steer scoring**, so the
 extractor draws them from a **closed vocabulary** (canonical TMDB genres + a small controlled set
 of tone/era descriptors) and they're matched against a candidate's genres/keywords by a shared,

@@ -4,6 +4,7 @@
   "empty": "Aucune recommandation pour l'instant — chargez des données d'exemple ou connectez une source.",
   "todaysPicks": "Les choix du jour",
   "basicPicks": "basique",
+  "offlineBanner": "Mode hors-ligne : recommandations approximatives — ajoutez une clé d'embedding pour la qualité réelle.",
   "hero": {
     "topPick": "Le choix de la soirée"
   }
