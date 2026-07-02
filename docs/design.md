@@ -52,6 +52,11 @@ their *own* kind, not a fake taste score:
   thread reads strong, an abandoned one cools off.
 - `popular` → popularity magnitude on a log scale (a runaway hit reads stronger than a mild one).
 
+Because those last two aren't a *taste-fit* signal, the UI **doesn't render the fit meter** on the
+`continue_watching` and `popular` rows — the same worded gauge meaning "how far in" or "how
+well-known" on some rows and "how well it fits you" on others would make one label mean several
+things (review H8). Only the taste-driven rows (`you_might_like`, `because…`, dynamic themes) show it.
+
 A row with genuinely no opinion would pass `confidence = null`; the UI then shows the lowest
 neutral chip. (Today every row computes a real value, so that path is just the graceful fallback.)
 - **Dynamic LLM-generated rows** — an agent picks the day's rows from profile + mood + calendar
