@@ -73,9 +73,19 @@ def _taste_fingerprint(taste: Mapping[str, Any], anchor: Anchor | None = None) -
 _MAX_EXPLANATION_LEN = 320
 _SPOILER_MARKERS = re.compile(
     r"\b(turns out|plot twist|the twist|is revealed|revealed to be|the killer|the murderer|"
-    r"dies|is killed|killed off|betrays|the ending|ending reveals|spoiler)\b",
+    r"dies|is killed|killed off|betrays|the ending|ending reveals|spoiler|"
+    # French — the product is bilingual, so an EN-only net was blind to half the replies (B7). A
+    # conservative list; the prompt instruction is the real defence, this is just a backstop.
+    r"le tueur|le meurtrier|il meurt|elle meurt|est tué|est tuée|se révèle|la révélation|"
+    r"le twist|trahit|le dénouement|à la fin il|à la fin elle)\b",
     re.IGNORECASE,
 )
+
+
+def has_spoiler_markers(text: str) -> bool:
+    """True if the text names a plot reveal. Marker-only (no length rule), so it suits a
+    multi-sentence chat reply as well as a one-line blurb (review B7)."""
+    return _SPOILER_MARKERS.search(text) is not None
 
 
 def is_spoiler_safe(text: str) -> bool:

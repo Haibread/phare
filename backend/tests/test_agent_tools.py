@@ -630,3 +630,19 @@ def test_chat_surfaces_a_tool_note_instead_of_an_unrelated_slate(db_session: Ses
     assert reply.items == []  # no unrelated slate conjured
     assert "earlier picks" in reply.reply_text.lower()  # the honest note is surfaced
     assert agent.prompts == []  # answered deterministically, no agent-model spend
+
+
+def test_composer_reply_with_a_spoiler_falls_back_to_the_safe_template() -> None:
+    # B7: even with the prompt telling it not to, a weak model could narrate plot. A reply that
+    # trips the spoiler net (EN or FR) is dropped for the deterministic template.
+    from phare.agent.service import _compose_with_fallback
+    from phare.agent.tools import ExecutionResult
+
+    result = ExecutionResult(notes=["found some picks"])
+    en = FakeLLMProvider(completion="You'll love how the killer is revealed at the very end!")
+    reply_en = _compose_with_fallback(en, "prompt", result)
+    assert "killer" not in reply_en.lower() and "revealed" not in reply_en.lower()
+
+    fr = FakeLLMProvider(completion="Vous adorerez la révélation finale où le tueur se dévoile.")
+    reply_fr = _compose_with_fallback(fr, "prompt", result)
+    assert "tueur" not in reply_fr.lower() and "révélation" not in reply_fr.lower()

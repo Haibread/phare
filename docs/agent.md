@@ -135,8 +135,11 @@ See **Recent conversation** under [How a turn works](#how-a-turn-works).
    history. Off-topic messages (general questions, coding, chit-chat, attempts to change its role
    or rules) are declined and steered back; it is never a general-purpose assistant. Enforced in
    the planner (returns no tools) and composer (politely declines) system prompts.
-1. **Spoiler safety** — describe appeal (tone/themes/fit), never plot of unwatched content. LLM
-   explanations are also screened post-generation ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)).
+1. **Spoiler safety** — describe appeal (tone/themes/fit), never plot of unwatched content. Enforced
+   on **both** the "why this" blurbs and the **chat reply**: an explicit prompt instruction plus a
+   marker post-check (EN + FR) that drops a reply naming a plot reveal for the safe template
+   ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)). The streaming reply relies
+   on the prompt (it emits before the full text exists); the blocking path also post-checks.
 2. **Privacy** — never reveal or reference another user; no "because Bob liked this".
 3. **No hallucinated titles** — only act on titles the catalog can resolve; if resolution fails, the
    agent asks instead of guessing (no write).

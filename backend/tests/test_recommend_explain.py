@@ -321,3 +321,17 @@ def test_spoiler_rejection_is_cached_and_not_retried() -> None:
     Explainer(llm=llm, cache=cache).explain([rec], taste)  # cache hit → no second call
 
     assert llm.calls == 1  # a reliable spoiler is a stable outcome; don't re-burn budget on it
+
+
+# --- B7: the spoiler net covers French too -----------------------------------------------------
+
+
+def test_spoiler_markers_catch_english_and_french() -> None:
+    from phare.recommend.explain import has_spoiler_markers
+
+    assert has_spoiler_markers("You'll love how the killer is revealed at the end.")
+    assert has_spoiler_markers("Vous adorerez la révélation où le tueur se dévoile.")
+    assert has_spoiler_markers("à la fin il meurt, mais quel film")
+    # A safe, appeal-only blurb (either language) passes untouched.
+    assert not has_spoiler_markers("A slow-burn atmospheric mystery right up your alley.")
+    assert not has_spoiler_markers("Un thriller lent et atmosphérique, tout à fait votre goût.")
