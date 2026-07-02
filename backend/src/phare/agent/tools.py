@@ -177,6 +177,7 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         include_genres=args.get("include_genres"),
         exclude_genres=args.get("exclude_genres"),
         mood=args.get("mood"),
+        kind=args.get("kind"),
         rewatch=bool(args.get("rewatch", False)),
     )
     result.intent = intent

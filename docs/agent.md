@@ -59,7 +59,8 @@ execution → reply`
   so a long chat can't balloon the prompt or the token bill (no extra LLM *calls*, just bounded
   input). **Offline** (no LLM) stays single-message: there's no model to resolve a reference against.
 - **Active filters (refinement)** — the planner also gets the *structured* filters in effect from the
-  previous turn (genres, runtime cap, mood — replayed by the client as `activeIntent`), not just the
+  previous turn (genres, runtime cap, mood, movie/show kind — replayed by the client as
+  `activeIntent`), not just the
   prose. The runtime ceiling lives only in the intent and never reaches the transcript, so without
   this "even shorter" can't tighten below the prior cap — the planner re-emits the full refined
   recommend args, carrying over what still applies and adjusting only what the message changed.

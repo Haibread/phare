@@ -74,9 +74,36 @@ class ChatIntent(BaseModel):
     include_genres: list[str] = []
     exclude_genres: list[str] = []
     mood: str | None = None
+    # Movie vs show — a hard candidate filter when set. ``None`` = either (product decision: a user
+    # may well want both). From an LLM tool call, so the validator absorbs synonyms and never raises
+    # — an unknown value coerces to None rather than sinking the turn.
+    kind: Literal["movie", "show"] | None = None
     # A rewatch flips the candidate source: draw from titles the profile has already watched/loved
     # instead of excluding them. "a comfort rewatch", "something I've seen", "watch again".
     rewatch: bool = False
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _coerce_kind(cls, value: Any) -> str | None:
+        # film/movie -> movie; series/tv/série -> show; anything unrecognised -> None (no filter).
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if text in {"movie", "movies", "film", "films"}:
+            return "movie"
+        if text in {
+            "show",
+            "shows",
+            "series",
+            "serie",
+            "série",
+            "séries",
+            "tv",
+            "tv show",
+            "tv series",
+        }:
+            return "show"
+        return None
 
     @field_validator("include_genres", "exclude_genres", mode="before")
     @classmethod

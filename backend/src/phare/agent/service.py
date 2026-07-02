@@ -71,6 +71,9 @@ def intent_filter(intent: ChatIntent):
                 for c in result
                 if c.runtime_minutes is None or c.runtime_minutes <= intent.max_runtime
             ]
+        if intent.kind is not None:
+            # Hard filter — "a movie for tonight" must not return a show (review A5).
+            result = [c for c in result if c.kind == intent.kind]
         if intent.include_genres:
             matched = [c for c in result if genres.matches_any(intent.include_genres, c.genres)]
             # Don't return nothing just because the catalog is thin — fall back to runtime-only, but
