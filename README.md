@@ -65,3 +65,8 @@ cd frontend && npm run lint && npm run typecheck && npm test
 cd e2e      && npm ci && npx playwright install chromium && npm test   # full-stack journeys
 cd backend  && uv run phare evaluate                     # persona guardrails + metrics
 ```
+
+## License
+
+[AGPL-3.0](LICENSE) — network copyleft: if you run a modified Phare as a service, you must offer
+your users the modified source. Chosen for a self-hosted project so improvements stay open.
