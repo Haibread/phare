@@ -77,8 +77,22 @@ boot via `MIGRATE_ON_STARTUP=true` in compose.
 
 ```bash
 docker compose exec -T db pg_dump -U phare phare | gzip > phare-$(date +%F).sql.gz   # dump
-gunzip -c phare-2026-07-03.sql.gz | docker compose exec -T db psql -U phare phare     # restore
 ```
+
+**Restore into an _empty_ database, before the backend runs.** The dump has no `DROP`/`CREATE`
+statements (no `pg_dump --clean`), so restoring on top of existing tables fails with `relation
+already exists`. Since the backend migrates on boot (`MIGRATE_ON_STARTUP=true`), start **only** the
+db first, restore, then bring the rest up:
+
+```bash
+docker compose up -d db                                                              # db only, empty
+gunzip -c phare-2026-07-03.sql.gz | docker compose exec -T db psql -U phare phare     # restore
+docker compose up -d                                                                 # then the backend
+```
+
+Restoring into a brand-new volume (a fresh host, or after `docker compose down -v`) satisfies this
+for free — the db comes up empty. If you must restore over an already-migrated database, take the
+dump with `pg_dump --clean --if-exists` instead so it drops the existing objects first.
 
 **Upgrade**: back up first, then pull and recreate — migrations apply automatically on start.
 
