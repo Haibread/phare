@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import EventType, Title, TitleKind, WatchEvent
+from phare.recommend.candidates import _is_hard_avoided
 from phare.recommend.schema import Recommendation, Row
 
 _MIN_DT = datetime(1, 1, 1, tzinfo=UTC)
@@ -158,17 +159,30 @@ def popular_row(
     *,
     limit: int = 12,
     language: Language = DEFAULT_LANGUAGE,
+    hard_avoids: Collection[str] = (),
 ) -> Row:
-    """Global popularity over the catalog, excluding what the profile has already seen."""
+    """Global popularity over the catalog, excluding what the profile has already seen.
+
+    The row stays deliberately off-taste (no taste sort, no fit gauge), but it never serves a title
+    that matches the profile's ``hard_avoids`` — "popular" should mean "popular *and* something
+    you'd actually watch" (decision M10.1). Reuses the shared hard-avoid matcher the taste-driven
+    rows use (:func:`phare.recommend.candidates._is_hard_avoided`); a profile with no
+    ``hard_avoids`` leaves the row strictly unchanged."""
     watched = (
         select(WatchEvent.title_id).where(WatchEvent.profile_id == profile_id).scalar_subquery()
     )
+    avoids = [a for a in hard_avoids if a.strip()]
+    # Over-fetch when filtering so removed avoids can't starve the row below its minimum size; with
+    # no avoids the query is identical to before (no post-filter, exact ``limit``).
+    fetch = limit if not avoids else limit * 3 + len(avoids) + 10
     rows = session.scalars(
         select(Title)
         .where(Title.id.notin_(watched), Title.popularity.isnot(None))
         .order_by(Title.popularity.desc(), Title.tmdb_id.asc().nulls_last(), Title.id)
-        .limit(limit)
+        .limit(fetch)
     ).all()
+    if avoids:
+        rows = [title for title in rows if not _is_hard_avoided(title, avoids)][:limit]
     items = [
         _rec(
             title,

@@ -37,7 +37,10 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 
 - `watch_again` — from own history.
 - `you_might_like` — the full pipeline. **This is the actual product**; most value/risk is here.
-- `popular` — global popularity.
+- `popular` — global popularity. Stays off-taste (no taste sort, no fit gauge), but it still
+  **respects the profile's `hard_avoids`**: a title matching a hard-avoid is never served here, so
+  "popular" means "popular *and* something you'd actually watch" (a profile with no hard-avoids
+  leaves the row unchanged, and the row is hidden if the filter thins it below the row minimum).
 - `continue_watching` / `next_up` — in-progress shows, next episodes (TV roll-up).
 
 Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
