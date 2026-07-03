@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -71,6 +72,40 @@ def effective_profile(taste: TasteProfile) -> dict[str, Any]:
     return merged
 
 
+@dataclass
+class _TitleRollup:
+    """Accumulates a single title's watch events into one history line for the taste prompt.
+
+    Events arrive most-recent-first; each ``add`` folds one in. The line carries the distinct event
+    type(s) seen (in encounter order), a watch count when the title has more than one event, and a
+    rating when any event for the title was rated (the most recent one, since events arrive newest
+    first).
+    """
+
+    title: Title
+    count: int = 0
+    types: list[str] = field(default_factory=list)
+    rating: float | None = None
+
+    def add(self, event: WatchEvent) -> None:
+        self.count += 1
+        if event.type.value not in self.types:
+            self.types.append(event.type.value)
+        # Keep the most recent rating: events fold in newest-first, so the first non-null wins.
+        if self.rating is None and event.rating is not None:
+            self.rating = float(event.rating)
+
+    def line(self) -> str:
+        genres = ", ".join(self.title.genres) if self.title.genres else "?"
+        rating = f" rating={self.rating:g}" if self.rating is not None else ""
+        count = f" x{self.count}" if self.count > 1 else ""
+        types = ", ".join(self.types)
+        return (
+            f"- [{types}{count}] {self.title.title} ({self.title.kind.value}, "
+            f"{self.title.year or '?'}) genres: {genres}{rating}"
+        )
+
+
 class TasteService:
     """Generates and persists a profile's taste profile via the LLM."""
 
@@ -87,22 +122,30 @@ class TasteService:
         self.language = language
 
     def _history_lines(self, profile_id: uuid.UUID) -> list[str]:
+        """One line per *distinct title*, most-recent-first, capped at ``taste_max_events`` titles.
+
+        Trakt history is episode-level, so a binged show would otherwise eat dozens of the (150)
+        lines and crowd out every other title the viewer watched — a 5952-event profile surfaced a
+        handful of distinct titles to the LLM. Roll the events up per title instead: carry the
+        event type(s), a watch count when >1, and a rating when any event for the title is rated.
+        """
         rows = self.session.execute(
             select(WatchEvent, Title)
             .join(Title, WatchEvent.title_id == Title.id)
             .where(WatchEvent.profile_id == profile_id, WatchEvent.excluded.is_(False))
             .order_by(WatchEvent.occurred_at.desc().nulls_last())
-            .limit(get_settings().taste_max_events)
         ).all()
-        lines: list[str] = []
+        # Accumulate per title in first-seen (most-recent-first) order, so the cap keeps the most
+        # recent distinct titles rather than the most recent raw events.
+        rolled: dict[uuid.UUID, _TitleRollup] = {}
         for event, title in rows:
-            genres = ", ".join(title.genres) if title.genres else "?"
-            rating = f" rating={float(event.rating):g}" if event.rating is not None else ""
-            lines.append(
-                f"- [{event.type.value}] {title.title} ({title.kind.value}, "
-                f"{title.year or '?'}) genres: {genres}{rating}"
-            )
-        return lines
+            rollup = rolled.get(title.id)
+            if rollup is None:
+                rollup = _TitleRollup(title=title)
+                rolled[title.id] = rollup
+            rollup.add(event)
+        limit = get_settings().taste_max_events
+        return [rollup.line() for rollup in list(rolled.values())[:limit]]
 
     def _memory_block(self, profile_id: uuid.UUID) -> str:
         """Active agent-memory notes the user told us — distilled into the taste profile here."""

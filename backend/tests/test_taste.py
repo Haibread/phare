@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from phare.api.taste import get_llm_provider
 from phare.core.config import get_settings
-from phare.db.models import EventType, Profile, TasteProfile, Title, User, WatchEvent
+from phare.db.models import EventType, Profile, TasteProfile, Title, TitleKind, User, WatchEvent
 from phare.ingest.sample import seed_sample_data
 from phare.providers.fakes import FakeLLMProvider
 from phare.taste.service import (
@@ -129,6 +129,108 @@ def test_generate_builds_profile(db_session: Session) -> None:
     assert taste.generated_at is not None
     # The prompt must actually include the user's history.
     assert "Dune" in llm.prompts[0]
+
+
+# --- history roll-up (episode-level events collapse to one line per title) ---
+
+
+_next_tmdb_id = iter(range(1, 1_000_000))
+
+
+def _make_title(session: Session, name: str, *, kind: TitleKind = TitleKind.show) -> Title:
+    title = Title(kind=kind, title=name, year=2013, genres=["Comedy"], tmdb_id=next(_next_tmdb_id))
+    session.add(title)
+    session.flush()
+    return title
+
+
+def _add_event(
+    session: Session,
+    profile_id: uuid.UUID,
+    title: Title,
+    *,
+    when: datetime,
+    type_: EventType = EventType.watched,
+    rating: float | None = None,
+) -> None:
+    session.add(
+        WatchEvent(
+            profile_id=profile_id,
+            title_id=title.id,
+            type=type_,
+            source="test",
+            external_ref=f"{title.title}-{uuid.uuid4()}",
+            occurred_at=when,
+            rating=rating,
+        )
+    )
+    session.flush()
+
+
+def _history_lines(session: Session, profile_id: uuid.UUID) -> list[str]:
+    return TasteService(session, FakeLLMProvider(completion=CANNED), "m")._history_lines(profile_id)
+
+
+def test_history_rolls_episodes_into_one_line_with_count(db_session: Session) -> None:
+    # Trakt imports are episode-level; a binged show must not eat dozens of the 150 lines.
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    show = _make_title(db_session, "Rick and Morty")
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    for i in range(24):
+        _add_event(db_session, profile.id, show, when=base + timedelta(hours=i))
+
+    lines = _history_lines(db_session, profile.id)
+    assert len(lines) == 1
+    assert "Rick and Morty" in lines[0]
+    assert "x24" in lines[0]  # count carried, not 24 separate lines
+
+
+def test_history_shows_rating_when_any_event_rated(db_session: Session) -> None:
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    show = _make_title(db_session, "The Bear")
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    # Newest event carries the rating; older ones don't. Rating must still surface on the line.
+    _add_event(db_session, profile.id, show, when=base, type_=EventType.watched)
+    _add_event(
+        db_session, profile.id, show, when=base + timedelta(days=1), type_=EventType.rated, rating=9
+    )
+
+    (line,) = _history_lines(db_session, profile.id)
+    assert "rating=9" in line
+    assert "x2" in line
+
+
+def test_history_caps_at_taste_max_events_titles(db_session: Session) -> None:
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    cap = get_settings().taste_max_events
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    for i in range(cap + 10):
+        title = _make_title(db_session, f"Title {i:04d}", kind=TitleKind.movie)
+        _add_event(db_session, profile.id, title, when=base + timedelta(hours=i))
+
+    lines = _history_lines(db_session, profile.id)
+    assert len(lines) == cap  # cap is on distinct titles, not raw events
+
+
+def test_history_is_most_recent_first(db_session: Session) -> None:
+    profile = Profile(display_name="me")
+    db_session.add(profile)
+    db_session.flush()
+    old = _make_title(db_session, "Old Show", kind=TitleKind.movie)
+    new = _make_title(db_session, "New Show", kind=TitleKind.movie)
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    _add_event(db_session, profile.id, old, when=base)
+    _add_event(db_session, profile.id, new, when=base + timedelta(days=30))
+
+    lines = _history_lines(db_session, profile.id)
+    assert "New Show" in lines[0]
+    assert "Old Show" in lines[1]
 
 
 def test_generate_strips_reasoning_block(db_session: Session) -> None:
