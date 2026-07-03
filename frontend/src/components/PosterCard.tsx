@@ -2,6 +2,8 @@ import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecommendationItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
+import { useEmbeddingsDegraded } from "../lib/degraded";
+import { fitFor } from "../lib/fit";
 import { posterTint } from "../lib/poster";
 import { useSendTitleFeedback, useUndoChatAction } from "../lib/queries";
 import { TitleAction } from "./Availability";
@@ -21,7 +23,9 @@ export function PosterCard({
   anchorTitleId?: string | null;
 }): React.JSX.Element {
   const { t } = useTranslation("title");
+  const { t: tCommon } = useTranslation("common");
   const profileId = useProfileId();
+  const degraded = useEmbeddingsDegraded();
   const swingHelpId = useId(); // unique per card so each swing badge describes its own help text
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -86,11 +90,25 @@ export function PosterCard({
       >
         ✕
       </button>
-      {/* Poster + title open the detail sheet; the request button below stays separately clickable. */}
+      {/* Poster + title open the detail sheet; the request button below stays separately clickable.
+          An explicit aria-label gives the button one clean name — "Open {title} ({year}), {fit}" —
+          instead of the screen reader stitching together the badges, title and meta text (review L2). */}
       <button
         type="button"
         className={styles.cardOpen}
         data-testid="rec-card-open"
+        aria-label={
+          showFit
+            ? t("openCard", {
+                title: item.title,
+                year: item.year !== null ? ` (${item.year})` : "",
+                fit: tCommon(fitFor(item.confidence, item.isSwing, degraded).labelKey),
+              })
+            : t("openCardNoFit", {
+                title: item.title,
+                year: item.year !== null ? ` (${item.year})` : "",
+              })
+        }
         onClick={() => setDetailOpen(true)}
       >
         <div

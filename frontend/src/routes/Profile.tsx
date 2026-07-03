@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { HistoryItem } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
-import { ErrorState, Loading, errorMessage } from "../components/states";
+import { CardSkeleton, ErrorState, errorMessage } from "../components/states";
 import {
   keys,
   useAddMemoryNote,
@@ -91,7 +91,9 @@ export function Profile(): React.JSX.Element {
         </div>
 
         {taste.isPending ? (
-          <Loading label={t("taste.loading")} />
+          <CardSkeleton lines={4} />
+        ) : taste.isError ? (
+          <ErrorState error={taste.error} onRetry={() => taste.refetch()} />
         ) : taste.data?.summary ? (
           <>
             <p className="muted" data-testid="taste-summary">
@@ -181,7 +183,9 @@ export function Profile(): React.JSX.Element {
           </button>
         </div>
         {sources.isPending ? (
-          <Loading label={t("sources.loading")} />
+          <CardSkeleton lines={2} />
+        ) : sources.isError ? (
+          <ErrorState error={sources.error} onRetry={() => sources.refetch()} />
         ) : sources.data && sources.data.length > 0 ? (
           <div data-testid="connected-sources">
             {sources.data.map((s) => (
@@ -216,7 +220,9 @@ export function Profile(): React.JSX.Element {
       <section className={styles.card} data-testid="watch-plans">
         <h2 style={{ fontSize: "1.05rem", marginBottom: "var(--sp-3)" }}>{t("plans.heading")}</h2>
         {commitments.isPending ? (
-          <Loading label={t("plans.loading")} />
+          <CardSkeleton lines={2} />
+        ) : commitments.isError ? (
+          <ErrorState error={commitments.error} onRetry={() => commitments.refetch()} />
         ) : commitments.data && commitments.data.items.length > 0 ? (
           <div>
             {commitments.data.items.map((c) => (
@@ -263,7 +269,11 @@ export function Profile(): React.JSX.Element {
             {t("memory.remember")}
           </button>
         </div>
-        {memory.data && memory.data.items.length > 0 ? (
+        {memory.isError ? (
+          <div style={{ marginTop: "var(--sp-3)" }}>
+            <ErrorState error={memory.error} onRetry={() => memory.refetch()} />
+          </div>
+        ) : memory.data && memory.data.items.length > 0 ? (
           <div style={{ marginTop: "var(--sp-3)" }}>
             {memory.data.items.map((n) => (
               <div className={styles.sourceLine} key={n.id} data-testid="memory-note">
@@ -291,7 +301,7 @@ export function Profile(): React.JSX.Element {
       <section className={styles.card}>
         <h2 style={{ fontSize: "1.05rem", marginBottom: "var(--sp-3)" }}>{t("history.heading")}</h2>
         {history.isPending ? (
-          <Loading label={t("history.loading")} />
+          <CardSkeleton lines={4} />
         ) : history.isError ? (
           <ErrorState error={history.error} onRetry={() => history.refetch()} />
         ) : history.data.items.length === 0 ? (

@@ -33,6 +33,23 @@ export function RowSkeleton(): React.JSX.Element {
   );
 }
 
+/** A few shimmer lines that hold a card section's space while its query loads, instead of a raw
+ * "Loading…" that pops the layout when data arrives (review E3). ``lines`` sizes it to the section. */
+export function CardSkeleton({ lines = 3 }: { lines?: number }): React.JSX.Element {
+  return (
+    <div className={styles.skelLines} aria-hidden="true" data-testid="card-skeleton">
+      {Array.from({ length: lines }, (_, i) => i).map((n) => (
+        <div
+          key={n}
+          className={styles.skelLine}
+          // Vary widths so it reads as text, not blocks; last line shorter.
+          style={{ width: n === lines - 1 ? "60%" : `${90 - n * 8}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function ErrorState({
   error,
   onRetry,

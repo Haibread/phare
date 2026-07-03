@@ -19,8 +19,8 @@
     "connected": "connectée",
     "synced": "synchronisée {{when}}",
     "empty": "Aucune source connectée — ajoutez-en une pour garder vos goûts à jour.",
-    "conversionPending": "Conversion (top-{{topK}}, {{withinDays}} j) : pas encore assez d'historique.",
-    "conversion": "Conversion : {{rate}} % des {{shown}} proposées ont été regardées."
+    "conversionPending": "Pas encore assez d'historique pour voir combien de nos suggestions vous regardez.",
+    "conversion": "Parmi nos suggestions, vous en avez regardé {{rate}} % en deux semaines."
   },
   "plans": {
     "heading": "Plans de visionnage",

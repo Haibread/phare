@@ -20,6 +20,7 @@ from phare.taste.service import (
     TasteService,
     _should_auto_refresh,
     effective_profile,
+    localized_summary,
     maybe_refresh_taste,
     optional_llm_provider,
 )
@@ -63,6 +64,36 @@ def test_off_vocabulary_affinity_key_is_flagged(db_session: Session, caplog) -> 
         taste = TasteService(db_session, llm, "test-model").generate(profile_id)
     assert taste.structured["affinities"]["Underwater Basket Weaving"] == 0.8  # saved + valid
     assert any(r.message == "taste_affinity.fallback" for r in caplog.records)
+
+
+def test_localized_summary_translates_once_then_caches(db_session: Session) -> None:
+    # F1: the summary is served in the request's language, translated on demand and cached so each
+    # language costs at most one workhorse call.
+    profile_id = _profile_with_history(db_session)
+    taste = TasteService(
+        db_session, FakeLLMProvider(completion=CANNED), "m", language="en"
+    ).generate(profile_id)
+    translator = FakeLLMProvider(completion="Vous aimez la SF cérébrale et le drame prestige.")
+    first = localized_summary(db_session, taste, "fr", translator)
+    assert first == "Vous aimez la SF cérébrale et le drame prestige."
+    assert len(translator.prompts) == 1  # one workhorse call for the translation
+
+    # A second French read is served from the cache — the (unused) provider is never called.
+    unused = FakeLLMProvider(completion="SHOULD NOT BE CALLED")
+    assert localized_summary(db_session, taste, "fr", unused) == first
+    assert unused.prompts == []
+
+    # The native language is returned as-is, with no translation call.
+    assert localized_summary(db_session, taste, "en", None) == taste.summary_text
+
+
+def test_localized_summary_offline_serves_native(db_session: Session) -> None:
+    # Without an LLM (offline), a language miss falls back to the stored summary, not a failure.
+    profile_id = _profile_with_history(db_session)
+    taste = TasteService(
+        db_session, FakeLLMProvider(completion=CANNED), "m", language="en"
+    ).generate(profile_id)
+    assert localized_summary(db_session, taste, "fr", None) == taste.summary_text
 
 
 def test_degraded_taste_profile_is_marked_and_re_extracted(db_session: Session) -> None:

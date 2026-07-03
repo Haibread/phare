@@ -78,7 +78,10 @@ def test_template_is_localised_to_french() -> None:
     [out] = explain([_rec()], taste, llm=None, language="fr")
     assert out.explanation is not None
     assert out.explanation.startswith("Film")  # localised kind, not "A ... movie"
-    assert "votre goût pour Science Fiction" in out.explanation  # localised affinity clause
+    # The genre name is display-translated too (review F3): a French sentence reads
+    # "Science-Fiction", not the stored English "Science Fiction".
+    assert "votre goût pour Science-Fiction" in out.explanation
+    assert "Science Fiction" not in out.explanation  # the English label must not leak through
     assert "2016" in out.explanation  # year still interpolated
 
 

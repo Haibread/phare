@@ -19,8 +19,8 @@
     "connected": "connected",
     "synced": "synced {{when}}",
     "empty": "No sources connected yet — add one to keep your taste fresh.",
-    "conversionPending": "Conversion (top-{{topK}}, {{withinDays}}d): not enough history yet.",
-    "conversion": "Conversion: {{rate}}% of {{shown}} shown were watched."
+    "conversionPending": "Not enough history yet to see how many of our picks you watch.",
+    "conversion": "Of our suggestions, you watched {{rate}}% within two weeks."
   },
   "plans": {
     "heading": "Watch plans",

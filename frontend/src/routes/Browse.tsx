@@ -6,7 +6,7 @@ import { useProfileId } from "../app/ProfileContext";
 import { AvailabilityProvider } from "../components/Availability";
 import { ConfidenceMeter } from "../components/ConfidenceMeter";
 import { RecRow } from "../components/RecRow";
-import { ErrorState, Loading } from "../components/states";
+import { ErrorState, RowSkeleton } from "../components/states";
 import { EmbeddingsDegradedContext } from "../lib/degraded";
 import { posterTint } from "../lib/poster";
 import {
@@ -75,7 +75,15 @@ export function Browse(): React.JSX.Element {
   const request = useRequestTitle(profileId);
 
   if (recs.isPending) {
-    return <Loading label={t("loading")} />;
+    // Skeleton rows hold the page's shape while recommendations load, instead of a bare spinner
+    // that the real content then displaces (review E3).
+    return (
+      <div className={styles.page} data-testid="browse-loading">
+        <h1 className="sr-only">{t("pageHeading")}</h1>
+        <RowSkeleton />
+        <RowSkeleton />
+      </div>
+    );
   }
   if (recs.isError) {
     return <ErrorState error={recs.error} onRetry={() => recs.refetch()} />;
@@ -102,6 +110,7 @@ export function Browse(): React.JSX.Element {
     <AvailabilityProvider value={availabilityCtx}>
       <EmbeddingsDegradedContext.Provider value={recs.data.embeddingsDegraded ?? false}>
         <div className={styles.page} data-testid="browse">
+          <h1 className="sr-only">{t("pageHeading")}</h1>
           {recs.data.embeddingsDegraded && (
             <p className={styles.offlineBanner} data-testid="embeddings-degraded-banner">
               {t("offlineBanner")}
@@ -126,19 +135,27 @@ export function Browse(): React.JSX.Element {
             rows.map((row) => <RecRow key={row.key} row={row} />)
           )}
 
-          {dynamic.data?.rows.some((r) => r.items.length > 0) && (
+          {/* "Today's picks" now renders its own loading/error states instead of silently
+              appearing and disappearing as the dynamic query resolves or fails (review E1). */}
+          {(dynamic.isPending ||
+            dynamic.isError ||
+            dynamic.data?.rows.some((r) => r.items.length > 0)) && (
             <>
               <h3 className={styles.pageTitle} style={{ marginTop: "var(--sp-5)" }}>
                 {t("todaysPicks")}
-                {dynamic.data.degraded && (
+                {dynamic.data?.degraded && (
                   <span className={styles.basicBadge} data-testid="dynamic-degraded">
                     {t("basicPicks")}
                   </span>
                 )}
               </h3>
-              {dynamic.data.rows.map((row) => (
-                <RecRow key={row.key} row={row} />
-              ))}
+              {dynamic.isPending ? (
+                <RowSkeleton />
+              ) : dynamic.isError ? (
+                <ErrorState error={dynamic.error} onRetry={() => dynamic.refetch()} />
+              ) : (
+                dynamic.data?.rows.map((row) => <RecRow key={row.key} row={row} />)
+              )}
             </>
           )}
         </div>

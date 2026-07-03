@@ -197,19 +197,26 @@ What localises with the request language:
   the request language (the English system prompts — which carry the scope/guardrails — are kept and
   a one-line output-language directive is appended), so behaviour and safety wording don't drift.
 
+**Genre names** (TMDB labels) are display-translated in explanation templates via a static table, so
+a French sentence reads "Science-Fiction", not the stored English "Science Fiction". The stored
+labels stay English — they key affinity/genre matching against the catalog — so only the _displayed_
+string is translated. An unmapped genre falls back to English and emits a `phare.fallback` signal.
+
+The **taste summary** is served in the request's language: the first read in a new language spends
+one workhorse LLM call to translate it, cached per language on the profile (`summary_by_lang`) so
+each language costs at most one call per (re)generation. Offline (no `LLM_API_KEY`) it serves the
+stored summary unchanged.
+
 What does **not** localise:
 
-- **Structured taste keys** (likes/dislikes/affinity keys) and **dynamic-row genres** stay English
-  on purpose — they key affinity/genre matching against the catalog's English genre names. Only the
-  taste _summary_ and the row _titles_ localise.
-- **Catalog metadata already stored** from a previous import keeps the language it was imported in
-  (genre labels in a row can stay English even in a French sentence); only re-fetched TMDB data
-  honours the current language. Titles, people, and years are never translated.
+- **Structured taste keys** (likes/dislikes/affinity keys) stay English on purpose — they key
+  affinity matching against the catalog's English genre names. The taste chips shown on the profile
+  therefore display their stored (English) label for now.
+- **Catalog metadata already stored** from a previous import keeps the language it was imported in;
+  only re-fetched TMDB data honours the current language. Titles, people, and years are never
+  translated.
 - **Tool notes** in a chat reply (e.g. "couldn't find 'Zxqyt'") are surfaced verbatim; the framing
   around them localises.
-
-Because the taste profile is a single stored artifact, its summary is written in whichever language
-last triggered a (re)generation — regenerate from the profile screen to set it to your language.
 
 ## Offline / no-key behavior
 

@@ -24,6 +24,7 @@ from phare.core.i18n import DEFAULT_LANGUAGE, Language, llm_output_directive, tr
 from phare.db.models import TitleExplanation
 from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, stream_text
+from phare.recommend.genres import translate_genre, translate_genres
 from phare.recommend.schema import Anchor, Recommendation
 
 
@@ -138,29 +139,33 @@ def _template(
 ) -> str:
     """Deterministic, metadata-only explanation. Spoiler-proof by construction.
 
-    Localised via the catalog; genre names stay as stored (their import language), so a French
-    sentence can still carry English genre labels until the catalog is re-fetched localised."""
+    Localised via the catalog; genre names are display-translated (review F3) so a French sentence
+    reads "Science-Fiction", not the stored English "Science Fiction". Stored labels stay English
+    (they key affinity matching); translation happens only here, at the point of display."""
     spanning = translate(language, "explain.genreSpanning")
     kind = translate(language, f"explain.kind.{rec.kind}")
     era = translate(language, "explain.era", year=rec.year) if rec.year else ""
     if rec.is_swing:
-        genres = ", ".join(rec.genres[:2]) if rec.genres else spanning
+        genres = ", ".join(translate_genres(rec.genres[:2], language)) if rec.genres else spanning
         return translate(language, "explain.swing", genres=genres, kind=kind, era=era)
     matched = _matched_affinity(rec, taste)
     if matched is not None:
         # Name the matched genre once — in the "because" hook — and list only the *other* genres in
         # the descriptor, so we don't read "Sci-Fi, Mystery movie that leans into your taste for
         # Sci-Fi". When it's the only genre, keep it as the descriptor and use the generic profile
-        # tail instead of repeating it.
+        # tail instead of repeating it. Comparison stays on the stored English names; only the
+        # displayed strings are translated.
         others = [g for g in rec.genres if g.lower() != matched.lower()][:2]
         if others:
-            genres = ", ".join(others)
-            because = translate(language, "explain.becauseAffinity", matched=matched)
+            genres = ", ".join(translate_genres(others, language))
+            because = translate(
+                language, "explain.becauseAffinity", matched=translate_genre(matched, language)
+            )
         else:
-            genres = matched
+            genres = translate_genre(matched, language)
             because = _because_profile(rec, language)
     else:
-        genres = ", ".join(rec.genres[:2]) if rec.genres else spanning
+        genres = ", ".join(translate_genres(rec.genres[:2], language)) if rec.genres else spanning
         because = _because_profile(rec, language)
     return translate(language, "explain.base", genres=genres, kind=kind, era=era, because=because)
 

@@ -95,12 +95,22 @@ export function TitleDetailSheet({
           {(detail.data?.tmdbUrl || detail.data?.imdbUrl) && (
             <div className={styles.detailLinks}>
               {detail.data.tmdbUrl && (
-                <a href={detail.data.tmdbUrl} target="_blank" rel="noopener noreferrer">
+                <a
+                  href={detail.data.tmdbUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={t("detail.externalLink", { name: "TMDB" })}
+                >
                   TMDB ↗
                 </a>
               )}
               {detail.data.imdbUrl && (
-                <a href={detail.data.imdbUrl} target="_blank" rel="noopener noreferrer">
+                <a
+                  href={detail.data.imdbUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={t("detail.externalLink", { name: "IMDb" })}
+                >
                   IMDb ↗
                 </a>
               )}
