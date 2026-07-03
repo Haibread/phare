@@ -317,9 +317,7 @@ class TitleLocalization(Base):
     language: Mapped[str] = mapped_column(String(8), primary_key=True)
     overview: Mapped[str | None] = mapped_column(Text)
     genres: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SourceToken(Base):
