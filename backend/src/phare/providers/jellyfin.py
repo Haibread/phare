@@ -69,6 +69,35 @@ def parse_jellyfin_item(item: dict[str, Any]) -> RawEvent | None:
     return None
 
 
+def list_jellyfin_users(
+    base_url: str,
+    api_key: str,
+    client: httpx.Client | None = None,
+    *,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[dict[str, str]]:
+    """List a Jellyfin server's users as ``{"id", "name"}`` so the UI can offer a picker instead of
+    asking the operator to paste a GUID (review D2). Read-only; the SSRF guard is enforced upstream
+    at the endpoint via ``require_safe_url``."""
+    owned = client or httpx.Client(
+        base_url=base_url, headers={"X-Emby-Token": api_key}, timeout=15.0
+    )
+    try:
+        response = request_with_retry(
+            owned, "GET", "/Users", name="jellyfin", max_retries=max_retries, sleep=sleep
+        )
+        response.raise_for_status()
+        return [
+            {"id": str(user["Id"]), "name": str(user.get("Name") or user["Id"])}
+            for user in response.json()
+            if user.get("Id")
+        ]
+    finally:
+        if client is None:
+            owned.close()
+
+
 class JellyfinSourceProvider:
     """SourceProvider over a Jellyfin server for one user (API key + user id)."""
 

@@ -63,6 +63,21 @@ That's **removed** — Phare is now multi-user with per-account credentials, rea
 and no open mode. See [`auth.md`](auth.md) for the model, the "Sign in with Plex" flow, and how the
 first account becomes the admin.
 
+## Connecting sources
+
+Which sources a user can connect depends on what the operator configured. `GET /sources/capabilities`
+reports this (`{trakt, plex, jellyfin, seerr}`), and the connect UI **greys out** the sources this
+server can't support instead of surfacing a raw config error when clicked:
+
+- **Trakt** needs `TMDB_API_KEY` **and** `TRAKT_CLIENT_ID` + `TRAKT_CLIENT_SECRET` (the OAuth app).
+- **Plex** and **Jellyfin** need `TMDB_API_KEY` (every title resolves through TMDB); the user
+  supplies their own server URL + token/key at connect time.
+- **Seerr** is always offered — it only stores user-supplied credentials and needs no server config.
+
+**Jellyfin** connects with a server URL + API key; the UI then calls `POST /sources/jellyfin/users`
+to list that server's users and offers a picker, so the operator never has to paste a raw user GUID.
+That call is subject to the same SSRF guard as the sync endpoints (internal URLs are rejected).
+
 ## Seeding the catalog
 
 The recommender ranks over whatever titles are in the catalog — vector similarity can only surface

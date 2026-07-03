@@ -30,7 +30,7 @@ from phare.core.tokens import get_source_token, store_source_token
 from phare.db.base import get_session
 from phare.db.models import Profile, SourceToken, Title, TitleKind, User
 from phare.ingest.service import IngestionService, IngestResult
-from phare.providers.jellyfin import JellyfinSourceProvider
+from phare.providers.jellyfin import JellyfinSourceProvider, list_jellyfin_users
 from phare.providers.plex import PlexSourceProvider
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.trakt import TraktSourceProvider
@@ -85,6 +85,34 @@ class ConnectedSource(ApiModel):
     source: str
     kind: str  # "history" | "requests"
     last_synced_at: datetime | None = None
+
+
+class SourceCapabilities(ApiModel):
+    """Which sources this server is configured to support, so the UI can disable the rest instead
+    of surfacing a raw config error when a user clicks (review D1). Every history source resolves
+    titles through TMDB, so all three need ``TMDB_API_KEY``; Trakt additionally needs its
+    server-side OAuth app credentials. Seerr only stores user-supplied credentials at connect time,
+    so it's always offered."""
+
+    trakt: bool
+    plex: bool
+    jellyfin: bool
+    seerr: bool
+
+
+@router.get("/sources/capabilities", response_model=SourceCapabilities)
+def source_capabilities(
+    user: Annotated[User, Depends(get_current_user)],
+) -> SourceCapabilities:
+    """Report which sources the operator has configured on this server (review D1)."""
+    settings = get_settings()
+    tmdb = bool(settings.tmdb_api_key)
+    return SourceCapabilities(
+        trakt=tmdb and bool(settings.trakt_client_id) and bool(settings.trakt_client_secret),
+        plex=tmdb,
+        jellyfin=tmdb,
+        seerr=True,
+    )
 
 
 def _trakt_oauth(settings: Settings) -> TraktOAuth:
@@ -208,6 +236,16 @@ class JellyfinSyncRequest(ApiModel):
     user_id: str = Field(min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
     full: bool = False
+
+
+class JellyfinUsersRequest(ApiModel):
+    base_url: str = Field(min_length=1)
+    api_key: str = Field(min_length=1)
+
+
+class JellyfinUser(ApiModel):
+    id: str
+    name: str
 
 
 def _store_trakt_tokens(
@@ -365,6 +403,18 @@ def sync_jellyfin(
     return _ingest_from(
         session, body.profile_id, source, source_name="jellyfin", since=since, language=language
     )
+
+
+@router.post("/sources/jellyfin/users", response_model=list[JellyfinUser])
+def jellyfin_users(
+    body: JellyfinUsersRequest,
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[JellyfinUser]:
+    """List a Jellyfin server's users (URL + API key) so the UI offers a picker, not a raw GUID
+    field (review D2). The SSRF guard applies — internal URLs are rejected."""
+    require_safe_url(body.base_url)
+    users = list_jellyfin_users(body.base_url, body.api_key)
+    return [JellyfinUser(id=item["id"], name=item["name"]) for item in users]
 
 
 @router.get("/profiles/{profile_id}/sources", response_model=list[ConnectedSource])
