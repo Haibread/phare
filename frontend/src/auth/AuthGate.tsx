@@ -65,31 +65,46 @@ export function AuthGate({
       <p className="muted">{needsSetup ? t("setupPrompt") : t("loginPrompt")}</p>
       <div className={styles.authForm}>
         {showRegister && (
-          <input
-            type="text"
-            className="field"
-            data-testid="auth-display-name"
-            aria-label={t("displayName")}
-            placeholder={t("displayName")}
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-          />
+          <>
+            <label htmlFor="auth-display-name" className="sr-only">
+              {t("displayName")}
+            </label>
+            <input
+              id="auth-display-name"
+              name="name"
+              type="text"
+              className="field"
+              data-testid="auth-display-name"
+              placeholder={t("displayName")}
+              autoComplete="name"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+            />
+          </>
         )}
+        <label htmlFor="auth-email" className="sr-only">
+          {t("email")}
+        </label>
         <input
+          id="auth-email"
+          name="email"
           type="email"
           className="field"
           data-testid="login-email"
-          aria-label={t("email")}
           placeholder={t("email")}
           autoComplete="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
+        <label htmlFor="auth-password" className="sr-only">
+          {t("password")}
+        </label>
         <input
+          id="auth-password"
+          name="password"
           type="password"
           className="field"
           data-testid="login-password"
-          aria-label={t("password")}
           placeholder={t("password")}
           autoComplete={showRegister ? "new-password" : "current-password"}
           value={password}
