@@ -91,11 +91,19 @@ class FakeLLMProvider:
     name = "fake-llm"
 
     def __init__(
-        self, dim: int = 1536, completion: str = "{}", *, complete_delay: float = 0.0
+        self,
+        dim: int = 1536,
+        completion: str = "{}",
+        *,
+        complete_delay: float = 0.0,
+        embed_delay: float = 0.0,
     ) -> None:
         self.dim = dim
         self.completion = completion
         self.complete_delay = complete_delay
+        # ``embed_delay`` sleeps that many seconds per ``embed`` call — lets a test make embedding
+        # observably slow (e.g. to prove the read path won't embed a whole import inline). Tiny.
+        self.embed_delay = embed_delay
         self.embed_calls = 0
         # Records each embed() call's input texts, so retrieval tests can assert a chat mood
         # actually reached the embedding query (review A4).
@@ -126,6 +134,8 @@ class FakeLLMProvider:
             yield word if i == 0 else f" {word}"
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if self.embed_delay:
+            time.sleep(self.embed_delay)
         self.embed_calls += 1
         self.embed_inputs.append(list(texts))
         return [self._vector(text) for text in texts]

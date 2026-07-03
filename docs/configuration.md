@@ -118,6 +118,18 @@ catalog heals as it's used — no command, no manual step. Without a `TMDB_API_K
 filtering simply stays inert: length requests parse but don't constrain. Bounded by `READ_RUNTIME_CAP`
 (a code constant, mirroring the lazy embedding top-up).
 
+**Embeddings are backfilled off the read path.** A title has to be embedded before it can be
+recommended, but the read path never embeds a whole fresh import inline (that could freeze the first
+request for minutes against a real embedding API). Instead a render embeds only a tiny inline
+*micro-batch* — bounded by both a title count and a wall-clock budget (`READ_EMBED_MICRO_LIMIT` /
+`READ_EMBED_TIME_BUDGET_S`, code constants) — for the "almost nothing missing" case, and hands any
+larger backlog to a single background task that embeds the rest in batches. Only **one** backfill
+runs at a time (an in-process lock — the app is single-process). So right after a big import the
+first reads come back fast on a partial catalog, and each subsequent read widens the pool as the
+backfill catches up; the profile's own titles embedding is what flips the "building your profile"
+state off (see [`design.md`](design.md)). The authoritative unbounded pass is still
+`POST /catalog/embed`.
+
 **Guard — won't run in dev by accident.** Both the import endpoint and the CLI refuse to run unless
 `ENVIRONMENT=production`, **or** you explicitly override (`confirm=true` on the endpoint,
 `--confirm` on the CLI). This stops a dev box from fanning out thousands of TMDB requests during a

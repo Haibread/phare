@@ -8,6 +8,7 @@ current model version are (re-)embedded; this is how a model change triggers a r
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Sequence
 
 from sqlalchemy import select
@@ -54,25 +55,42 @@ class EmbeddingService:
             stmt = stmt.limit(limit)
         return self.session.scalars(stmt).all()
 
-    def embed_missing(self, batch_size: int = 64, limit: int | None = None) -> int:
-        """Embed titles lacking a vector for the current model version. Returns titles processed.
+    def has_missing(self) -> bool:
+        """True if any title still lacks a vector for the active model version."""
+        return len(self._titles_missing_embedding(limit=1)) > 0
 
-        ``limit`` bounds how many are embedded in one pass (the lazy read-path top-up uses it so a
-        big import can't hang a request); ``None`` embeds the whole backlog (authoritative path).
+    def embed_missing(
+        self,
+        batch_size: int = 64,
+        limit: int | None = None,
+        time_budget_s: float | None = None,
+    ) -> int:
+        """Embed titles lacking a vector for the current model version. Returns titles embedded.
+
+        ``limit`` bounds how many are embedded in one pass (the lazy read-path micro-batch uses it
+        so a big import can't hang a request); ``None`` embeds the whole backlog (the authoritative
+        and background paths). ``time_budget_s`` stops the pass early once the budget is spent —
+        checked between batches so the first batch always runs — for the same read-path guard.
         """
         titles = list(self._titles_missing_embedding(limit=limit))
         if limit is not None and len(titles) == limit:
-            # The read-path top-up hit its cap — more titles remain unembedded, so this render's
-            # recommendations only cover part of the catalog (review A15/G1).
+            # The read-path micro-batch hit its cap — more titles remain unembedded, so a background
+            # backfill takes over; this render only covers part of the catalog (review A15/C1).
             record_fallback("embeddings", "backfill_deferred", embedded_count=limit)
+        deadline = None if time_budget_s is None else time.monotonic() + time_budget_s
+        embedded = 0
         for start in range(0, len(titles), batch_size):
+            # Between batches, bail if the time budget is spent (the first batch, start == 0, always
+            # runs — a micro-batch that embeds nothing would be pointless).
+            if start > 0 and deadline is not None and time.monotonic() >= deadline:
+                break
             batch = titles[start : start + batch_size]
             vectors = self.llm.embed([build_embedding_text(t) for t in batch])
             rows = [
                 {"title_id": title.id, "model_version": self.model_version, "embedding": vector}
                 for title, vector in zip(batch, vectors, strict=True)
             ]
-            # ON CONFLICT DO NOTHING: a concurrent read-path top-up can embed the same titles
+            # ON CONFLICT DO NOTHING: a concurrent read-path micro-batch can embed the same titles
             # between our SELECT and this INSERT (both lazy passes snapshot the same "missing" set).
             # Converge silently instead of raising a duplicate-key IntegrityError that poisons the
             # transaction. The vector is identical either way, so the race's loser loses nothing.
@@ -82,8 +100,9 @@ class EmbeddingService:
                 .on_conflict_do_nothing(index_elements=["title_id", "model_version"])
             )
             self.session.flush()
+            embedded += len(batch)
         logger.info(
             "embeddings.done",
-            extra={"embedded_count": len(titles), "model_version": self.model_version},
+            extra={"embedded_count": embedded, "model_version": self.model_version},
         )
-        return len(titles)
+        return embedded

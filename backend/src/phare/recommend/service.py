@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
+from phare.embeddings.backfill import schedule_embedding_backfill
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider, MetadataProvider
@@ -77,10 +78,13 @@ def _blend_direction(a: list[float], b: list[float], weight: float) -> list[floa
     return [(1.0 - weight) * x + weight * y for x, y in zip(ua, ub, strict=True)]
 
 
-# Read-path embedding cap. The authoritative embed path is POST /catalog/embed (unbounded); the
-# lazy read-path top-up must stay bounded so a fresh import can't make the first request embed the
-# whole catalog inline (minutes against a real embedding API). Beyond the cap we log and defer.
-READ_EMBED_CAP = 512
+# Read-path embedding micro-batch. The read path must never embed a fresh import inline (minutes
+# against a real embedding API — review C1): it tops up only a tiny batch for the "almost nothing
+# missing" case, bounded by BOTH a title count and a wall-clock budget, then hands the rest to a
+# background backfill. Authoritative unbounded paths: POST /catalog/embed and the backfill thread.
+READ_EMBED_MICRO_LIMIT = 16
+READ_EMBED_MICRO_BATCH = 8  # sub-batch so the time budget can cut in before the whole micro-limit
+READ_EMBED_TIME_BUDGET_S = 2.0
 
 # Read-path runtime backfill. The broad catalog import comes from TMDB *discover*, which omits
 # runtime, so freshly-imported titles have ``runtime_minutes = NULL`` and a "something short"
@@ -122,14 +126,22 @@ class RecommendationService:
         self._centroid_cache: dict[uuid.UUID, list[float] | None] = {}
 
     def ensure_embeddings(self) -> int:
-        """Bounded lazy top-up of missing vectors for the active space.
+        """Non-blocking top-up of missing vectors for the active space. Returns titles embedded now.
 
-        Caps at ``READ_EMBED_CAP`` so the read path can't hang embedding a whole fresh import;
-        run ``POST /catalog/embed`` for the authoritative, unbounded pass.
+        Embeds only a tiny inline micro-batch (bounded by count *and* wall clock) so the read path
+        stays fast; if more titles are still missing afterwards, hands the backlog to a single
+        background backfill and returns immediately (review C1). The "still building" state that
+        results surfaces to the UI via :meth:`profile_building`.
         """
-        return EmbeddingService(
-            self.session, self.embed_provider, self.embed_model_version
-        ).embed_missing(limit=READ_EMBED_CAP)
+        svc = EmbeddingService(self.session, self.embed_provider, self.embed_model_version)
+        embedded = svc.embed_missing(
+            batch_size=READ_EMBED_MICRO_BATCH,
+            limit=READ_EMBED_MICRO_LIMIT,
+            time_budget_s=READ_EMBED_TIME_BUDGET_S,
+        )
+        if svc.has_missing():
+            schedule_embedding_backfill(self.embed_provider, self.embed_model_version)
+        return embedded
 
     def _enrich_runtimes(
         self, candidates: list[Candidate], source: MetadataProvider
