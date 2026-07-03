@@ -32,5 +32,6 @@ def get_embedding_provider(settings: Settings) -> LLMProvider:
             embedding_dimensions=(
                 settings.llm_embedding_dim if settings.llm_embedding_request_dimensions else None
             ),
+            timeout=settings.llm_timeout_seconds,
         )
     return LocalHashEmbeddingProvider(dim=settings.llm_embedding_dim)

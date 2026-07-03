@@ -20,6 +20,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | **LLM + embeddings** | | |
 | `LLM_API_KEY` | _(unset)_ | OpenAI-compatible key. **Unset = fully offline fallback** (see below). |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | Point at any OpenAI-compatible endpoint (Ollama, LM Studio, etc.). |
+| `LLM_TIMEOUT_SECONDS` | `120` | HTTP timeout (seconds) for every LLM request. Generous on purpose: taste extraction over a long history on a **reasoning** workhorse can take well over a minute, and a tighter timeout turns a slow-but-fine call into a spurious 503 `llm_unreachable` the user can't get past. Raise it further for very slow local models. |
 | `LLM_CHAT_MODEL` | `gpt-4o-mini` | Workhorse chat/completion model: taste extraction, explanations, dynamic rows. |
 | `LLM_AGENT_MODEL` | _(falls back to `LLM_CHAT_MODEL`)_ | Optional stronger model used for **one thing only**: the chat agent's natural-language reply. Everything else (planning, explanations, taste) stays on `LLM_CHAT_MODEL`, so a chat turn makes at most one big-model call. |
 | `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Doubles as the embedding-space version tag. |

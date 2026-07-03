@@ -45,3 +45,16 @@ def test_complete_coerces_null_content_to_empty_string() -> None:
     # A reasoning model that burns its budget thinking returns content: null — must not crash the
     # `-> str` contract (this is what 500'd taste generation before the guard).
     assert _provider(_content_handler(None)).complete("x") == ""
+
+
+def test_client_uses_configured_timeout() -> None:
+    # A long taste extraction on a reasoning workhorse can run past a minute; the HTTP timeout must
+    # be configurable so a slow-but-fine call doesn't 503 as "llm_unreachable" (prod: 83.6s).
+    provider = OpenAILLMProvider(api_key="k", chat_model="m", embedding_model="e", timeout=180.0)
+    assert provider._client.timeout.connect == 180.0
+    assert provider._client.timeout.read == 180.0
+
+
+def test_client_default_timeout() -> None:
+    provider = OpenAILLMProvider(api_key="k", chat_model="m", embedding_model="e")
+    assert provider._client.timeout.read == 60.0

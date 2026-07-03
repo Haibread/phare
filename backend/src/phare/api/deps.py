@@ -87,6 +87,7 @@ def get_optional_chat_llm() -> LLMProvider | None:
         base_url=settings.llm_base_url,
         monthly_token_budget=settings.llm_monthly_token_budget,
         reasoning_headroom=settings.reasoning_headroom,
+        timeout=settings.llm_timeout_seconds,
     )
 
 
@@ -103,4 +104,5 @@ def get_optional_agent_llm() -> LLMProvider | None:
         base_url=settings.llm_base_url,
         monthly_token_budget=settings.llm_monthly_token_budget,
         reasoning_headroom=settings.reasoning_headroom,
+        timeout=settings.llm_timeout_seconds,
     )

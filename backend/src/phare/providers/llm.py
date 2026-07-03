@@ -37,6 +37,7 @@ class OpenAILLMProvider:
         reasoning_headroom: int = 0,
         monthly_token_budget: int = 0,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        timeout: float = 60.0,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._chat_model = chat_model
@@ -55,7 +56,7 @@ class OpenAILLMProvider:
         self._client = client or httpx.Client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=60.0,
+            timeout=timeout,
         )
 
     def _budget(self, max_tokens: int | None) -> int | None:

@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # an embedding model of a different dimension requires a migration + re-embed.
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
+    # HTTP timeout (seconds) for every LLM request. Generous by default: taste extraction over a
+    # long history on a *reasoning* workhorse can take well over a minute — a tighter timeout turns
+    # a slow-but-fine call into a spurious 503 "llm_unreachable" the user can't get past. See
+    # docs/configuration.md.
+    llm_timeout_seconds: float = 120.0
     llm_chat_model: str = "gpt-4o-mini"
     # The conversational chat agent (planner + natural-language reply) can use a stronger model
     # than the high-volume mechanical work (explanations, taste). Falls back to llm_chat_model.

@@ -44,6 +44,7 @@ def get_llm_provider() -> LLMProvider:
         base_url=settings.llm_base_url,
         monthly_token_budget=settings.llm_monthly_token_budget,
         reasoning_headroom=settings.reasoning_headroom,
+        timeout=settings.llm_timeout_seconds,
     )
 
 
