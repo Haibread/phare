@@ -116,6 +116,13 @@ def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] =
             model_version=embedding_model_version(settings),
             k=k,
         )
+        # State up front which checks this run exercises, so a green run is never mistaken for
+        # having covered more than it did (the similarity-spread check is embedder-dependent).
+        from phare.eval.harness import alignment_checks_summary
+
+        typer.echo(
+            f"Alignment checks: {alignment_checks_summary(embedding_model_version(settings))}"
+        )
         for result in results:
             status = "PASS" if result.passed else "FAIL"
             typer.echo(
@@ -127,6 +134,8 @@ def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] =
                 typer.echo(f"    forbidden-genre leak: {title}")
             for title in result.recommended_watched:
                 typer.echo(f"    recommended an already-watched title: {title}")
+            for reason in result.alignment_failures:
+                typer.echo(f"    alignment: {reason}")
             failures += 0 if result.passed else 1
     finally:
         transaction.rollback()

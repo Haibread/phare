@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -68,6 +69,47 @@ def test_all_personas_pass_guardrails(db_session: Session) -> None:
             f"{result.name} violated guardrails: "
             f"{result.forbidden_violations} / {result.recommended_watched}"
         )
+
+
+def test_all_personas_pass_alignment_checks(db_session: Session) -> None:
+    # M10.2: the harness now also asserts taste alignment (hard-avoids, affinity variance, score
+    # order, similarity spread). With the offline embedder every persona must still clear them.
+    results = evaluate_all(
+        db_session, embed_provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+    )
+    for result in results:
+        assert result.alignment_failures == [], (
+            f"{result.name} failed alignment: {result.alignment_failures}"
+        )
+
+
+def test_alignment_summary_flags_offline_spread_skip() -> None:
+    # The header must be honest that similarity-spread does not run on the offline embedder.
+    from phare.eval.harness import alignment_checks_summary
+
+    offline = alignment_checks_summary(LOCAL_MODEL_VERSION)
+    assert "score-order" in offline and "affinity-variance" in offline
+    assert "skipped" in offline  # spread is not exercised on local-hash
+    assert "skipped" not in alignment_checks_summary("real-prod-embed-v1")
+
+
+def test_alignment_fails_on_flat_affinity(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M10.2 validation: simulate a taste key that matches nothing (constant affinity) — the harness
+    # must FAIL the persona with the flat-affinity reason, not quietly show green (review H1).
+    monkeypatch.setattr(
+        "phare.recommend.reranker._affinity_score", lambda candidate, affinities: 0.0
+    )
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    result = evaluate_persona(
+        db_session,
+        persona,
+        embed_provider=LocalHashEmbeddingProvider(),
+        model_version=LOCAL_MODEL_VERSION,
+    )
+    assert not result.passed
+    assert any("affinity is flat" in reason for reason in result.alignment_failures)
 
 
 def test_gore_avoider_never_sees_forbidden_genre(db_session: Session) -> None:

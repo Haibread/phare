@@ -12,6 +12,15 @@ How we know recommendations are good with no crowd to A/B test.
   **alignment** checks assert the relevance *mechanics* a structural test misses (review H7/K1): the
   slate is ordered by score not votes; a free genre key ("sci-fi") actually filters to the catalog's
   "Science Fiction"; and taste affinity varies across the slate instead of reading a flat neutral.
+- **`phare evaluate` — the same suite against the *deployed* instance.** CI runs the persona suite
+  hermetically with fake providers, so it only protects the *code*. `phare evaluate` runs it against
+  your real database with your **configured** embedding/LLM models, and asserts the alignment
+  invariants per persona: no `hard_avoids` term in the top-K, affinity varies across the slate, the
+  slate is score-descending, and pool-relative similarity spreads (not "strong fit" for everything).
+  Each failed check prints its reason next to the persona. This is the only tool that catches a
+  relevance regression introduced by a **model or config change** rather than a code change — so run
+  it after changing models or upgrading. The similarity-spread check is embedder-specific and is
+  skipped (and says so in the output) on the offline `local-hash-v1` embedder the CI harness uses.
 - **Temporal holdout (sanity floor, not a target).** Hide each profile's last K watched, check
   if they rank highly (Recall@K / NDCG@K). **Don't over-optimize** — it rewards the obvious and
   is blind to discovery; a perfect score is a popularity machine. Swing slots are excluded from it.

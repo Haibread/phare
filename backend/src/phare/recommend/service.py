@@ -370,6 +370,8 @@ class RecommendationService:
     def rows(self, profile_id: uuid.UUID) -> list[Row]:
         """The home-screen strip set. Empty rows are kept out so the UI stays clean."""
         self.ensure_embeddings()
+        taste = self._load_taste(profile_id)
+        avoids = list(taste.get("hard_avoids") or [])
         # One explainer per render, so the LLM-call budget is pooled across every explaining row
         # (because-you-watched + you-might-like) instead of each row fanning out independently.
         explainer = self._explainer(with_llm=True, budget=self.explanation_budget)
@@ -402,17 +404,24 @@ class RecommendationService:
                 exclude_ids=[item.title_id for item in continue_watching.items],
             ),
             row_builders.popular_row(
-                self.session, profile_id, limit=self.row_size, language=self.language
+                self.session,
+                profile_id,
+                limit=self.row_size,
+                language=self.language,
+                hard_avoids=avoids,
             ),
         ]
         # Cap cross-row repeats (The Wire in hero + you_might_like + popular + theme — review A7),
         # then drop any "because you watched X" row left too thin to look intentional (A7/A10).
         budgeted = _apply_appearance_budget(candidate_rows, _APPEARANCE_BUDGET)
+        # When hard-avoids thin "popular" (M10.1), hold it to the same minimum as the taste rows so
+        # a near-empty leftover isn't shown looking broken; with no avoids the row is untouched.
+        thin_gated = {_BECAUSE_PREFIX.rstrip(":"), *({"popular"} if avoids else set())}
         result = [
             row
             for row in budgeted
             if row.items
-            and not (row.key.startswith(_BECAUSE_PREFIX) and len(row.items) < MIN_ROW_ITEMS)
+            and not (row.key.split(":", 1)[0] in thin_gated and len(row.items) < MIN_ROW_ITEMS)
         ]
         log_rows(self.session, profile_id, result)
         logger.info(

@@ -317,6 +317,49 @@ def test_loved_seed_titles_picks_loved(db_session: Session) -> None:
     assert len({s.id for s in seeds}) == len(seeds)  # distinct
 
 
+def _popular_title(
+    session: Session, tmdb_id: int, name: str, genres: list[str], pop: float
+) -> None:
+    session.add(
+        Title(kind=TitleKind.movie, tmdb_id=tmdb_id, title=name, genres=genres, popularity=pop)
+    )
+
+
+def test_popular_row_excludes_hard_avoids(db_session: Session) -> None:
+    from phare.recommend.rows import popular_row
+
+    profile = Profile(display_name="anti-comedy")
+    db_session.add(profile)
+    db_session.flush()
+    # Five popular titles, two of them Comedy — a persona that hard-avoids Comedy must see neither.
+    _popular_title(db_session, 9001, "Big Drama", ["Drama"], 500.0)
+    _popular_title(db_session, 9002, "Silly Comedy", ["Comedy"], 400.0)
+    _popular_title(db_session, 9003, "Thrill Ride", ["Thriller"], 300.0)
+    _popular_title(db_session, 9004, "Another Comedy", ["Comedy"], 200.0)
+    _popular_title(db_session, 9005, "War Epic", ["War"], 100.0)
+    db_session.flush()
+
+    row = popular_row(db_session, profile.id, limit=12, hard_avoids=["Comedy"])
+    names = {item.title for item in row.items}
+    assert "Silly Comedy" not in names and "Another Comedy" not in names
+    assert {"Big Drama", "Thrill Ride", "War Epic"} <= names
+
+
+def test_popular_row_unchanged_without_hard_avoids(db_session: Session) -> None:
+    # Anti-regression: no hard-avoids -> the row is exactly the pre-M10.1 popularity-sorted top-N.
+    from phare.recommend.rows import popular_row
+
+    profile = Profile(display_name="no-avoids")
+    db_session.add(profile)
+    db_session.flush()
+    _popular_title(db_session, 9101, "Big Drama", ["Drama"], 500.0)
+    _popular_title(db_session, 9102, "Silly Comedy", ["Comedy"], 400.0)
+    db_session.flush()
+
+    row = popular_row(db_session, profile.id, limit=12)
+    assert [item.title for item in row.items] == ["Big Drama", "Silly Comedy"]
+
+
 def test_because_you_watched_rows_anchor_on_loved_titles(db_session: Session) -> None:
     profile_id = _seeded_profile(db_session)
     service = _service(db_session)
