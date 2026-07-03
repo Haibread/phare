@@ -1,5 +1,7 @@
 {
   "loading": "Chargement des recommandations…",
+  "pageHeading": "Pour vous",
+  "todaysPicksError": "Impossible de charger les choix du jour.",
   "askChip": "Demandez une ambiance à Phare…",
   "empty": "Aucune recommandation pour l'instant — chargez des données d'exemple ou connectez une source.",
   "todaysPicks": "Les choix du jour",

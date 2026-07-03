@@ -348,6 +348,23 @@
   }
 }
 
+/* Text-line skeletons for card sections (Profile), so a section reserves its space instead of
+   popping in when its query resolves (review E3). */
+.skelLines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+}
+
+.skelLine {
+  height: 0.9rem;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2));
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
 /* Sheet (Radix Dialog as bottom sheet) ----------------------------------- */
 
 .overlay {
