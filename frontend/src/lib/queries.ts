@@ -77,7 +77,8 @@ export function useSearch(profileId: string, query: string) {
   return useQuery({
     queryKey: ["search", profileId, q],
     queryFn: () => api.searchCatalog(profileId, q),
-    enabled: q.length >= 2,
+    // 3-char minimum (mirrors Search.tsx): a 2-char substring match returns junk.
+    enabled: q.length >= 3,
     staleTime: 60_000,
   });
 }

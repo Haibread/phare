@@ -171,6 +171,32 @@ def test_search_titles_empty_query_returns_nothing(db_session: Session) -> None:
     assert search_titles(db_session, "   ") == []
 
 
+def test_search_titles_ranks_prefix_above_more_popular_substring(db_session: Session) -> None:
+    # "tenet" should lead with *Tenet*, not with a more popular title that merely contains the
+    # letters mid-word — word-start matches rank above mid-word substrings, ahead of popularity.
+    prefix = Title(kind=TitleKind.movie, tmdb_id=770001, title="Tenet", popularity=1.0)
+    midword = Title(kind=TitleKind.movie, tmdb_id=770002, title="Subtenet", popularity=99.0)
+    db_session.add_all([prefix, midword])
+    db_session.flush()
+
+    results = search_titles(db_session, "tenet")
+    ids = [t.id for t in results]
+    assert ids.index(prefix.id) < ids.index(midword.id)
+
+
+def test_search_titles_ranks_word_start_above_midword(db_session: Session) -> None:
+    # A match at the start of an *inner* word ("... Story") beats a mid-word substring, even when
+    # the substring match is far more popular.
+    word_start = Title(kind=TitleKind.movie, tmdb_id=770011, title="A Toy Story", popularity=1.0)
+    midword = Title(kind=TitleKind.movie, tmdb_id=770012, title="Prehistory", popularity=99.0)
+    db_session.add_all([word_start, midword])
+    db_session.flush()
+
+    results = search_titles(db_session, "story")
+    ids = [t.id for t in results]
+    assert ids.index(word_start.id) < ids.index(midword.id)
+
+
 def test_import_guard_blocks_dev_without_confirm() -> None:
     with pytest.raises(HTTPException) as exc:
         ensure_import_allowed(Settings(environment="development"), confirm=False)

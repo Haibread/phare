@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleKind
@@ -92,10 +92,19 @@ def search_titles(
             if title is not None and title.id not in seen:
                 seen.add(title.id)
                 results.append(title)
+    # Escape LIKE wildcards in the user's query so "%" / "_" match literally, not as patterns.
+    like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    # Rank a word-start match (the title begins with the query, or a word inside it does) above a
+    # mid-word substring match, then by popularity — so typing "tenet" leads with *Tenet*, not with
+    # an obscure title that merely contains the letters mid-word. Boolean desc puts True first.
+    word_start = or_(
+        Title.title.ilike(f"{like}%", escape="\\"),
+        Title.title.ilike(f"% {like}%", escape="\\"),
+    )
     local = session.scalars(
         select(Title)
-        .where(Title.title.ilike(f"%{query}%"))
-        .order_by(Title.popularity.desc().nulls_last())
+        .where(Title.title.ilike(f"%{like}%", escape="\\"))
+        .order_by(word_start.desc(), Title.popularity.desc().nulls_last())
         .limit(limit)
     ).all()
     for title in local:

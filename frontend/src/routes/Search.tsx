@@ -31,7 +31,9 @@ export function Search(): React.JSX.Element {
     onRequest: (id: string) => request.mutate(id),
   };
 
-  const ready = debounced.trim().length >= 2;
+  // 3-char minimum: at 2 chars a substring match returns junk (typing "tenet" pauses at "te" and
+  // surfaces a dozen obscure "…té…" telenovelas). Mirrors the `enabled` gate in useSearch.
+  const ready = debounced.trim().length >= 3;
 
   return (
     <div className={styles.page} data-testid="search">
