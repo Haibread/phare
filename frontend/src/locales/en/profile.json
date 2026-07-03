@@ -2,6 +2,7 @@
   "title": "Profile",
   "about": {
     "heading": "About & attribution",
+    "tmdbLogoAlt": "The Movie Database (TMDB)",
     "sources": "Watch-history data comes from your own Trakt, Plex, or Jellyfin account; Phare is not affiliated with any of them."
   },
   "account": {

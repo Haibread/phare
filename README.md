@@ -90,7 +90,9 @@ docker compose up -d       # recreates changed services; backend migrates on boo
 ## Attribution
 
 This product uses the TMDB API but is not endorsed or certified by TMDB. Watch-history data comes
-from your own Trakt / Plex / Jellyfin account. See the in-app **About** screen for the full notices.
+from your own Trakt / Plex / Jellyfin account. See the in-app **About** screen for the full notices,
+including TMDB's official logo (its "primary short" wordmark, committed at
+`frontend/src/assets/tmdb-logo.svg` and rendered unmodified per TMDB's branding guidelines).
 
 ## License
 
