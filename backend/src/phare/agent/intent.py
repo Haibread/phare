@@ -97,7 +97,12 @@ def keyword_intent(message: str) -> ChatIntent:
         max_runtime=_parse_runtime(lowered),
         include_genres=include,
         exclude_genres=exclude,
-        mood=message.strip() or None,
+        # Leave mood null: this keyword parser resolves structured signal (genres/runtime/kind), not
+        # a free-form mood. Dumping the raw message here (F2) polluted intent.mood on a declined
+        # off-topic turn, where it surfaced in the payload for no functional gain — the offline
+        # recommend path never biases on it, and a real mood comes from the LLM planner's recommend
+        # tool arg, not from this floor.
+        mood=None,
         kind=_parse_kind(lowered),
         rewatch=_REWATCH_RE.search(message) is not None,
     )

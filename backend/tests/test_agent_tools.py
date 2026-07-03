@@ -364,12 +364,16 @@ def test_off_topic_turn_declines_without_spending_the_agent_model(db_session: Se
         chat_llm=workhorse,
     )
 
-    reply = ChatService(recommender, agent).respond(profile_id, "write me a poem", now=_NOW)
+    reply = ChatService(recommender, agent).respond(
+        profile_id, "help me write a Python script for my homework", now=_NOW
+    )
 
     assert reply.items == [] and reply.actions == []
     assert "watch" in reply.reply_text.lower()  # steered back to movies/TV
     assert agent.prompts == []  # the big model was never spent on the decline
     assert len(workhorse.prompts) == 1  # only the planner ran
+    # F2: a declined off-topic turn must not leak the raw message into intent.mood — it stays null.
+    assert reply.intent.mood is None
 
 
 def test_agent_prompts_are_scoped_to_movies_and_tv() -> None:
@@ -543,6 +547,14 @@ def test_recommend_tolerates_mood_as_a_list(db_session: Session) -> None:
     assert result.intent.mood == "lighthearted, relaxing"
     assert result.intent.max_runtime == 90
     assert result.intent.include_genres == []  # absent arg stays an empty list, not a crash
+
+
+def test_recommend_carries_a_real_mood_from_the_planner(db_session: Session) -> None:
+    # F2 counterpart: a genuine mood ("something slow-burn") from the LLM planner still lands in
+    # intent.mood — the fix only stops the offline keyword floor from dumping the raw message.
+    profile_id = _seed(db_session)
+    result = _run(db_session, profile_id, "recommend", {"mood": "something slow-burn"})
+    assert result.intent.mood == "something slow-burn"
 
 
 def test_runtime_capped_recommend_drives_the_lazy_runtime_backfill(db_session: Session) -> None:
