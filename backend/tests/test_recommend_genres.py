@@ -83,3 +83,20 @@ def test_genre_filter_no_match_falls_back_and_logs(caplog) -> None:
     assert any(
         r.message == "genre_filter.fallback" and r.reason == "no_match" for r in caplog.records
     )
+
+
+def test_translate_genre_localizes_and_falls_back(caplog) -> None:
+    # F3: stored English genre labels are display-translated for FR; unknown names fall back to
+    # English and emit a fallback signal so a sentence never shows a blank.
+    assert genres.translate_genre("Science Fiction", "fr") == "Science-Fiction"
+    assert genres.translate_genre("Horror", "fr") == "Horreur"
+    # English is the stored language — no translation applied.
+    assert genres.translate_genre("Science Fiction", "en") == "Science Fiction"
+    assert genres.translate_genres(["Drama", "Crime"], "fr") == ["Drame", "Crime"]
+    with caplog.at_level(logging.WARNING):
+        assert (
+            genres.translate_genre("Underwater Basket Weaving", "fr") == "Underwater Basket Weaving"
+        )
+    assert any(
+        r.message == "genre_translation.fallback" and r.reason == "unmapped" for r in caplog.records
+    )

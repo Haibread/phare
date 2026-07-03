@@ -19,7 +19,12 @@ from phare.db.base import get_session
 from phare.db.models import TasteProfile, User
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
-from phare.taste.service import TasteService, effective_profile
+from phare.taste.service import (
+    TasteService,
+    effective_profile,
+    localized_summary,
+    optional_llm_provider,
+)
 
 router = APIRouter(tags=["Taste"])
 
@@ -38,10 +43,10 @@ def get_llm_provider() -> LLMProvider:
     )
 
 
-def _to_response(taste: TasteProfile) -> TasteResponse:
+def _to_response(taste: TasteProfile, summary: str | None = None) -> TasteResponse:
     return TasteResponse(
         profile_id=taste.profile_id,
-        summary=taste.summary_text,
+        summary=summary if summary is not None else taste.summary_text,
         structured=effective_profile(taste),
         user_overrides=taste.user_overrides,
         confidence=taste.confidence,
@@ -62,9 +67,14 @@ def get_taste(
     profile_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(get_current_user)],
+    language: Annotated[Language, Depends(get_language)],
 ) -> TasteResponse:
     require_own_profile(user, profile_id)
-    return _to_response(_require_taste(session, profile_id))
+    taste = _require_taste(session, profile_id)
+    # Serve the summary in the request's language, translating + caching on demand (review F1). The
+    # first request in a new language spends one workhorse call; offline serves the native summary.
+    summary = localized_summary(session, taste, language, optional_llm_provider())
+    return _to_response(taste, summary=summary)
 
 
 @router.post("/profiles/{profile_id}/taste/generate", response_model=TasteResponse)

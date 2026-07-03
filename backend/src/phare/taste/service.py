@@ -42,7 +42,9 @@ _ALLOWED_KEYWORDS = ", ".join(genres.AFFINITY_KEYWORDS)
 _PROMPT_HEADER = f"""You analyze a viewer's watch history and produce a structured taste profile.
 
 Output ONLY a JSON object with these keys:
-- summary: one short paragraph describing their taste, in plain language
+- summary: one short paragraph describing the viewer's taste, in plain language, addressed
+  DIRECTLY to them in the second person ("You gravitate toward…", "You tend to avoid…") — warm and
+  personal, never a third-person report ("The viewer…", "They…")
 - likes: array of strings (what they gravitate toward), free-form
 - dislikes: array of strings, free-form
 - hard_avoids: array of strings to NEVER recommend — each MUST come from the controlled vocabulary
@@ -186,6 +188,9 @@ class TasteService:
             self.session.add(taste)
 
         taste.summary_text = data.summary
+        # The freshly generated summary is in this run's language; seed the per-language cache with
+        # it and drop any stale translations from the previous version (review F1).
+        taste.summary_by_lang = {self.language: data.summary}
         taste.structured = data.model_dump(mode="json")
         taste.confidence = data.confidence
         taste.model_version = self.model_version
@@ -196,6 +201,50 @@ class TasteService:
         taste.degraded = degraded
         self.session.flush()
         return taste
+
+
+# Cap the on-demand summary translation — it's one short paragraph, so a small budget is plenty and
+# keeps a chatty model from running up the bill on a read-path call.
+_TRANSLATE_MAX_TOKENS = 400
+
+
+def localized_summary(
+    session: Session,
+    taste: TasteProfile,
+    language: Language,
+    llm: LLMProvider | None,
+) -> str:
+    """The taste summary in ``language``, translating on demand and caching the result so each
+    language costs at most one workhorse call per generation (review F1).
+
+    Returns the stored summary unchanged when it's already cached in the target language, when
+    there's nothing to translate, or when offline (no LLM) — the profile stays readable, just not
+    re-localized. Legacy profiles with no cache are assumed to be in the default language."""
+    native = taste.summary_text or ""
+    cache = dict(taste.summary_by_lang or {})
+    if not cache and native:
+        cache = {DEFAULT_LANGUAGE: native}
+    if language in cache:
+        return cache[language]
+    if not native or llm is None:
+        return native
+    prompt = (
+        f"Translate the following taste summary into {LANGUAGE_NAMES[language]}. Keep it warm, "
+        "concise, and addressed directly to the user in the second person. Output only the "
+        f"translation, with no preamble.\n\n{native}"
+    )
+    try:
+        translated = llm.complete(prompt, max_tokens=_TRANSLATE_MAX_TOKENS, temperature=0.0).strip()
+    except Exception:  # noqa: BLE001 - a flaky provider must not break viewing the profile
+        record_fallback("taste_summary_localization", "llm_error", language=language)
+        return native
+    if not translated:
+        record_fallback("taste_summary_localization", "empty_completion", language=language)
+        return native
+    cache[language] = translated
+    taste.summary_by_lang = cache
+    session.commit()
+    return translated
 
 
 def optional_llm_provider() -> LLMProvider | None:

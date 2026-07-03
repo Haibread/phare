@@ -18,6 +18,7 @@ from collections.abc import Iterable, Sequence
 
 from phare.agent.intent import _MOOD_TO_GENRE
 from phare.core.fallback import record_fallback
+from phare.core.i18n import DEFAULT_LANGUAGE, Language
 
 _SEP_RE = re.compile(r"[/_-]+")
 _WS_RE = re.compile(r"\s+")
@@ -122,6 +123,57 @@ AFFINITY_KEYWORDS: tuple[str, ...] = (
     "ensemble",
 )
 CLOSED_VOCABULARY: tuple[str, ...] = CANONICAL_GENRES + AFFINITY_KEYWORDS
+
+# Static display translations for TMDB genre names — templates and card metadata store the English
+# label (it keys affinity matching against the catalog), so the localized string is applied only at
+# display time (review F3). A name with no entry falls back to English + a fallback signal, so a new
+# TMDB genre never leaves a hole in the sentence.
+_GENRE_TRANSLATIONS: dict[Language, dict[str, str]] = {
+    "fr": {
+        "Action": "Action",
+        "Adventure": "Aventure",
+        "Animation": "Animation",
+        "Comedy": "Comédie",
+        "Crime": "Crime",
+        "Documentary": "Documentaire",
+        "Drama": "Drame",
+        "Family": "Familial",
+        "Fantasy": "Fantastique",
+        "History": "Histoire",
+        "Horror": "Horreur",
+        "Music": "Musique",
+        "Mystery": "Mystère",
+        "Romance": "Romance",
+        "Science Fiction": "Science-Fiction",
+        "Thriller": "Thriller",
+        "War": "Guerre",
+        "Western": "Western",
+        "Sci-Fi & Fantasy": "Science-Fiction & Fantastique",
+        "War & Politics": "Guerre & Politique",
+        "Action & Adventure": "Action & Aventure",
+        "Kids": "Enfants",
+        "Reality": "Téléréalité",
+    }
+}
+
+
+def translate_genre(name: str, language: Language) -> str:
+    """Localize a stored (English) TMDB genre name for display. Unknown names fall back to English
+    and emit a fallback signal, so the sentence never shows a blank (review F3, G1)."""
+    if language == DEFAULT_LANGUAGE:
+        return name
+    table = _GENRE_TRANSLATIONS.get(language)
+    if table is None:
+        return name
+    if name in table:
+        return table[name]
+    record_fallback("genre_translation", "unmapped", genre=name, language=language)
+    return name
+
+
+def translate_genres(names: Iterable[str], language: Language) -> list[str]:
+    """``translate_genre`` over a sequence, preserving order."""
+    return [translate_genre(name, language) for name in names]
 
 
 def canonical(term: str) -> str:
