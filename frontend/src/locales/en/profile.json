@@ -23,7 +23,8 @@
     "generate": "Generate now",
     "regenerate": "Regenerate",
     "generating": "Generating…",
-    "generateError": "Couldn't generate taste: {{message}}"
+    "generateError": "Couldn't generate taste: {{message}}",
+    "generateUnavailable": "Couldn't reach the AI to regenerate your taste right now. Your existing profile is unchanged — try again in a moment."
   },
   "sources": {
     "heading": "Connected sources",

@@ -282,6 +282,93 @@ def test_generate_without_llm_key_400(db_session: Session) -> None:
     )
 
 
+class _RaisingLLMProvider(FakeLLMProvider):
+    """An LLM provider whose ``complete`` raises — to exercise the manual-generate transport/budget
+    guard without a real network call (tests stay hermetic)."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(completion="unused")
+        self._error = error
+
+    def complete(self, prompt: str, *, max_tokens=None, temperature=None) -> str:  # noqa: ARG002
+        raise self._error
+
+
+def _client_with_raising_llm(session: Session, user: User, error: Exception) -> TestClient:
+    return authed_client(
+        session, user, overrides={get_llm_provider: lambda: _RaisingLLMProvider(error)}
+    )
+
+
+def _spy_fallback(monkeypatch) -> list[tuple[str, str]]:
+    """Record every ``record_fallback(component, reason, …)`` call the endpoint makes. The app's
+    startup reconfigures the root logger (clears caplog's handler), so spy on the call directly
+    rather than fish it out of captured logs."""
+    calls: list[tuple[str, str]] = []
+    import phare.api.taste as taste_module
+
+    def _record(component: str, reason: str, **fields) -> None:  # noqa: ARG001
+        calls.append((component, reason))
+
+    monkeypatch.setattr(taste_module, "record_fallback", _record)
+    return calls
+
+
+def test_manual_generate_returns_503_on_llm_transport_failure(
+    db_session: Session, monkeypatch
+) -> None:
+    # F3: the manual "Regenerate" button explicitly asks for an LLM extraction. A transport failure
+    # (403/429/5xx/network) must surface a structured 503 — not a 500, and not a silent fall back to
+    # the deterministic profile — and it must announce itself via record_fallback (metric G1).
+    user = _account_with_history(db_session)
+    fallbacks = _spy_fallback(monkeypatch)
+    import httpx
+
+    request = httpx.Request("POST", "https://llm.example/chat/completions")
+    response = httpx.Response(503, request=request)
+    client = _client_with_raising_llm(
+        db_session, user, httpx.HTTPStatusError("boom", request=request, response=response)
+    )
+    resp = client.post(f"/profiles/{user.profile.id}/taste/generate")
+    assert resp.status_code == 503
+    body = resp.json()["detail"]
+    assert body["code"] == "llm_unavailable"
+    assert body["reason"] == "llm_unreachable"
+    assert ("taste_extraction", "llm_unreachable") in fallbacks
+    # No taste profile was written on the failure (the user's existing profile stays as-is).
+    assert _stored_taste(db_session, user.profile.id) is None
+
+
+def test_manual_generate_returns_503_on_budget_exhausted(db_session: Session, monkeypatch) -> None:
+    # F3: the monthly LLM token budget being spent is also an honest 503 (distinct reason; not 500).
+    from phare.core.llm_budget import LLMBudgetExceeded
+
+    user = _account_with_history(db_session)
+    fallbacks = _spy_fallback(monkeypatch)
+    client = _client_with_raising_llm(db_session, user, LLMBudgetExceeded("budget spent"))
+    resp = client.post(f"/profiles/{user.profile.id}/taste/generate")
+    assert resp.status_code == 503
+    body = resp.json()["detail"]
+    assert body["code"] == "llm_unavailable"
+    assert body["reason"] == "budget_exhausted"
+    assert ("taste_extraction", "budget_exhausted") in fallbacks
+
+
+def test_manual_generate_still_degrades_on_unparseable_json(db_session: Session) -> None:
+    # Regression guard: an *unparseable completion* (the model answered, but not with JSON) must NOT
+    # 503 — generate() still degrades to the deterministic genre-frequency profile (200), unchanged.
+    user = _account_with_history(db_session)
+    client = authed_client(
+        db_session,
+        user,
+        overrides={get_llm_provider: lambda: FakeLLMProvider(completion="not json")},
+    )
+    resp = client.post(f"/profiles/{user.profile.id}/taste/generate")
+    assert resp.status_code == 200
+    stored = _stored_taste(db_session, user.profile.id)
+    assert stored is not None and stored.degraded is True
+
+
 # --- automatic taste refresh on ingest --------------------------------------
 
 

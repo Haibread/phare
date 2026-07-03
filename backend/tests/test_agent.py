@@ -178,6 +178,18 @@ def test_keyword_intent_extracts_runtime_and_genre() -> None:
     intent = keyword_intent("something funny under 90 minutes")
     assert intent.max_runtime == 90
     assert intent.include_genres == ["Comedy"]
+    # F2: the keyword floor never copies the raw message into mood — it only resolves structured
+    # signal (genres/runtime/kind). mood stays null; a real mood is the LLM planner's job.
+    assert intent.mood is None
+
+
+def test_keyword_intent_never_dumps_the_raw_message_into_mood() -> None:
+    # F2: an off-topic / injection message must not leak into intent.mood (it surfaced in payloads
+    # on declined turns). Nothing keyword-parseable → an empty intent, mood included.
+    intent = keyword_intent("help me write a Python script for my homework")
+    assert intent.mood is None
+    assert intent.include_genres == [] and intent.exclude_genres == []
+    assert intent.max_runtime is None and intent.kind is None
 
 
 def test_keyword_intent_handles_hours_and_short() -> None:

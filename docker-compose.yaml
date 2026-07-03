@@ -79,10 +79,12 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      # busybox wget ships in the nginx-alpine image.
+      # busybox wget ships in the nginx-alpine image. Probe 127.0.0.1, not localhost: the container's
+      # /etc/hosts maps localhost to ::1 first, busybox wget resolves to IPv6 and does not retry in
+      # IPv4, and nginx listens only on 0.0.0.0:8080 — so localhost gives a false "unhealthy".
       test:
         - CMD-SHELL
-        - wget -q -O /dev/null http://localhost:8080/ || exit 1
+        - wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
       interval: 10s
       timeout: 5s
       retries: 5

@@ -23,7 +23,8 @@
     "generate": "Générer maintenant",
     "regenerate": "Régénérer",
     "generating": "Génération…",
-    "generateError": "Impossible de générer les goûts : {{message}}"
+    "generateError": "Impossible de générer les goûts : {{message}}",
+    "generateUnavailable": "Impossible de joindre l'IA pour régénérer vos goûts pour le moment. Votre profil actuel est inchangé — réessayez dans un instant."
   },
   "sources": {
     "heading": "Sources connectées",
