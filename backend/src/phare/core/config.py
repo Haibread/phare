@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # reply stream drops a leading think block. See docs/configuration.md.
     llm_reasoning_model: bool = False
     llm_reasoning_headroom: int = 4096
+    # Circuit breaker on LLM spend (review I2). `0` = unlimited. When set, once this many tokens are
+    # used in a calendar month, mechanical LLM calls (taste, explanations, planning, embeddings)
+    # refuse and the deterministic fallbacks take over. Process-global; see docs/configuration.md.
+    llm_monthly_token_budget: int = 0
 
     # Taste extraction cost controls. Taste is a derived artifact that auto-refreshes after a
     # profile's history changes, but a full re-extraction is a workhorse LLM call over the whole
@@ -153,6 +157,15 @@ class Settings(BaseSettings):
     # plex.tv recognises the same client; generated and pinned in config when unset.
     plex_client_identifier: str | None = None
     plex_product_name: str = "Phare"
+
+    # Rate limiting (review I1). In-memory sliding window (the app is single-process); no Redis/
+    # slowapi. Auth endpoints are keyed per IP (no user yet); chat + imports per authenticated user
+    # (falling back to IP). Set the window to 0 to disable a bucket. See docs/configuration.md.
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = 60
+    rate_limit_auth_per_window: int = 10  # /auth/login,register,password,reset — per IP
+    rate_limit_chat_per_window: int = 20  # POST /chat* — per user
+    rate_limit_import_per_window: int = 10  # catalog import/sample/embed + source syncs — per user
 
     @property
     def agent_chat_model(self) -> str:

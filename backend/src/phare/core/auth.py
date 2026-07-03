@@ -47,32 +47,31 @@ def _sign(secret: str, message: str) -> str:
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
 
-def issue_token(settings: Settings, user_id: uuid.UUID, *, now: float | None = None) -> str:
-    """Mint a signed bearer token carrying the user id. Caller must have authenticated the user."""
+def issue_token(
+    settings: Settings, user_id: uuid.UUID, token_version: int, *, now: float | None = None
+) -> str:
+    """Mint a signed bearer token carrying the user id. Caller must have authenticated the user.
+
+    The user's ``token_version`` is folded into the signed payload (the emitted token is still three
+    segments) so bumping it — on logout or a password change — invalidates every token issued before
+    (review I3). The token itself never exposes the version."""
     secret = settings.signing_secret
     if secret is None:
         raise RuntimeError("SECRET_KEY must be set to issue tokens")
     expiry = int((now or time.time()) + settings.auth_token_ttl_seconds)
-    payload = f"{user_id}:{expiry}"
+    payload = f"{user_id}:{expiry}:{token_version}"
     return f"{user_id}.{expiry}.{_sign(secret, payload)}"
 
 
-def verify_token(settings: Settings, token: str, *, now: float | None = None) -> uuid.UUID | None:
-    """Return the token's user id iff it is well-formed, correctly signed, and unexpired."""
-    secret = settings.signing_secret
-    if secret is None:
-        return None
+def _parse_token(token: str) -> tuple[uuid.UUID, int, str] | None:
+    """Split a token into ``(user_id, expiry, signature)`` without verifying it — the signature can
+    only be recomputed once we've loaded the user's current ``token_version``."""
     user_id_str, _, rest = token.partition(".")
     expiry_str, _, signature = rest.partition(".")
     if not signature or not expiry_str.isdigit():
         return None
-    expected = _sign(secret, f"{user_id_str}:{expiry_str}")
-    if not hmac.compare_digest(expected, signature):
-        return None
-    if int(expiry_str) <= (now or time.time()):
-        return None
     try:
-        return uuid.UUID(user_id_str)
+        return uuid.UUID(user_id_str), int(expiry_str), signature
     except ValueError:
         return None
 
@@ -83,15 +82,34 @@ def _bearer(authorization: str | None) -> str | None:
     return None
 
 
-def resolve_user(session: Session, settings: Settings, authorization: str | None) -> User | None:
-    """Resolve a request's bearer token to its :class:`User`, or ``None`` if not authenticated."""
+def resolve_user(
+    session: Session, settings: Settings, authorization: str | None, *, now: float | None = None
+) -> User | None:
+    """Resolve a request's bearer token to its :class:`User`, or ``None`` if not authenticated.
+
+    Order matters (review I3): parse the unverified uid/expiry, reject if expired/malformed, load
+    the user, then recompute the signature with *their* current ``token_version``. A token whose
+    version no longer matches (logout, password change) fails the constant-time compare, so it's
+    rejected."""
+    secret = settings.signing_secret
+    if secret is None:
+        return None
     token = _bearer(authorization)
     if token is None:
         return None
-    user_id = verify_token(settings, token)
-    if user_id is None:
+    parsed = _parse_token(token)
+    if parsed is None:
         return None
-    return session.get(User, user_id)
+    user_id, expiry, signature = parsed
+    if expiry <= (now or time.time()):
+        return None
+    user = session.get(User, user_id)
+    if user is None:
+        return None
+    expected = _sign(secret, f"{user_id}:{expiry}:{user.token_version}")
+    if not hmac.compare_digest(expected, signature):
+        return None
+    return user
 
 
 def get_current_user(

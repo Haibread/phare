@@ -34,6 +34,7 @@ def get_llm_provider() -> LLMProvider:
         chat_model=settings.llm_chat_model,
         embedding_model=settings.llm_embedding_model,
         base_url=settings.llm_base_url,
+        monthly_token_budget=settings.llm_monthly_token_budget,
         reasoning_headroom=settings.reasoning_headroom,
     )
 

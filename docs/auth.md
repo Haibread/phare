@@ -38,6 +38,22 @@ isolation possible. Format: `<user_id>.<expiry>.<hmac_sha256>` signed with `SECR
 backend resolves the token to a `current_user`; there is no session store. Default TTL 30 days
 (`AUTH_TOKEN_TTL_SECONDS`). Held in memory only on the client (never `localStorage`).
 
+**Revocation (`token_version`).** Each `User` carries a `token_version` counter that is folded into
+the signed payload (`<user_id>:<expiry>:<token_version>`). The emitted token is still three segments,
+but resolving it now loads the user first and recomputes the signature with *their current* version —
+so bumping the counter invalidates every token issued before it. That powers:
+
+- `POST /auth/logout` — bumps the version, revoking **all** of the caller's sessions at once (a
+  stateless token can't be torn up individually). Returns `204`.
+- `POST /auth/password` — change your own password (requires the current one); revokes other
+  sessions and returns a fresh token so this device stays logged in.
+- `POST /auth/admin/users/{id}/reset-password` — admin-only; sets a random temporary password on a
+  user, revokes their sessions, and returns the temp password to hand over. No local identity (e.g.
+  a Plex-only account) → `400`.
+
+**Deploying `token_version` invalidates all existing tokens once** — everyone re-authenticates a
+single time, because the signed payload gained a segment. That's intentional and accepted.
+
 However a user authenticates — password today, Plex now, Trakt tomorrow — the flow ends by minting
 *our own* token. The SPA never sees a provider token.
 
@@ -50,7 +66,9 @@ However a user authenticates — password today, Plex now, Trakt tomorrow — th
   `User`, its `Profile`, and a `local` `Identity` with an argon2id hash.
 - `POST /auth/login` — email + password → token.
 - Passwords hashed with **argon2id** (`argon2-cffi`). Never stored or logged in plaintext.
-- Password reset is admin-driven for now (no SMTP). Email-based reset is a later extension.
+- **Policy:** length only — 10–128 characters (no mandated symbol classes; length beats complexity).
+- Password change is self-service (`POST /auth/password`); reset is admin-driven (no SMTP).
+  Email-based self-serve reset is a later extension.
 
 ## Sign in with Plex
 

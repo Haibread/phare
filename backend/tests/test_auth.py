@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from phare.api.auth import get_plex_auth_provider
 from phare.auth.provider import AuthStatus, ResolvedIdentity
-from phare.core.auth import hash_password, issue_token, verify_password, verify_token
+from phare.core.auth import hash_password, issue_token, resolve_user, verify_password
 from phare.core.config import Settings, get_settings
 from phare.core.crypto import decrypt, encrypt
 from phare.core.tokens import get_source_token, store_source_token
@@ -54,18 +54,27 @@ def _identity(
 # --- token + password primitives -------------------------------------------
 
 
-def test_token_carries_user_id_and_expires() -> None:
+def test_token_resolves_user_expires_and_revokes(db_session: Session) -> None:
     settings = Settings(secret_key="sign-me")
-    user_id = uuid.uuid4()
-    token = issue_token(settings, user_id)
-    assert verify_token(settings, token) == user_id
+    user = make_account(db_session)
+    token = issue_token(settings, user.id, user.token_version)
+    assert resolve_user(db_session, settings, f"Bearer {token}") == user
     # Tampered signature -> None.
-    assert verify_token(settings, token + "x") is None
+    assert resolve_user(db_session, settings, f"Bearer {token}x") is None
     # Expired -> None.
-    expired = issue_token(settings, user_id, now=time.time() - settings.auth_token_ttl_seconds - 10)
-    assert verify_token(settings, expired) is None
+    expired = issue_token(
+        settings,
+        user.id,
+        user.token_version,
+        now=time.time() - settings.auth_token_ttl_seconds - 10,
+    )
+    assert resolve_user(db_session, settings, f"Bearer {expired}") is None
     # No secret -> can't verify.
-    assert verify_token(Settings(secret_key=None), token) is None
+    assert resolve_user(db_session, Settings(secret_key=None), f"Bearer {token}") is None
+    # Bumping the user's token version revokes the previously issued token (review I3).
+    user.token_version += 1
+    db_session.flush()
+    assert resolve_user(db_session, settings, f"Bearer {token}") is None
 
 
 def test_password_hash_roundtrip() -> None:
@@ -183,6 +192,127 @@ def test_login_rejects_wrong_password(monkeypatch, db_session: Session) -> None:
         get_settings.cache_clear()
 
 
+def _register(client: TestClient, email: str, password: str) -> str:
+    """Register a first (admin) account and return its bearer token."""
+    resp = client.post(
+        "/auth/register",
+        json={"email": email, "password": password, "displayName": "Owner"},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["token"]
+
+
+def test_password_policy_rejects_short_passwords(monkeypatch, db_session: Session) -> None:
+    # I4: length is the rule — 9 chars is refused, 10 accepted.
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = TestClient(unauthed_app(db_session))
+        short = client.post(
+            "/auth/register",
+            json={"email": "a@example.test", "password": "9charsxxx", "displayName": "A"},
+        )
+        assert short.status_code == 422
+        ok = client.post(
+            "/auth/register",
+            json={"email": "a@example.test", "password": "tencharsok", "displayName": "A"},
+        )
+        assert ok.status_code == 201
+    finally:
+        get_settings.cache_clear()
+
+
+def test_logout_revokes_the_token(monkeypatch, db_session: Session) -> None:
+    # I3: a stateless token can't be individually revoked, so logout bumps the version and every
+    # token issued before stops working.
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = TestClient(unauthed_app(db_session))
+        token = _register(client, "owner@example.test", "rightpass1")
+        headers = {"Authorization": f"Bearer {token}"}
+        assert client.get("/me", headers=headers).json()["authenticated"] is True
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        # The same token is now dead.
+        assert client.get("/me", headers=headers).json()["authenticated"] is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_change_password_revokes_old_sessions_and_returns_fresh_token(
+    monkeypatch, db_session: Session
+) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me")
+    try:
+        client = TestClient(unauthed_app(db_session))
+        token = _register(client, "owner@example.test", "oldpassword")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # Wrong current password is refused.
+        assert (
+            client.post(
+                "/auth/password",
+                headers=headers,
+                json={"currentPassword": "nope", "newPassword": "newpassword1"},
+            ).status_code
+            == 401
+        )
+        # Correct current password rotates it and hands back a working token.
+        changed = client.post(
+            "/auth/password",
+            headers=headers,
+            json={"currentPassword": "oldpassword", "newPassword": "newpassword1"},
+        )
+        assert changed.status_code == 200
+        fresh = {"Authorization": f"Bearer {changed.json()['token']}"}
+        assert client.get("/me", headers=fresh).json()["authenticated"] is True
+        # The pre-change token is revoked, and the new password logs in.
+        assert client.get("/me", headers=headers).json()["authenticated"] is False
+        assert (
+            client.post(
+                "/auth/login", json={"email": "owner@example.test", "password": "newpassword1"}
+            ).status_code
+            == 200
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_admin_reset_password(monkeypatch, db_session: Session) -> None:
+    _with_settings(monkeypatch, SECRET_KEY="sign-me", REGISTRATION_OPEN="true")
+    try:
+        client = TestClient(unauthed_app(db_session))
+        admin_token = _register(client, "owner@example.test", "adminpass1")
+        member = client.post(
+            "/auth/register",
+            json={"email": "member@example.test", "password": "memberpass1", "displayName": "M"},
+        ).json()
+        member_id = member["user"]["id"]
+        member_token = {"Authorization": f"Bearer {member['token']}"}
+
+        # A non-admin can't reset anyone.
+        assert (
+            client.post(
+                f"/auth/admin/users/{member_id}/reset-password", headers=member_token
+            ).status_code
+            == 403
+        )
+        # The admin resets the member: sessions revoked, temp password returned + usable.
+        reset = client.post(
+            f"/auth/admin/users/{member_id}/reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert reset.status_code == 200
+        temp = reset.json()["temporaryPassword"]
+        assert client.get("/me", headers=member_token).json()["authenticated"] is False
+        assert (
+            client.post(
+                "/auth/login", json={"email": "member@example.test", "password": temp}
+            ).status_code
+            == 200
+        )
+    finally:
+        get_settings.cache_clear()
+
+
 # --- Sign in with Plex ------------------------------------------------------
 
 
@@ -251,7 +381,9 @@ def test_one_user_cannot_reach_anothers_profile(monkeypatch, db_session: Session
         alice = make_account(db_session, display_name="alice", email="alice@example.test")
         bob = make_account(db_session, display_name="bob", email="bob@example.test")
         client = TestClient(unauthed_app(db_session))
-        headers = {"Authorization": f"Bearer {issue_token(get_settings(), alice.id)}"}
+        headers = {
+            "Authorization": f"Bearer {issue_token(get_settings(), alice.id, alice.token_version)}"
+        }
 
         # Alice sees her own profile only.
         items = client.get("/profiles", headers=headers).json()["items"]

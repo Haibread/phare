@@ -27,6 +27,7 @@ from phare.api import (
 from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.logging import configure_logging
+from phare.core.ratelimit import RateLimitMiddleware
 from phare.core.telemetry import setup_telemetry
 from phare.db.base import get_engine
 
@@ -80,6 +81,10 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # Rate limit the expensive/abusable endpoints (login brute-force, agent-model chat, bulk
+    # imports) before they reach a handler (review I1). Added last so it runs first (outermost).
+    app.add_middleware(RateLimitMiddleware, settings=settings)
 
     # Open endpoints: health + auth must be reachable without a token.
     app.include_router(health.router)

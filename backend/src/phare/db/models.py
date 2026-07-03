@@ -161,6 +161,10 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(320), unique=True)
     display_name: Mapped[str] = mapped_column(String(100))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Bumped to revoke every outstanding bearer token for this user at once — on logout, a password
+    # change, or an admin reset. It's folded into each token's signature, so an old token stops
+    # verifying the moment this changes (review I3). See docs/auth.md.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     profile: Mapped[Profile] = relationship(back_populates="user", cascade="all, delete-orphan")

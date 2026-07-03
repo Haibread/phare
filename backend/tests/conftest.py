@@ -42,7 +42,9 @@ if not os.environ.get("PHARE_LIVE_LLM"):
     # Behaviour-gating flags a dev flips locally: pin to their secure defaults so tests that assert
     # the closed-by-default posture don't fail on a dev box. Typed (bool/int), so "" won't parse —
     # set the actual default value.
-    for _var, _default in (("REGISTRATION_OPEN", "false"),):
+    # Rate limiting is off by default in tests so a suite that hammers one endpoint through a single
+    # app instance doesn't trip it; the rate-limit test flips it on explicitly.
+    for _var, _default in (("REGISTRATION_OPEN", "false"), ("RATE_LIMIT_ENABLED", "false")):
         os.environ[_var] = _default
     get_settings.cache_clear()
 

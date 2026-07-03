@@ -24,19 +24,36 @@ class HealthResponse(ApiModel):
     version: str
 
 
+# Password policy (review I4): length is the only rule — long beats a mandated-symbol short one, and
+# arbitrary complexity rules push users to predictable patterns. 128 caps the argon2 input.
+PASSWORD_MIN_LENGTH = 10
+PASSWORD_MAX_LENGTH = 128
+
+
 class RegisterRequest(ApiModel):
     email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=8, max_length=200)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     display_name: str = Field(min_length=1, max_length=100)
 
 
 class LoginRequest(ApiModel):
     email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)
 
 
 class TokenResponse(ApiModel):
     token: str
+
+
+class ChangePasswordRequest(ApiModel):
+    current_password: str = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
+
+
+class AdminResetPasswordResponse(ApiModel):
+    user_id: uuid.UUID
+    # A one-off temporary password the admin hands to the user; they should change it after login.
+    temporary_password: str
 
 
 class UserResponse(ApiModel):

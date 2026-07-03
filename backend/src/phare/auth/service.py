@@ -9,6 +9,7 @@ rather than forking a second account). Signing in with a source also persists it
 from __future__ import annotations
 
 import logging
+import secrets
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -70,6 +71,40 @@ def authenticate_local(session: Session, email: str, password: str) -> User | No
     if not verify_password(identity.secret, password):
         return None
     return identity.user
+
+
+def _local_identity(session: Session, user: User) -> Identity | None:
+    return session.scalar(
+        select(Identity).where(Identity.user_id == user.id, Identity.provider == "local")
+    )
+
+
+def change_local_password(session: Session, user: User, new_password: str) -> None:
+    """Set a new local password and revoke the user's other sessions (bump ``token_version``).
+
+    Raises :class:`RegistrationError` for an account with no local identity (e.g. Plex-only)."""
+    identity = _local_identity(session, user)
+    if identity is None:
+        raise RegistrationError("This account has no password to change")
+    identity.secret = hash_password(new_password)
+    user.token_version += 1  # every previously issued token stops verifying (review I3/I5)
+    session.flush()
+    logger.info("auth.password_changed", extra={"user_id": str(user.id)})
+
+
+def reset_local_password(session: Session, target: User) -> str:
+    """Admin reset: set a random temporary password on ``target``'s local identity, revoke their
+    sessions, and return the plaintext for the admin to hand over. Raises if there's no local
+    identity to reset."""
+    identity = _local_identity(session, target)
+    if identity is None:
+        raise RegistrationError("This account has no local password to reset")
+    temporary = secrets.token_urlsafe(12)
+    identity.secret = hash_password(temporary)
+    target.token_version += 1
+    session.flush()
+    logger.info("auth.password_reset", extra={"user_id": str(target.id)})
+    return temporary
 
 
 def _check_plex_membership(session: Session, identity: ResolvedIdentity) -> bool:
