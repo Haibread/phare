@@ -69,6 +69,14 @@ Over-quota requests get `429` + `Retry-After` before reaching a handler; the cha
 down" message. Keyed per IP for the (unauthenticated) auth endpoints, per authenticated user for the
 rest (falling back to IP). In-process only — matched to the single-backend deployment assumption.
 
+The pytest suite sets `RATE_LIMIT_ENABLED=false` (in `tests/conftest.py`) and the Playwright e2e
+webServer sets it too (in `e2e/playwright.config.ts`): both share one backend from one IP and
+re-authenticate on every case, so the prod-default per-IP auth bucket would otherwise fill up mid-run
+and 429 the later logins. The e2e webServer also blanks `LLM_API_KEY`/`TMDB_API_KEY`/`TRAKT_*`/
+`SEERR_*` (it reads the repo-root `.env`, and a developer's real keys would otherwise leak in and make
+the run hit live providers) so it runs fully offline like CI — the same hermetic guard the pytest
+suite applies. All of this is scoped to the test webServer; prod defaults are unaffected.
+
 The first cut gated the whole instance behind one shared `AUTH_PASSWORD` and was open when unset.
 That's **removed** — Phare is now multi-user with per-account credentials, real per-user isolation,
 and no open mode. See [`auth.md`](auth.md) for the model, the "Sign in with Plex" flow, and how the
