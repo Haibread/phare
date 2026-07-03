@@ -26,9 +26,32 @@ export default defineConfig({
       url: "http://localhost:8000/health",
       reuseExistingServer: !isCI,
       timeout: 60_000,
-      // SECRET_KEY is required for the now-mandatory multi-user auth (tokens). The specs create the
-      // first account (which becomes admin) and sign in — see tests/helpers.ts.
-      env: { MIGRATE_ON_STARTUP: "true", SECRET_KEY: "e2e-secret-key" },
+      // The webServer inherits this process's env *and* the backend reads ../.env, so a developer's
+      // real credentials would otherwise leak in and make the run non-hermetic (live LLM/embedding/
+      // TMDB calls → different, flaky results than CI, which has none of these). The pytest suite
+      // guards against exactly this in backend/tests/conftest.py; we mirror it here.
+      //
+      //  - SECRET_KEY: a fixed value the specs' now-mandatory multi-user auth (tokens) needs; they
+      //    create the first account (which becomes admin) and sign in — see tests/helpers.ts.
+      //  - LLM_API_KEY / TMDB_API_KEY / TRAKT_* / SEERR_*: blanked so the backend runs fully offline
+      //    (deterministic sample catalog + fallback embeddings + templated chat), identical to CI.
+      //  - RATE_LIMIT_ENABLED=false: the specs run serially against one backend and re-authenticate
+      //    from the same IP on every page load; with the prod default (10 /auth/* per IP per 60s) the
+      //    shared bucket fills up partway through the run and later logins get 429'd, so the app never
+      //    loads (cold-start/tab-browse time out). Scoped to the e2e webServer — prod defaults stand.
+      //
+      // See docs/configuration.md.
+      env: {
+        MIGRATE_ON_STARTUP: "true",
+        SECRET_KEY: "e2e-secret-key",
+        RATE_LIMIT_ENABLED: "false",
+        LLM_API_KEY: "",
+        TMDB_API_KEY: "",
+        TRAKT_CLIENT_ID: "",
+        TRAKT_CLIENT_SECRET: "",
+        SEERR_BASE_URL: "",
+        SEERR_API_KEY: "",
+      },
     },
     {
       command: "npm --prefix ../frontend run dev",

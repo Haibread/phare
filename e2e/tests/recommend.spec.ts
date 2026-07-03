@@ -21,5 +21,5 @@ test("recommendations show honest fit labels and reserve swing picks", async ({ 
 
   // The closed-loop conversion read-out lives on the Profile tab; fresh data has none matured yet.
   await page.getByTestId("tab-profile").click();
-  await expect(page.getByTestId("conversion")).toContainText("not enough history yet");
+  await expect(page.getByTestId("conversion")).toContainText("Not enough history yet");
 });
