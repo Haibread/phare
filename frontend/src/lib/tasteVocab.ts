@@ -90,3 +90,11 @@ export function translateTasteTerm(value: string, language: string): string {
   }
   return table[value] ?? TABLES_LC[lang]?.[value.toLowerCase()] ?? value;
 }
+
+/** Localize a stored (English) TMDB genre name for display on cards, the detail sheet, and search.
+ * Genres are a subset of the taste vocabulary, so this just names the intent — an unknown genre
+ * (e.g. a brand-new TMDB label) falls back to the raw English name, never an error. English returns
+ * the name unchanged. */
+export function translateGenre(name: string, language: string): string {
+  return translateTasteTerm(name, language);
+}

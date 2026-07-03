@@ -4,6 +4,7 @@ import { type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
 import { useTitleDetail } from "../lib/queries";
+import { translateGenre } from "../lib/tasteVocab";
 import { Sheet } from "./Sheet";
 import styles from "./components.module.css";
 
@@ -22,7 +23,7 @@ export function TitleDetailSheet({
   // Seed of a "because you watched X" row, when opened from one — sharpens the "why this" reason.
   anchorTitleId?: string | null;
 }): React.JSX.Element {
-  const { t } = useTranslation("title");
+  const { t, i18n } = useTranslation("title");
   const profileId = useProfileId();
   const detail = useTitleDetail(item.titleId, open);
   const [streamedWhy, setStreamedWhy] = useState("");
@@ -59,7 +60,10 @@ export function TitleDetailSheet({
   const meta = [
     item.year?.toString(),
     runtime ? `${runtime} min` : null,
-    item.genres.slice(0, 3).join(", ") || null,
+    item.genres
+      .slice(0, 3)
+      .map((g) => translateGenre(g, i18n.language))
+      .join(", ") || null,
   ]
     .filter(Boolean)
     .join(" · ");

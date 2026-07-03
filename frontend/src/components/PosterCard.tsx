@@ -6,6 +6,7 @@ import { useEmbeddingsDegraded } from "../lib/degraded";
 import { fitFor } from "../lib/fit";
 import { posterTint } from "../lib/poster";
 import { useSendTitleFeedback, useUndoChatAction } from "../lib/queries";
+import { translateGenre } from "../lib/tasteVocab";
 import { TitleAction } from "./Availability";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 import { TitleDetailSheet } from "./TitleDetailSheet";
@@ -22,7 +23,7 @@ export function PosterCard({
   // sheet so the "why this" reason can open from that concrete link.
   anchorTitleId?: string | null;
 }): React.JSX.Element {
-  const { t } = useTranslation("title");
+  const { t, i18n } = useTranslation("title");
   const { t: tCommon } = useTranslation("common");
   const profileId = useProfileId();
   const degraded = useEmbeddingsDegraded();
@@ -151,7 +152,7 @@ export function PosterCard({
         <div className={styles.cardTitle}>{item.title}</div>
         <div className={styles.cardMeta}>
           {item.year ?? "—"}
-          {item.genres.length > 0 && ` · ${item.genres[0]}`}
+          {item.genres[0] !== undefined && ` · ${translateGenre(item.genres[0], i18n.language)}`}
         </div>
       </button>
       {showFit && <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />}
