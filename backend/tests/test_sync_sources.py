@@ -2,12 +2,44 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import httpx
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
+from phare.core.tokens import store_source_token
+from phare.db.models import EventType, TitleKind, WatchEvent
+from phare.providers.fakes import FakeMetadataProvider
 from phare.providers.jellyfin import list_jellyfin_users
+from phare.providers.trakt import TraktSourceProvider
+from phare.providers.types import RawEvent, RawMediaType, TitleMetadata
 from tests.conftest import authed_client, make_account
+
+
+def _resolvable_events(n: int) -> list[RawEvent]:
+    return [
+        RawEvent(
+            source="trakt",
+            media_type=RawMediaType.movie,
+            type=EventType.watched,
+            tmdb_id=1000 + i,
+            external_ref=f"trakt:{i}",
+        )
+        for i in range(n)
+    ]
+
+
+def _fake_metadata(n: int) -> FakeMetadataProvider:
+    return FakeMetadataProvider(
+        titles={
+            (1000 + i, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, tmdb_id=1000 + i, title=f"Movie {1000 + i}", year=2020
+            )
+            for i in range(n)
+        }
+    )
 
 
 def test_plex_sync_requires_tmdb(db_session: Session) -> None:
@@ -66,6 +98,59 @@ def test_capabilities_reflect_server_config(db_session: Session, monkeypatch) ->
     monkeypatch.setenv("TRAKT_CLIENT_SECRET", "s")
     get_settings.cache_clear()
     assert client.get("/sources/capabilities").json()["trakt"] is True
+
+
+def test_sync_partial_failure_reports_ingested_and_resumes(
+    db_session: Session, monkeypatch
+) -> None:
+    # A sync that dies after the first committed batch answers 502 with a structured body carrying
+    # the ingested count; the committed data stays, and a re-run resumes without dupes (review G3).
+    monkeypatch.setenv("TRAKT_CLIENT_ID", "c")
+    monkeypatch.setenv("TMDB_API_KEY", "t")
+    monkeypatch.setenv("SECRET_KEY", "sign-me")
+    get_settings.cache_clear()
+    settings = get_settings()
+    try:
+        user = make_account(db_session)
+        profile = user.profile
+        store_source_token(db_session, settings, profile.id, "trakt", "acc")
+        # Swap the real TMDB resolver for an in-memory one so the ingest needs no network.
+        monkeypatch.setattr("phare.api.sync.TMDBMetadataProvider", lambda **_: _fake_metadata(200))
+
+        def exploding_pull(self: TraktSourceProvider, since=None) -> Iterator[RawEvent]:  # noqa: ANN001
+            def gen() -> Iterator[RawEvent]:
+                yield from _resolvable_events(100)  # one full default batch commits...
+                raise RuntimeError("source blew up mid-sync")  # ...then the source dies
+
+            return gen()
+
+        monkeypatch.setattr(TraktSourceProvider, "pull", exploding_pull)
+
+        client = authed_client(db_session, user)
+        body = {"profileId": str(profile.id)}
+        response = client.post("/sources/trakt/sync", json=body)
+        assert response.status_code == 502
+        detail = response.json()["detail"]
+        assert detail["code"] == "sync_partial_failure"
+        assert detail["ingested"] >= 100
+
+        def count_events() -> int:
+            return db_session.scalar(
+                select(func.count())
+                .select_from(WatchEvent)
+                .where(WatchEvent.profile_id == profile.id)
+            )
+
+        assert count_events() == 100  # first batch is durable, not rolled back
+
+        # Re-run: the same 100 + 20 more, no failure. Idempotent upsert → no duplicates.
+        monkeypatch.setattr(
+            TraktSourceProvider, "pull", lambda self, since=None: iter(_resolvable_events(120))
+        )
+        assert client.post("/sources/trakt/sync", json=body).status_code == 200
+        assert count_events() == 120
+    finally:
+        get_settings.cache_clear()
 
 
 def test_jellyfin_users_lists_names_and_ids() -> None:

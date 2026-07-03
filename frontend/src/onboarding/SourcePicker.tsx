@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { type JellyfinUser, type SourceCapabilities, api } from "../api";
+import { type JellyfinUser, type SourceCapabilities, api, syncPartialFailureCount } from "../api";
 import { Sheet } from "../components/Sheet";
 import { keys, useSourceCapabilities } from "../lib/queries";
 import styles from "./onboarding.module.css";
@@ -35,6 +35,9 @@ export function SourcePicker({
   const [active, setActive] = useState<Active>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when a sync died partway through: the count already imported. The batches are durable, so
+  // the fix is a re-run — resume picks up where it stopped (review G3).
+  const [partial, setPartial] = useState<number | null>(null);
   const [trakt, setTrakt] = useState<{ userCode: string; verificationUrl: string } | null>(null);
 
   // A history import (Trakt/Plex/Jellyfin) can run for minutes. Rather than block on the await with
@@ -59,6 +62,8 @@ export function SourcePicker({
   // Interval that polls the import progress count; cleared on completion/error/close/unmount.
   const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFails = useRef(0);
+  // The last sync thunk, so the partial-failure "retry" can re-run the exact same import (review G3).
+  const lastSync = useRef<(() => Promise<unknown>) | null>(null);
 
   const stopCountPolling = useCallback(() => {
     if (countTimer.current !== null) {
@@ -114,8 +119,10 @@ export function SourcePicker({
   /** Flip into the syncing view, poll `GET /history` `total` every ~2s for live progress, and run
    * the actual sync. On resolve: invalidate + close. On reject: surface the error, leave syncing. */
   async function runSync(sync: () => Promise<unknown>): Promise<void> {
+    lastSync.current = sync;
     setBusy(true);
     setError(null);
+    setPartial(null);
     setTrakt(null); // hide the Trakt device-code notice once the import starts
     setCount(0);
     setStalled(false);
@@ -140,7 +147,14 @@ export function SourcePicker({
       stopCountPolling();
       setSyncing(false);
       setBusy(false);
-      setError(message(e));
+      // A mid-sync failure kept everything committed so far; tell the user how much landed and offer
+      // a resume-on-retry instead of a generic error (review G3).
+      const imported = syncPartialFailureCount(e);
+      if (imported !== null) {
+        setPartial(imported);
+      } else {
+        setError(message(e));
+      }
     }
   }
 
@@ -432,6 +446,32 @@ export function SourcePicker({
             onClick={() => submit(() => api.connectSeerr(profileId, baseUrl, token))}
           >
             {t("sources.seerr.connect")}
+          </button>
+        </div>
+      )}
+
+      {partial !== null && (
+        <div className={styles.partial} data-testid="sync-partial">
+          <p className={styles.errorText}>
+            <Trans
+              t={t}
+              i18nKey="sources.partialFailure"
+              count={partial}
+              values={{ count: partial }}
+              components={{ c: <strong data-testid="sync-partial-count" /> }}
+            />
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            data-testid="sync-partial-retry"
+            disabled={busy}
+            onClick={() => {
+              const retry = lastSync.current;
+              if (retry) void runSync(retry);
+            }}
+          >
+            {t("sources.partialRetry")}
           </button>
         </div>
       )}

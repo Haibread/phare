@@ -32,6 +32,9 @@
     "notConfigured": "Non configuré sur ce serveur. Voir la documentation de configuration.",
     "stalled": "Le compteur de progression ne se met plus à jour.",
     "retryProgress": "Réessayer",
+    "partialFailure_one": "L'import s'est interrompu — <c>{{count}}</c> titre déjà importé. Relancez-le : il reprendra là où il s'est arrêté.",
+    "partialFailure_other": "L'import s'est interrompu — <c>{{count}}</c> titres déjà importés. Relancez-le : il reprendra là où il s'est arrêté.",
+    "partialRetry": "Reprendre l'import",
     "form": {
       "serverUrl": "URL du serveur (https://…)",
       "apiKey": "Clé API"

@@ -3,25 +3,31 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SourcePicker } from "./SourcePicker";
 
-vi.mock("../api", () => ({
-  api: {
-    traktConnectStart: vi.fn(),
-    traktConnectPoll: vi.fn(),
-    syncTrakt: vi.fn(),
-    syncPlex: vi.fn(),
-    syncJellyfin: vi.fn(),
-    jellyfinUsers: vi.fn(),
-    history: vi.fn(),
-    sourceCapabilities: vi.fn().mockResolvedValue({
-      trakt: true,
-      plex: true,
-      jellyfin: true,
-      seerr: true,
-    }),
-  },
-}));
+// Keep the real ApiError + syncPartialFailureCount (the component reads structured error data);
+// only the `api` client's methods are stubbed.
+vi.mock("../api", async (importActual) => {
+  const actual = await importActual<typeof import("../api")>();
+  return {
+    ...actual,
+    api: {
+      traktConnectStart: vi.fn(),
+      traktConnectPoll: vi.fn(),
+      syncTrakt: vi.fn(),
+      syncPlex: vi.fn(),
+      syncJellyfin: vi.fn(),
+      jellyfinUsers: vi.fn(),
+      history: vi.fn(),
+      sourceCapabilities: vi.fn().mockResolvedValue({
+        trakt: true,
+        plex: true,
+        jellyfin: true,
+        seerr: true,
+      }),
+    },
+  };
+});
 
-import { api } from "../api";
+import { ApiError, api } from "../api";
 
 const mocked = vi.mocked(api);
 
@@ -129,6 +135,40 @@ describe("SourcePicker import progress", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SourcePicker partial-sync failure (G3)", () => {
+  it("shows how much already imported and resumes the import on retry", async () => {
+    // First sync dies mid-stream after 42 titles; the retry re-runs and succeeds.
+    const partial = new ApiError(502, "Bad Gateway", {
+      data: { code: "sync_partial_failure", ingested: 42 },
+    });
+    mocked.syncPlex.mockRejectedValueOnce(partial).mockResolvedValue({
+      created: 42,
+      updated: 0,
+      skipped: 0,
+      titlesCreated: 42,
+      tasteBuilding: false,
+    });
+    mocked.history.mockResolvedValue({ items: [], page: 1, perPage: 100, total: 42 });
+
+    render(tree(true));
+    fireEvent.click(screen.getByTestId("source-plex"));
+    fireEvent.change(screen.getByPlaceholderText("Server URL (https://…)"), {
+      target: { value: "http://plex" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Plex token"), { target: { value: "tok" } });
+    fireEvent.click(screen.getByText("Connect Plex"));
+
+    // The honest partial-failure notice shows the imported count, not a bare error.
+    const notice = await screen.findByTestId("sync-partial");
+    expect(within(notice).getByTestId("sync-partial-count").textContent).toBe("42");
+
+    // Retry re-runs the same import; on success the partial notice clears.
+    fireEvent.click(screen.getByTestId("sync-partial-retry"));
+    await waitFor(() => expect(mocked.syncPlex).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("sync-partial")).not.toBeInTheDocument());
   });
 });
 

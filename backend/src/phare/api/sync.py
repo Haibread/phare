@@ -43,6 +43,22 @@ router = APIRouter(tags=["Sync"])
 # Internal token rows that aren't user-facing "connected sources".
 _INTERNAL_SOURCES = {"trakt_refresh"}
 
+
+class PartialSyncError(Exception):
+    """A source sync failed partway through, after at least one batch was already committed.
+
+    The committed batches stay in the DB (the upsert is idempotent), so re-running the sync resumes
+    where it stopped without duplicates. Carries how many watch events durably landed so the API can
+    tell the user what's safe instead of a bare 500 (review G3). The originating error is chained as
+    ``__cause__`` for the logs.
+    """
+
+    def __init__(self, ingested: int, cause: BaseException) -> None:
+        super().__init__(f"sync failed after {ingested} events ingested")
+        self.ingested = ingested
+        self.__cause__ = cause
+
+
 # Commit the ingest in batches rather than once at the end, so a long first sync (a full Trakt
 # history is thousands of events resolved one-by-one through TMDB) shows up progressively in the UI
 # and a mid-sync failure keeps everything ingested so far instead of rolling the whole lot back.
@@ -153,8 +169,12 @@ def ingest_in_batches(
     ingester = IngestionService(session, metadata)
     totals = IngestResult()
     batch: list[RawEvent] = []
+    # Watch events durably committed so far — reported if a later batch (or the upstream pull) fails
+    # mid-stream, so the user learns how much already landed (review G3).
+    committed = 0
 
     def flush() -> None:
+        nonlocal committed
         if not batch:
             return
         _prewarm_metadata(session, metadata, batch)
@@ -164,13 +184,23 @@ def ingest_in_batches(
         totals.skipped += part.skipped
         totals.titles_created += part.titles_created
         session.commit()
+        committed += part.created + part.updated
         batch.clear()
 
-    for event in events:
-        batch.append(event)
-        if len(batch) >= batch_size:
-            flush()
-    flush()
+    try:
+        for event in events:
+            batch.append(event)
+            if len(batch) >= batch_size:
+                flush()
+        flush()
+    except Exception as exc:
+        # Nothing committed yet → let the original error surface unchanged (e.g. a first-request 401
+        # the Trakt handler recovers from by refreshing the token). Once a batch is durable, report
+        # the partial state so the UI can say "N imported, re-run to resume" instead of a bare 500.
+        if committed > 0:
+            session.rollback()  # drop the uncommitted in-flight batch; committed ones are untouched
+            raise PartialSyncError(committed, exc) from exc
+        raise
     return totals
 
 

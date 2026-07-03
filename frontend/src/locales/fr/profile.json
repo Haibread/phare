@@ -2,6 +2,7 @@
   "title": "Profil",
   "about": {
     "heading": "À propos et attributions",
+    "tmdbLogoAlt": "The Movie Database (TMDB)",
     "sources": "Les données d'historique proviennent de votre propre compte Trakt, Plex ou Jellyfin ; Phare n'est affilié à aucun d'entre eux."
   },
   "account": {
