@@ -1,9 +1,14 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { translateTasteTerm } from "../lib/tasteVocab";
 import styles from "../routes/routes.module.css";
 
 /** A labelled set of taste chips the user can edit. Removing/adding writes the new list up to the
- * caller, which persists it as a taste override (overrides survive auto-regeneration). */
+ * caller, which persists it as a taste override (overrides survive auto-regeneration).
+ *
+ * Items are the canonical English keys (they drive affinity matching + overrides). Closed-vocabulary
+ * terms are translated for *display* in the UI language, but the stored value never changes — remove
+ * and dedupe still key on the English value, so overrides survive a language switch (review F1). */
 export function EditableChips({
   label,
   items,
@@ -19,7 +24,7 @@ export function EditableChips({
   onAdd: (value: string) => void;
   onRemove: (value: string) => void;
 }): React.JSX.Element {
-  const { t } = useTranslation("profile");
+  const { t, i18n } = useTranslation("profile");
   const [draft, setDraft] = useState("");
   const chipClass = tone === "like" ? styles.chipLike : styles.chipAvoid;
 
@@ -37,20 +42,24 @@ export function EditableChips({
         {label}
       </div>
       <div className={styles.chips} data-testid={`taste-${tone}`}>
-        {items.map((g) => (
-          <span key={g} className={`chip ${chipClass}`} data-testid="taste-chip">
-            {g}
-            <button
-              type="button"
-              className={styles.chipRemove}
-              aria-label={t("chips.remove", { value: g })}
-              onClick={() => onRemove(g)}
-              disabled={busy}
-            >
-              ×
-            </button>
-          </span>
-        ))}
+        {items.map((g) => {
+          // Translate for display only; the stored value `g` stays the canonical English key.
+          const shown = translateTasteTerm(g, i18n.language);
+          return (
+            <span key={g} className={`chip ${chipClass}`} data-testid="taste-chip">
+              {shown}
+              <button
+                type="button"
+                className={styles.chipRemove}
+                aria-label={t("chips.remove", { value: shown })}
+                onClick={() => onRemove(g)}
+                disabled={busy}
+              >
+                ×
+              </button>
+            </span>
+          );
+        })}
         <input
           className={styles.chipInput}
           data-testid={`taste-add-${tone}`}

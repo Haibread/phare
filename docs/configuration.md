@@ -228,11 +228,19 @@ one workhorse LLM call to translate it, cached per language on the profile (`sum
 each language costs at most one call per (re)generation. Offline (no `LLM_API_KEY`) it serves the
 stored summary unchanged.
 
+The **taste chips** on the profile (the "Drawn to" / "Avoiding" pills) display in the UI language for
+terms in the closed vocabulary — TMDB genres + the controlled affinity descriptors — via a static
+front-side table (mirrored from the backend's `recommend/genres.py`). Only the _displayed_ label is
+translated: the stored value stays the canonical English key, so overrides survive a language switch
+and every edit still writes the English key to the backend. Free-form chips (the LLM's natural-language
+`likes`, outside the vocabulary) render exactly as stored — they're never machine-translated (no LLM
+call is spent on chips).
+
 What does **not** localise:
 
-- **Structured taste keys** (likes/dislikes/affinity keys) stay English on purpose — they key
-  affinity matching against the catalog's English genre names. The taste chips shown on the profile
-  therefore display their stored (English) label for now.
+- **Structured taste keys** (likes/dislikes/affinity keys) stay English *in storage* on purpose —
+  they key affinity matching against the catalog's English genre names (only their display is
+  translated, per above).
 - **Catalog metadata already stored** from a previous import keeps the language it was imported in;
   only re-fetched TMDB data honours the current language. Titles, people, and years are never
   translated.
