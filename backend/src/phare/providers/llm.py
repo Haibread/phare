@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from phare.core.llm_budget import ensure_budget, record_usage
 from phare.providers.http import DEFAULT_MAX_RETRIES, request_with_retry
 
 logger = logging.getLogger(__name__)
@@ -34,11 +35,14 @@ class OpenAILLMProvider:
         embedding_dimensions: int | None = None,
         *,
         reasoning_headroom: int = 0,
+        monthly_token_budget: int = 0,
         max_retries: int = DEFAULT_MAX_RETRIES,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._chat_model = chat_model
         self._embedding_model = embedding_model
+        # Monthly token ceiling; 0 = unlimited. Metering is always on regardless (review I2).
+        self._monthly_token_budget = monthly_token_budget
         # Extra tokens added to every bounded completion for a reasoning model, so the `<think>`
         # phase doesn't consume the whole budget and leave the actual answer empty/truncated.
         self._reasoning_headroom = reasoning_headroom
@@ -79,6 +83,7 @@ class OpenAILLMProvider:
         self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
     ) -> str:
         logger.debug("llm.complete", extra={"model": self._chat_model})
+        ensure_budget(self._monthly_token_budget, "chat")
         payload: dict[str, object] = {
             "model": self._chat_model,
             "messages": [{"role": "user", "content": prompt}],
@@ -91,6 +96,7 @@ class OpenAILLMProvider:
         if temperature is not None:
             payload["temperature"] = temperature
         data = self._post("/chat/completions", payload)
+        record_usage(self._chat_model, "chat", data.get("usage"))
         # An OpenAI-compatible ``content`` is null when the model refuses or burns its token budget
         # on reasoning before emitting an answer; honour the ``-> str`` contract so callers never
         # have to guard against ``None`` (a reasoning model must not crash a structured-JSON path).
@@ -129,8 +135,11 @@ class OpenAILLMProvider:
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         logger.debug("llm.embed", extra={"model": self._embedding_model, "count": len(texts)})
+        ensure_budget(self._monthly_token_budget, "embeddings")
         payload: dict[str, object] = {"model": self._embedding_model, "input": list(texts)}
         if self._embedding_dimensions is not None:
             payload["dimensions"] = self._embedding_dimensions
-        data = sorted(self._post("/embeddings", payload)["data"], key=lambda d: d["index"])
+        response = self._post("/embeddings", payload)
+        record_usage(self._embedding_model, "embeddings", response.get("usage"))
+        data = sorted(response["data"], key=lambda d: d["index"])
         return [item["embedding"] for item in data]

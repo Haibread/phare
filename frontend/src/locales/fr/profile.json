@@ -1,5 +1,17 @@
 {
   "title": "Profil",
+  "about": {
+    "heading": "À propos et attributions",
+    "sources": "Les données d'historique proviennent de votre propre compte Trakt, Plex ou Jellyfin ; Phare n'est affilié à aucun d'entre eux."
+  },
+  "account": {
+    "heading": "Compte",
+    "signOut": "Se déconnecter",
+    "currentPassword": "Mot de passe actuel",
+    "newPassword": "Nouveau mot de passe (10+ caractères)",
+    "changePassword": "Changer le mot de passe",
+    "passwordChanged": "Mot de passe changé. Les autres sessions ont été déconnectées."
+  },
   "taste": {
     "heading": "Vos goûts",
     "updatesAuto": "mise à jour automatique",

@@ -1,6 +1,7 @@
 services:
   db:
     image: pgvector/pgvector:pg17
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-phare}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phare}
@@ -50,21 +51,41 @@ services:
       TRAKT_CLIENT_SECRET: ${TRAKT_CLIENT_SECRET:-}
       SEERR_BASE_URL: ${SEERR_BASE_URL:-}
       SEERR_API_KEY: ${SEERR_API_KEY:-}
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
+    healthcheck:
+      # No curl/wget in the slim Python image — probe /health with the stdlib instead.
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   frontend:
     build:
       context: ./frontend
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "8080:8080"
+    healthcheck:
+      # busybox wget ships in the nginx-alpine image.
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://localhost:8080/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata: {}

@@ -27,6 +27,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `LLM_EMBEDDING_REQUEST_DIMENSIONS` | `false` | Send `LLM_EMBEDDING_DIM` as the `dimensions` request param. Enable for models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed; leave off for models that reject the param. |
 | `LLM_REASONING_MODEL` | `false` | Set when the chat/agent model is a **reasoning** model (emits `<think>…</think>` before answering, e.g. Qwen3, DeepSeek-R1). Adds `LLM_REASONING_HEADROOM` tokens to every bounded completion so reasoning doesn't eat the budget and return empty JSON, and strips a leading think block from the streamed reply. See [When a configured model misbehaves](#when-a-configured-model-misbehaves). |
 | `LLM_REASONING_HEADROOM` | `4096` | Extra completion tokens granted per call when `LLM_REASONING_MODEL` is on. The default clears every structured path including taste extraction (the largest output); raise it further only if a very verbose reasoner still truncates. |
+| `LLM_MONTHLY_TOKEN_BUDGET` | `0` (unlimited) | Circuit breaker on LLM spend (review I2). Token usage is always metered (`phare.llm.tokens` OTel counter + debug log); when this is `>0` and the calendar-month total reaches it, **mechanical** calls (taste, explanations, planning, embeddings) refuse and the deterministic fallbacks take over. Process-global; the per-user split is not yet implemented. |
 | **Metadata + sources** (live syncs/imports only; not needed for the sample-data path) | | |
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + catalog import (popular + broad) + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
@@ -57,6 +58,16 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `REGISTRATION_OPEN` | `false` | When true, anyone may self-register a local account. Default closed (admin-created; Plex sign-in is gated by server membership). |
 | `PLEX_CLIENT_IDENTIFIER` | _(derived from `SECRET_KEY`)_ | Stable client id Phare presents to plex.tv for "Sign in with Plex". |
 | `PLEX_PRODUCT_NAME` | `Phare` | Product name shown on the Plex auth screen. |
+| **Rate limiting** (in-memory sliding window; the app is single-process) | | |
+| `RATE_LIMIT_ENABLED` | `true` | Master switch for the request rate limiter (review I1). |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Sliding-window length all the per-window counts below apply over. |
+| `RATE_LIMIT_AUTH_PER_WINDOW` | `10` | Max `/auth/login`,`/auth/register`,`/auth/password`,`/auth/admin/*/reset-password` per window, **per IP** (brute-force guard). The Plex device-flow poll is exempt. `0` disables this bucket. |
+| `RATE_LIMIT_CHAT_PER_WINDOW` | `20` | Max chat turns (`POST …/chat*`) per window, **per user** (each spends an agent-model call). |
+| `RATE_LIMIT_IMPORT_PER_WINDOW` | `10` | Max bulk imports (`/catalog/import`,`/catalog/sample`,`/catalog/embed`, source `…/sync`) per window, **per user**. |
+
+Over-quota requests get `429` + `Retry-After` before reaching a handler; the chat UI shows a "slow
+down" message. Keyed per IP for the (unauthenticated) auth endpoints, per authenticated user for the
+rest (falling back to IP). In-process only — matched to the single-backend deployment assumption.
 
 The first cut gated the whole instance behind one shared `AUTH_PASSWORD` and was open when unset.
 That's **removed** — Phare is now multi-user with per-account credentials, real per-user isolation,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { type RecommendationItem, api } from "../api";
+import { ApiError, type RecommendationItem, api } from "../api";
 import { type ChatTurn, useChat } from "../app/ChatContext";
 import { useProfileId } from "../app/ProfileContext";
 import { TitleDetailSheet } from "../components/TitleDetailSheet";
@@ -116,8 +116,10 @@ export function Chat(): React.JSX.Element {
           onDone: () => setLog((l) => patchLast(l, { streaming: false })),
         },
       );
-    } catch {
-      setLog((l) => patchLast(l, { text: t("error"), streaming: false }));
+    } catch (e) {
+      // A 429 (rate limited) gets its own message so the user knows to wait, not that it "failed".
+      const key = e instanceof ApiError && e.status === 429 ? "rateLimited" : "error";
+      setLog((l) => patchLast(l, { text: t(key), streaming: false }));
     } finally {
       setPending(false);
       if (wrote) {

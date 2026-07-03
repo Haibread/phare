@@ -10,6 +10,7 @@
   "undone": "annulé",
   "reducedMode": "⚠ Mode basique — je n'ai pas pu tout traiter, j'ai donc simplement recommandé sans rien noter. Vérifie la configuration du modèle d'IA.",
   "error": "Désolé — un problème est survenu. Réessaie.",
+  "rateLimited": "Vous envoyez des messages un peu vite — patientez un instant puis réessayez.",
   "status": {
     "thinking": "Réflexion…"
   },

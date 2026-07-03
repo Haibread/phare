@@ -1,6 +1,8 @@
 /* Design tokens. Single source of truth for color, type, spacing, radius. Light + dark.
- * Identity is a placeholder "beacon" palette (warm gold on warm paper / night) — to be locked
- * before the final PR. Everything downstream references these vars, never raw hex. */
+ * Identity: "Fanal" palette — warm paper in light mode; neutral anthracite night with a
+ * saffron beacon accent in dark mode. Everything downstream references these vars, never
+ * raw hex. Dark grays are deliberately cool/neutral (not warm brown) and the faint text
+ * stop is tuned to keep >=4.5:1 contrast on --surface (WCAG AA, inactive tab labels). */
 
 :root {
   color-scheme: light dark;
@@ -50,27 +52,27 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131210;
-    --surface: #1c1a17;
-    --surface-2: #24221e;
-    --border: rgba(240, 236, 228, 0.12);
-    --border-strong: rgba(240, 236, 228, 0.22);
-    --text: #f0ece4;
-    --text-muted: #a8a399;
-    --text-faint: #76726a;
+    --bg: #141519;
+    --surface: #1e2126;
+    --surface-2: #262a30;
+    --border: rgba(233, 234, 236, 0.12);
+    --border-strong: rgba(233, 234, 236, 0.22);
+    --text: #e9eaec;
+    --text-muted: #a8aeb6;
+    --text-faint: #9aa1ab;
 
-    --accent: #e0a23b;
-    --accent-soft: #3a2f1a;
-    --on-accent: #1c1a17;
+    --accent: #f2c14e;
+    --accent-soft: #332e1a;
+    --on-accent: #1a1508;
 
-    --success: #54c39c;
-    --success-soft: #16352c;
+    --success: #4cc38a;
+    --success-soft: #17342a;
     --warning: #e0a23b;
-    --warning-soft: #3a2f1a;
+    --warning-soft: #332c19;
     --danger: #e07a7a;
     --danger-soft: #3a1f1f;
     --info: #6fa3e0;
-    --info-soft: #1a2a3f;
+    --info-soft: #1a2735;
 
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   }
