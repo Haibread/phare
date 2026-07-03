@@ -57,6 +57,30 @@ def run_seed(
     return created, embedded
 
 
+def backfill_missing_on_full_pool(
+    session: Session, embed_provider: object, model_version: str
+) -> int:
+    """Embed titles still missing a vector for the active model version, on an existing session.
+
+    Runs when autoseed *skips* (the pool is already full), so a catalog that has titles but not
+    their vectors heals at boot instead of waiting for a read request or the daily refresh. Covers
+    two cases a full pool otherwise hides: an embed pass interrupted mid-backlog (e.g. a restart
+    during the initial seed), and an embedding-model change (every title "missing" the new version).
+    Returns the count embedded. No-ops cheaply when nothing is missing. Best-effort commit is the
+    caller's; embedding here mirrors the inline embed of the seed paths (dedup on write handles a
+    concurrent read-path backfill).
+    """
+    from phare.embeddings.service import EmbeddingService
+
+    svc = EmbeddingService(session, embed_provider, model_version)  # type: ignore[arg-type]
+    if not svc.has_missing():
+        return 0
+    logger.info("catalog.autoseed.backfill_start")
+    embedded = svc.embed_missing()
+    logger.info("catalog.autoseed.backfill_done", extra={"embedded_count": embedded})
+    return embedded
+
+
 def autoseed_scope(settings: Settings) -> str:
     """Resolve the autoseed scope. ``auto`` means broad in production (so a prod box deep-seeds
     itself, no operator command) and popular elsewhere (so dev never fans out tens of thousands)."""
@@ -86,6 +110,15 @@ def seed_catalog_if_empty(settings: Settings) -> int:
             pool = candidate_pool_size(session)
             if pool >= _MIN_POOL:
                 logger.info("catalog.autoseed.skipped", extra={"reason": "pool ok", "pool": pool})
+                # A full pool isn't a *complete* one: an embed pass cut short by a restart, or an
+                # embedding-model change, leaves titles without a current-version vector. Heal them
+                # now (principle 8) rather than waiting for a read or the daily refresh.
+                backfill_missing_on_full_pool(
+                    session,
+                    get_embedding_provider(settings),
+                    embedding_model_version(settings),
+                )
+                session.commit()
                 return 0
             logger.info("catalog.autoseed.start", extra={"pool": pool, "scope": scope})
             provider = TMDBMetadataProvider(

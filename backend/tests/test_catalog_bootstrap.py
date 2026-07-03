@@ -6,7 +6,12 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.catalog.bootstrap import candidate_pool_size, run_seed, seed_catalog_if_empty
+from phare.catalog.bootstrap import (
+    backfill_missing_on_full_pool,
+    candidate_pool_size,
+    run_seed,
+    seed_catalog_if_empty,
+)
 from phare.catalog.sample import seed_sample_catalog
 from phare.core.config import get_settings
 from phare.db.models import EventType, Profile, Title, TitleKind, WatchEvent
@@ -83,6 +88,28 @@ def test_seed_is_skipped_without_a_tmdb_key() -> None:
     # conftest blanks TMDB_API_KEY, so the configured settings have no key: the seed must no-op
     # (and never touch the network) rather than raise.
     assert seed_catalog_if_empty(get_settings()) == 0
+
+
+def test_backfill_on_full_pool_embeds_leftover_and_is_idempotent(db_session: Session) -> None:
+    # Titles present but unembedded — the state an interrupted embed (or a model change) leaves
+    # behind. A full pool makes autoseed skip, so this backfill is what catches them.
+    for i in range(3):
+        db_session.add(
+            Title(
+                kind=TitleKind.movie,
+                tmdb_id=8000 + i,
+                title=f"Leftover {i}",
+                overview="Imported but never embedded.",
+            )
+        )
+    db_session.flush()
+    provider = LocalHashEmbeddingProvider()
+
+    embedded = backfill_missing_on_full_pool(db_session, provider, LOCAL_MODEL_VERSION)
+    assert embedded == 3
+
+    # Second pass finds nothing missing and no-ops (doesn't re-embed).
+    assert backfill_missing_on_full_pool(db_session, provider, LOCAL_MODEL_VERSION) == 0
 
 
 def test_run_seed_imports_embeds_and_logs_without_raising(db_session: Session) -> None:

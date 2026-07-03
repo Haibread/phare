@@ -136,6 +136,14 @@ and never fans out tens of thousands of TMDB requests. Depth/cost is tuned by
 it runs once and then never re-pulls. (The CLI broad seed below remains for a deliberate one-off; the
 auto path is the default delivery.)
 
+**Self-healing a full-but-unembedded pool.** A full pool isn't necessarily a *complete* one: a seed's
+embed pass can be cut short by a restart, or you might switch `LLM_EMBEDDING_MODEL` (which makes every
+title "missing" a vector for the new space). Since autoseed skips once the pool is full, those gaps
+would otherwise linger until a read request or the daily refresh trickled them in. So on the skip
+path, if any titles lack a current-version vector, Phare kicks off a background embedding backfill of
+the whole backlog at boot — no command, no waiting for traffic. It's the same idempotent, best-effort
+embed as the seed paths; the read-path top-up and daily refresh remain as backstops.
+
 **Staying fresh — new movies & TV.** Seeding is a point-in-time snapshot; new releases keep coming,
 and nothing on the read path can surface a title that isn't imported yet. So a background pass runs
 every `CATALOG_REFRESH_INTERVAL_SECONDS` (default daily; `0` to disable) and pulls TMDB's **current
