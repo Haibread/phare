@@ -20,6 +20,8 @@ import {
 } from "../lib/queries";
 import { relativeTime } from "../lib/time";
 import { SourcePicker } from "../onboarding/SourcePicker";
+import { AccountCard } from "./AccountCard";
+import { Attributions } from "./Attributions";
 import styles from "./routes.module.css";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -322,6 +324,10 @@ export function Profile(): React.JSX.Element {
           </table>
         )}
       </section>
+
+      <AccountCard />
+
+      <Attributions />
 
       <SourcePicker
         profileId={profileId}

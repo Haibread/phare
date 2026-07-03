@@ -387,7 +387,11 @@ async function readEventStream(
   onEvent: (event: string, data: unknown) => void,
 ): Promise<void> {
   if (!response.ok || response.body === null) {
-    throw new Error(response.statusText || "stream failed");
+    // Carry the status so callers can distinguish e.g. a 429 (rate limited) from a generic failure.
+    if (response.status === 401) {
+      setAuthToken(null);
+    }
+    throw new ApiError(response.status, response.statusText || "stream failed");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -493,6 +497,12 @@ export const api = {
     request("/auth/register", registerResponseSchema, {
       method: "POST",
       body: JSON.stringify({ email, password, displayName }),
+    }),
+  logout: () => request("/auth/logout", z.null(), { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request("/auth/password", tokenSchema, {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
     }),
   plexStart: () => request("/auth/plex/start", plexStartSchema, { method: "POST" }),
   plexPoll: (challengeId: string) =>

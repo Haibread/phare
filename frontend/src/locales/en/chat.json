@@ -10,6 +10,7 @@
   "undone": "undone",
   "reducedMode": "⚠ Basic mode — I couldn't fully process that, so I just recommended without noting anything. Check the AI model config.",
   "error": "Sorry — something went wrong. Please try again.",
+  "rateLimited": "You're sending messages a bit fast — give it a moment and try again.",
   "status": {
     "thinking": "Thinking…"
   },

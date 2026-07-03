@@ -1,5 +1,17 @@
 {
   "title": "Profile",
+  "about": {
+    "heading": "About & attribution",
+    "sources": "Watch-history data comes from your own Trakt, Plex, or Jellyfin account; Phare is not affiliated with any of them."
+  },
+  "account": {
+    "heading": "Account",
+    "signOut": "Sign out",
+    "currentPassword": "Current password",
+    "newPassword": "New password (10+ characters)",
+    "changePassword": "Change password",
+    "passwordChanged": "Password changed. Other sessions were signed out."
+  },
   "taste": {
     "heading": "Your taste",
     "updatesAuto": "updates automatically",
