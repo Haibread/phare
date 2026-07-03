@@ -6,12 +6,18 @@
     "or": "or",
     "exploreSample": "Explore with sample data",
     "loadingSample": "Loading sample data…",
-    "sampleHint": "See how it works first — no account needed.",
+    "sampleHint": "Try it without connecting a service.",
     "steps": {
       "heading": "Setting things up…",
       "catalog": "Building the sample catalog",
       "history": "Loading a demo watch history",
       "taste": "Analyzing your taste"
+    },
+    "synced": {
+      "title_one": "✓ {{count}} title imported",
+      "title_other": "✓ {{count}} titles imported",
+      "lede": "Preparing your recommendations…",
+      "continue": "Continue"
     }
   },
   "sources": {
@@ -23,9 +29,11 @@
     },
     "importing_one": "Importing your history… <c>{{count}}</c> item so far",
     "importing_other": "Importing your history… <c>{{count}}</c> items so far",
+    "notConfigured": "Not configured on this server. See the configuration docs.",
+    "stalled": "The progress counter isn't updating.",
+    "retryProgress": "Retry",
     "form": {
       "serverUrl": "Server URL (https://…)",
-      "userId": "User ID",
       "apiKey": "API key"
     },
     "trakt": {
@@ -40,6 +48,8 @@
     },
     "jellyfin": {
       "hint": "Your server's watch history",
+      "listUsers": "List users",
+      "userLabel": "Jellyfin user",
       "connect": "Connect Jellyfin"
     },
     "seerr": {

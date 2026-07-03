@@ -6,12 +6,18 @@
     "or": "ou",
     "exploreSample": "Explorer avec des données d'exemple",
     "loadingSample": "Chargement des données d'exemple…",
-    "sampleHint": "Voyez d'abord comment ça marche — aucun compte requis.",
+    "sampleHint": "Essayez sans connecter de service.",
     "steps": {
       "heading": "Préparation en cours…",
       "catalog": "Constitution du catalogue d'exemple",
       "history": "Chargement d'un historique de démo",
       "taste": "Analyse de vos goûts"
+    },
+    "synced": {
+      "title_one": "✓ {{count}} titre importé",
+      "title_other": "✓ {{count}} titres importés",
+      "lede": "Préparation de vos recommandations…",
+      "continue": "Continuer"
     }
   },
   "sources": {
@@ -23,9 +29,11 @@
     },
     "importing_one": "Importation de votre historique… <c>{{count}}</c> élément jusqu'ici",
     "importing_other": "Importation de votre historique… <c>{{count}}</c> éléments jusqu'ici",
+    "notConfigured": "Non configuré sur ce serveur. Voir la documentation de configuration.",
+    "stalled": "Le compteur de progression ne se met plus à jour.",
+    "retryProgress": "Réessayer",
     "form": {
       "serverUrl": "URL du serveur (https://…)",
-      "userId": "Identifiant utilisateur",
       "apiKey": "Clé API"
     },
     "trakt": {
@@ -40,6 +48,8 @@
     },
     "jellyfin": {
       "hint": "L'historique de visionnage de votre serveur",
+      "listUsers": "Lister les utilisateurs",
+      "userLabel": "Utilisateur Jellyfin",
       "connect": "Connecter Jellyfin"
     },
     "seerr": {
