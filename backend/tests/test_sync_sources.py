@@ -86,18 +86,42 @@ def test_capabilities_reflect_server_config(db_session: Session, monkeypatch) ->
     user = make_account(db_session)
     client = authed_client(db_session, user)
     body = client.get("/sources/capabilities").json()
-    assert body == {"trakt": False, "plex": False, "jellyfin": False, "seerr": True}
+    assert body == {
+        "trakt": False,
+        "plex": False,
+        "jellyfin": False,
+        "seerr": True,
+        "sampleData": True,
+    }
 
     # TMDB set enables Plex/Jellyfin; Trakt still needs its OAuth app credentials.
     monkeypatch.setenv("TMDB_API_KEY", "t")
     get_settings.cache_clear()
     body = client.get("/sources/capabilities").json()
-    assert body == {"trakt": False, "plex": True, "jellyfin": True, "seerr": True}
+    assert body == {
+        "trakt": False,
+        "plex": True,
+        "jellyfin": True,
+        "seerr": True,
+        "sampleData": True,
+    }
 
     monkeypatch.setenv("TRAKT_CLIENT_ID", "c")
     monkeypatch.setenv("TRAKT_CLIENT_SECRET", "s")
     get_settings.cache_clear()
     assert client.get("/sources/capabilities").json()["trakt"] is True
+
+
+def test_capabilities_hide_sample_data_in_production(db_session: Session, monkeypatch) -> None:
+    # The sample endpoints 403 in production; capabilities must report sampleData=false so the UI
+    # hides the escape hatch instead of offering a button that hangs on the rejection.
+    user = make_account(db_session)
+    client = authed_client(db_session, user)
+    assert client.get("/sources/capabilities").json()["sampleData"] is True
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    get_settings.cache_clear()
+    assert client.get("/sources/capabilities").json()["sampleData"] is False
 
 
 def test_sync_partial_failure_reports_ingested_and_resumes(

@@ -299,6 +299,9 @@ export const sourceCapabilitiesSchema = z.object({
   plex: z.boolean(),
   jellyfin: z.boolean(),
   seerr: z.boolean(),
+  // Whether the sample-data escape hatch is available. False in production, where the sample
+  // endpoints 403 — so the UI hides the button instead of offering a trap.
+  sampleData: z.boolean(),
 });
 export type SourceCapabilities = z.infer<typeof sourceCapabilitiesSchema>;
 

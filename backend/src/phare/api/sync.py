@@ -114,6 +114,10 @@ class SourceCapabilities(ApiModel):
     plex: bool
     jellyfin: bool
     seerr: bool
+    # Whether the sample-data escape hatch is available. The sample endpoints (POST /catalog/sample,
+    # POST /profiles/{id}/sample-data) are disabled in production, so the UI must hide the button
+    # rather than offer a trap that 403s. Mirrors the same gate those endpoints raise on.
+    sample_data: bool
 
 
 @router.get("/sources/capabilities", response_model=SourceCapabilities)
@@ -128,6 +132,8 @@ def source_capabilities(
         plex=tmdb,
         jellyfin=tmdb,
         seerr=True,
+        # Same condition the sample endpoints gate on (disabled in production).
+        sample_data=not settings.is_production,
     )
 
 

@@ -22,6 +22,7 @@ vi.mock("../api", async (importActual) => {
         plex: true,
         jellyfin: true,
         seerr: true,
+        sampleData: true,
       }),
     },
   };
@@ -179,6 +180,7 @@ describe("SourcePicker capabilities (D1)", () => {
       plex: true,
       jellyfin: true,
       seerr: true,
+      sampleData: true,
     });
 
     render(tree(true));

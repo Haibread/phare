@@ -119,6 +119,12 @@ watched", so recommendations and chat picks come back empty until a candidate po
 | --- | --- | --- |
 | **Auto-seed** | TMDB popular titles, on first startup | automatic (see below) |
 | **Sample catalog** | A small offline demo pool (no TMDB needed) | `POST /catalog/sample` (dev only) |
+
+The **sample-data escape hatch** (`POST /catalog/sample` + `POST /profiles/{id}/sample-data`, the
+onboarding "Explore with sample data" button) is **disabled in production** — both endpoints return
+`403`. So the app doesn't offer a button that fails: `GET /sources/capabilities` reports
+`sampleData: false` in production, and the onboarding screen hides the escape hatch when it's off.
+
 | **Popular import** | TMDB's popular front page (blockbusters) | `POST /catalog/import` or `phare import-catalog` |
 | **Broad import** | A deep genre sweep — the lesser-known long tail | `phare import-catalog --scope broad` |
 

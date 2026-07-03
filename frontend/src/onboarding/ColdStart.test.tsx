@@ -15,6 +15,7 @@ vi.mock("../api", () => ({
       plex: true,
       jellyfin: true,
       seerr: true,
+      sampleData: true,
     }),
   },
 }));
@@ -52,7 +53,7 @@ describe("ColdStart onboarding steps", () => {
     mocked.onboardingStatus.mockResolvedValue(status());
 
     render(tree());
-    fireEvent.click(screen.getByTestId("explore-sample"));
+    fireEvent.click(await screen.findByTestId("explore-sample"));
 
     const list = await screen.findByTestId("onboarding-steps");
     const labels = within(list)
@@ -73,7 +74,7 @@ describe("ColdStart onboarding steps", () => {
     mocked.onboardingStatus.mockResolvedValue(status({ catalogReady: true }));
 
     render(tree());
-    fireEvent.click(screen.getByTestId("explore-sample"));
+    fireEvent.click(await screen.findByTestId("explore-sample"));
 
     const list = await screen.findByTestId("onboarding-steps");
     await waitFor(() => {
@@ -82,6 +83,41 @@ describe("ColdStart onboarding steps", () => {
       expect(items[1]?.dataset.state).toBe("active"); // the first not-yet-done step
       expect(items[2]?.dataset.state).toBe("pending");
     });
+  });
+});
+
+describe("ColdStart sample-data escape hatch", () => {
+  it("hides the sample button when the server disables it (production)", async () => {
+    mocked.sourceCapabilities.mockResolvedValueOnce({
+      trakt: true,
+      plex: true,
+      jellyfin: true,
+      seerr: true,
+      sampleData: false,
+    });
+
+    render(tree());
+    // The connect CTA is always there; give the capabilities query a tick to resolve.
+    await screen.findByTestId("open-source-picker");
+    expect(screen.queryByTestId("explore-sample")).not.toBeInTheDocument();
+  });
+
+  it("shows an error state instead of hanging when the catalog seed 403s", async () => {
+    // In prod the catalog seed 403s; the rejection must surface the ErrorState, not leave the user
+    // stuck on the fake-progress screen forever (the guard used to ignore catalog.isError).
+    mocked.seedCatalog.mockRejectedValue(new Error("Sample catalog is disabled in production"));
+    mocked.loadSampleData.mockReturnValue(new Promise<never>(() => {}));
+    mocked.onboardingStatus.mockResolvedValue(status({ catalogReady: true }));
+
+    render(tree());
+    fireEvent.click(await screen.findByTestId("explore-sample"));
+
+    // The onboarding steps must NOT take over; the error is shown instead.
+    await waitFor(() => {
+      expect(screen.getByTestId("error")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("error").textContent).toContain("disabled in production");
+    expect(screen.queryByTestId("onboarding-steps")).not.toBeInTheDocument();
   });
 });
 

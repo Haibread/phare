@@ -3,7 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BeaconGlyph } from "../components/Brand";
 import { ErrorState } from "../components/states";
-import { keys, useLoadSampleData, useOnboardingStatus, useSeedCatalog } from "../lib/queries";
+import {
+  keys,
+  useLoadSampleData,
+  useOnboardingStatus,
+  useSeedCatalog,
+  useSourceCapabilities,
+} from "../lib/queries";
 import { SourcePicker } from "./SourcePicker";
 import styles from "./onboarding.module.css";
 
@@ -25,6 +31,10 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
   const [synced, setSynced] = useState<number | null>(null);
   const sample = useLoadSampleData(profileId);
   const catalog = useSeedCatalog();
+  // The sample path 403s in production; only offer the escape hatch when the server actually
+  // supports it, so we don't hand the user a button that hangs on the rejection.
+  const capabilities = useSourceCapabilities();
+  const sampleAvailable = capabilities.data?.sampleData ?? false;
   // Poll real backend readiness while the seed runs, so the steps reflect actual progress.
   const status = useOnboardingStatus(profileId, seeding);
 
@@ -47,10 +57,15 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
 
   async function exploreSample() {
     setSeeding(true);
-    await catalog.mutateAsync();
-    // Landing is gated on history existing (App), and taste finishes in the background — so the
-    // user drops into Browse (with its "building your profile" state) as soon as this resolves.
-    await sample.mutateAsync();
+    try {
+      await catalog.mutateAsync();
+      // Landing is gated on history existing (App), and taste finishes in the background — so the
+      // user drops into Browse (with its "building your profile" state) as soon as this resolves.
+      await sample.mutateAsync();
+    } catch {
+      // Either seed can reject (e.g. 403 sample-disabled in prod). The mutation's isError drives the
+      // ErrorState below; swallow here so the promise doesn't reject unhandled.
+    }
   }
 
   // Auto-advance the confirmation after a short dwell so the user isn't forced to click through.
@@ -80,7 +95,7 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
     );
   }
 
-  if (seeding && !sample.isError) {
+  if (seeding && !sample.isError && !catalog.isError) {
     // The three steps are driven by the polled onboarding status; the first not-yet-done one is
     // "active". Catalog is seeded before history, so they light up in order.
     const done = [
@@ -132,21 +147,26 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
         {t("coldStart.connectLibrary")}
       </button>
 
-      <div className={styles.or}>{t("coldStart.or")}</div>
+      {sampleAvailable && (
+        <>
+          <div className={styles.or}>{t("coldStart.or")}</div>
 
-      <button
-        type="button"
-        className={styles.link}
-        data-testid="explore-sample"
-        onClick={() => void exploreSample()}
-      >
-        {t("coldStart.exploreSample")}
-      </button>
-      <p className="faint" style={{ fontSize: "0.8rem", maxWidth: "16rem" }}>
-        {t("coldStart.sampleHint")}
-      </p>
+          <button
+            type="button"
+            className={styles.link}
+            data-testid="explore-sample"
+            onClick={() => void exploreSample()}
+          >
+            {t("coldStart.exploreSample")}
+          </button>
+          <p className="faint" style={{ fontSize: "0.8rem", maxWidth: "16rem" }}>
+            {t("coldStart.sampleHint")}
+          </p>
 
-      {sample.isError && <ErrorState error={sample.error} />}
+          {catalog.isError && <ErrorState error={catalog.error} />}
+          {sample.isError && <ErrorState error={sample.error} />}
+        </>
+      )}
 
       <SourcePicker
         profileId={profileId}
