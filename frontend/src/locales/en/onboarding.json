@@ -32,6 +32,9 @@
     "notConfigured": "Not configured on this server. See the configuration docs.",
     "stalled": "The progress counter isn't updating.",
     "retryProgress": "Retry",
+    "partialFailure_one": "The import stopped early — <c>{{count}}</c> title already imported. Re-run it and it'll resume where it left off.",
+    "partialFailure_other": "The import stopped early — <c>{{count}}</c> titles already imported. Re-run it and it'll resume where it left off.",
+    "partialRetry": "Resume import",
     "form": {
       "serverUrl": "Server URL (https://…)",
       "apiKey": "API key"

@@ -6,8 +6,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from phare.api import (
     actions,
@@ -24,8 +25,11 @@ from phare.api import (
     taste,
     titles,
 )
+from phare.api.schemas import SyncPartialFailure
+from phare.api.sync import PartialSyncError
 from phare.core.auth import get_current_user
 from phare.core.config import get_settings
+from phare.core.fallback import record_fallback
 from phare.core.logging import configure_logging
 from phare.core.ratelimit import RateLimitMiddleware
 from phare.core.telemetry import setup_telemetry
@@ -81,6 +85,15 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    @app.exception_handler(PartialSyncError)
+    async def _partial_sync(_request: Request, exc: PartialSyncError) -> JSONResponse:
+        """A sync died mid-stream after committing some batches. Answer 502 (an upstream provider
+        failed) with a structured, camelCase body carrying the ingested count, and announce the
+        degrade on the fallback metric (review G3 / M2.1)."""
+        record_fallback("sync", "partial_failure", ingested=exc.ingested)
+        body = SyncPartialFailure(ingested=exc.ingested)
+        return JSONResponse(status_code=502, content={"detail": body.model_dump(by_alias=True)})
 
     # Rate limit the expensive/abusable endpoints (login brute-force, agent-model chat, bulk
     # imports) before they reach a handler (review I1). Added last so it runs first (outermost).

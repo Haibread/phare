@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from phare.api.sync import ingest_in_batches
+from phare.api.sync import PartialSyncError, ingest_in_batches
 from phare.db.models import EventType, TitleKind, WatchEvent
 from phare.providers.fakes import FakeMetadataProvider
 from phare.providers.types import RawEvent, RawMediaType, TitleMetadata
@@ -54,14 +54,36 @@ def test_partial_progress_survives_a_mid_sync_failure(db_session: Session) -> No
             yield _event(i)
         raise RuntimeError("source blew up mid-sync")
 
-    # batch_size=5: the first two batches (10 events) commit before the stream raises.
-    with pytest.raises(RuntimeError):
+    # batch_size=5: the first two batches (10 events) commit before the stream raises. The partial
+    # failure is reported with the committed count, and the underlying error is chained (review G3).
+    with pytest.raises(PartialSyncError) as excinfo:
         ingest_in_batches(
             db_session, user.profile.id, _metadata(10), exploding_stream(), batch_size=5
         )
+    assert excinfo.value.ingested == 10
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
 
     # The committed batches persist — nothing rolled back — so a re-sync just fills in the rest.
     count = db_session.scalar(
         select(func.count()).select_from(WatchEvent).where(WatchEvent.profile_id == user.profile.id)
     )
     assert count == 10
+
+
+def test_no_partial_error_when_first_batch_fails(db_session: Session) -> None:
+    # Nothing committed yet → the original error surfaces unchanged, so callers that recover from a
+    # first-request failure (e.g. the Trakt token refresh) still see their own exception type.
+    user = make_account(db_session)
+
+    def exploding_stream() -> Iterator[RawEvent]:
+        raise RuntimeError("source blew up on the very first pull")
+        yield  # unreachable; makes this a generator
+
+    with pytest.raises(RuntimeError):
+        ingest_in_batches(
+            db_session, user.profile.id, _metadata(10), exploding_stream(), batch_size=5
+        )
+    count = db_session.scalar(
+        select(func.count()).select_from(WatchEvent).where(WatchEvent.profile_id == user.profile.id)
+    )
+    assert count == 0

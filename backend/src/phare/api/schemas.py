@@ -117,6 +117,18 @@ class IngestSummary(ApiModel):
     taste_building: bool = False
 
 
+class SyncPartialFailure(ApiModel):
+    """Error body when a source sync dies partway through, after some batches were committed.
+
+    The batches already committed stay in the DB (the upsert is idempotent), so re-running the sync
+    resumes where it stopped without duplicates — the UI tells the user exactly that instead of a
+    bare "sync failed" (review G3). ``code`` is a stable discriminant the frontend keys on;
+    ``ingested`` is how many watch events durably landed before the failure."""
+
+    code: Literal["sync_partial_failure"] = "sync_partial_failure"
+    ingested: int
+
+
 class OnboardingStatus(ApiModel):
     """Where a fresh profile is in getting ready, as ordered steps the UI can show.
 

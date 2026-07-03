@@ -141,6 +141,14 @@
   padding: 0 0.2rem;
 }
 
+/* Partial-import failure: honest count + resume-on-retry (review G3). */
+.partial {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
 /* Progress-poll stalled note + retry (review D3). */
 .stallNote {
   color: var(--text-muted);

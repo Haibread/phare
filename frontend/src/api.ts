@@ -9,15 +9,32 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
  * rejection (4xx) from a transient blip worth retrying. Network/parse failures stay plain `Error`. */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, detail: string, options?: ErrorOptions) {
+  /** The raw `detail` from the error body when it's structured (an object), so callers can read a
+   * typed error payload — e.g. the partial-sync count (review G3). `null` for plain string details. */
+  readonly data: unknown;
+  constructor(status: number, detail: string, options?: ErrorOptions & { data?: unknown }) {
     super(detail, options);
     this.name = "ApiError";
     this.status = status;
+    this.data = options?.data ?? null;
   }
   /** Status 0 = the request never reached the server (network/CORS/opaque failure). */
   get isNetwork(): boolean {
     return this.status === 0;
   }
+}
+
+/** If an error is a sync that failed partway through, the number of watch events already imported
+ * (durable — a re-run resumes from there); otherwise `null`. Mirrors the backend `SyncPartialFailure`
+ * DTO (`{ code: "sync_partial_failure", ingested }`), review G3. */
+export function syncPartialFailureCount(error: unknown): number | null {
+  if (error instanceof ApiError && error.data !== null && typeof error.data === "object") {
+    const detail = error.data as { code?: unknown; ingested?: unknown };
+    if (detail.code === "sync_partial_failure" && typeof detail.ingested === "number") {
+      return detail.ingested;
+    }
+  }
+  return null;
 }
 
 export const profileSchema = z.object({
@@ -374,16 +391,21 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
       setAuthToken(null);
     }
     let detail = response.statusText;
+    let data: unknown = null;
     try {
       const body: unknown = await response.json();
       if (body && typeof body === "object" && "detail" in body) {
-        detail = String((body as { detail: unknown }).detail);
+        const raw = (body as { detail: unknown }).detail;
+        data = raw;
+        // A structured detail (an object, e.g. the partial-sync payload) has no useful string form;
+        // keep the status text as the message and let callers read `err.data` for the specifics.
+        detail = typeof raw === "string" ? raw : response.statusText;
       }
     } catch {
       // non-JSON error body; keep the status text
     }
     logger.warn("api.error", { url, status: response.status, detail });
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, detail, { data });
   }
   logger.debug("api.ok", { url, status: response.status });
   // 204 No Content (e.g. DELETE) has no body to parse — validate against null.

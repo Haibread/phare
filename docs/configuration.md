@@ -89,6 +89,16 @@ server can't support instead of surfacing a raw config error when clicked:
 to list that server's users and offers a picker, so the operator never has to paste a raw user GUID.
 That call is subject to the same SSRF guard as the sync endpoints (internal URLs are rejected).
 
+### Resuming a failed sync
+
+A history import commits in batches of 100, so it survives a mid-sync failure. If a source (or TMDB)
+dies partway through, the sync endpoint answers **HTTP 502** with a structured body
+`{"detail": {"code": "sync_partial_failure", "ingested": N}}` — `N` is how many watch events already
+landed durably. The UI shows this as *"N titles already imported — re-run and it'll resume where it
+left off"* with a **Resume import** button. Re-running is safe: the upsert is idempotent, so events
+already imported are skipped, not duplicated. Each partial failure is counted on the
+`phare.fallback{component="sync",reason="partial_failure"}` metric.
+
 ## Seeding the catalog
 
 The recommender ranks over whatever titles are in the catalog — vector similarity can only surface
