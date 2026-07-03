@@ -38,7 +38,11 @@ export function AppShell({ profileId }: { profileId: string }): React.JSX.Elemen
           </div>
         </header>
         <TabBar />
-        <Outlet />
+        {/* The route content is the page's main landmark — without it axe flags the whole view as
+            outside any landmark, and there's no `<main>` for skip-to-content (review L4). */}
+        <main>
+          <Outlet />
+        </main>
       </ChatProvider>
     </ProfileProvider>
   );

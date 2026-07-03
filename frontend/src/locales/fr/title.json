@@ -1,9 +1,12 @@
 {
+  "openCard": "Ouvrir {{title}}{{year}}, {{fit}}",
+  "openCardNoFit": "Ouvrir {{title}}{{year}}",
   "detail": {
     "whyThis": "Pourquoi ce titre",
     "synopsis": "Synopsis",
     "loading": "Chargement…",
-    "noSynopsis": "Aucun synopsis disponible."
+    "noSynopsis": "Aucun synopsis disponible.",
+    "externalLink": "{{name}} (ouvre un nouvel onglet)"
   },
   "availability": {
     "available": "Disponible",

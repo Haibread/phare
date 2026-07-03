@@ -87,8 +87,17 @@ void i18n
     },
   });
 
-// Keep the API client's Accept-Language in lockstep with the active UI language.
-setApiLanguage(i18n.resolvedLanguage ?? "en");
-i18n.on("languageChanged", (lng) => setApiLanguage(lng));
+/** Mirror the active language onto the API client (Accept-Language) and the document root so
+ * `<html lang>` stays truthful for screen readers and hyphenation (review L1). index.html ships
+ * with `lang="en"`; this corrects it on load and on every switch. */
+function applyLanguage(lng: string): void {
+  setApiLanguage(lng);
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = lng;
+  }
+}
+
+applyLanguage(i18n.resolvedLanguage ?? "en");
+i18n.on("languageChanged", applyLanguage);
 
 export default i18n;

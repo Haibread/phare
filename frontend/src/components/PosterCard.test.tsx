@@ -44,6 +44,22 @@ describe("PosterCard", () => {
     expect(screen.getByText(/2016/)).toBeInTheDocument();
   });
 
+  it("gives the open button a full accessible name: title, year and fit (L2)", () => {
+    renderCard(<PosterCard item={recItem({ title: "Arrival", year: 2016 })} />);
+    const open = screen.getByTestId("rec-card-open");
+    const label = open.getAttribute("aria-label") ?? "";
+    expect(label).toContain("Arrival");
+    expect(label).toContain("2016");
+    expect(label).toContain("Strong fit");
+  });
+
+  it("names the open button without a fit when the meter is hidden (L2)", () => {
+    renderCard(<PosterCard item={recItem({ title: "Moon", year: 2009 })} showFit={false} />);
+    const label = screen.getByTestId("rec-card-open").getAttribute("aria-label") ?? "";
+    expect(label).toContain("Moon");
+    expect(label).not.toContain("fit");
+  });
+
   it("badges swing picks and labels them a stretch", () => {
     renderCard(<PosterCard item={recItem({ isSwing: true })} />);
     expect(screen.getByTestId("swing-badge")).toBeInTheDocument();

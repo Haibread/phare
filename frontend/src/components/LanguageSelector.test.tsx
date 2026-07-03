@@ -25,5 +25,7 @@ describe("LanguageSelector", () => {
 
     await waitFor(() => expect(screen.getByTestId("tab-browse")).toHaveTextContent("Parcourir"));
     expect(i18n.resolvedLanguage).toBe("fr");
+    // L1: <html lang> follows the active language for screen readers / hyphenation.
+    expect(document.documentElement.lang).toBe("fr");
   });
 });
