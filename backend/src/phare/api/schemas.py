@@ -95,6 +95,22 @@ class IngestSummary(ApiModel):
     updated: int
     skipped: int
     titles_created: int
+    # True when taste extraction was handed to a background pass (the caller can land now and poll
+    # onboarding status). False when nothing to extract — offline, or no new events.
+    taste_building: bool = False
+
+
+class OnboardingStatus(ApiModel):
+    """Where a fresh profile is in getting ready, as ordered steps the UI can show.
+
+    Derived from actual DB state (titles / events / taste exist), not a bookkeeping flag — so it's
+    correct after a restart and can't drift from reality. ``ready_to_browse`` gates landing: the app
+    reveals once the catalog + history exist, while taste finishes in the background (review C3)."""
+
+    catalog_ready: bool
+    history_ready: bool
+    taste_ready: bool
+    ready_to_browse: bool
 
 
 class TasteResponse(ApiModel):

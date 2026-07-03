@@ -6,7 +6,13 @@
     "or": "or",
     "exploreSample": "Explore with sample data",
     "loadingSample": "Loading sample data…",
-    "sampleHint": "See how it works first — no account needed."
+    "sampleHint": "See how it works first — no account needed.",
+    "steps": {
+      "heading": "Setting things up…",
+      "catalog": "Building the sample catalog",
+      "history": "Loading a demo watch history",
+      "taste": "Analyzing your taste"
+    }
   },
   "sources": {
     "title": "Connect a source",

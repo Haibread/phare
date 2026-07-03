@@ -158,3 +158,63 @@
   color: var(--text-muted);
   font-size: 0.9rem;
 }
+
+/* Onboarding step list — shown while the sample seed runs (ColdStart). */
+.steps {
+  list-style: none;
+  margin: var(--sp-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  text-align: left;
+  width: 100%;
+  max-width: 18rem;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  transition: color 0.2s ease;
+}
+
+.step[data-state="active"] {
+  color: var(--text);
+}
+
+.step[data-state="done"] {
+  color: var(--text);
+}
+
+.stepMark {
+  flex: 0 0 1.4rem;
+  height: 1.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.step[data-state="done"] .stepMark {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.step[data-state="active"] .stepMark {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: stepPulse 1s ease-in-out infinite;
+}
+
+@keyframes stepPulse {
+  50% {
+    opacity: 0.4;
+  }
+}

@@ -173,3 +173,33 @@ def _sync_embedding_backfill(request: pytest.FixtureRequest) -> None:
 
     monkeypatch = request.getfixturevalue("monkeypatch")
     monkeypatch.setattr("phare.recommend.service.schedule_embedding_backfill", _sync)
+
+
+@pytest.fixture(autouse=True)
+def _sync_taste_refresh(request: pytest.FixtureRequest) -> None:
+    """Keep the "background" taste refresh synchronous and on the test's own session (review C3).
+
+    Same rationale as the embedding backfill: the real scheduler spawns a daemon thread with its own
+    connection. Offline (the default hermetic suite) it's a no-op — no LLM, nothing to extract — so
+    this only bites when a test wires an LLM in. Tests exercising the scheduler re-patch it."""
+    if "db_session" not in request.fixturenames:
+        return
+    from phare.taste.backfill import run_taste_refresh
+
+    session = request.getfixturevalue("db_session")
+
+    def _sync(
+        profile_id: object,
+        llm: object,
+        model_version: str,
+        language: object = "en",
+        *,
+        runner: object = None,
+    ) -> bool:
+        if llm is None:
+            return False
+        run_taste_refresh(session, profile_id, llm, model_version, language)  # type: ignore[arg-type]
+        return True
+
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    monkeypatch.setattr("phare.api.profiles.schedule_taste_refresh", _sync)

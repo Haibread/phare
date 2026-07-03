@@ -138,6 +138,15 @@ That result is cached in the DB keyed by `(title, language)` for `TITLE_LOCALIZA
 TMDB is unreachable the stored copy is served anyway (flagged as a fallback) rather than dropping
 back to the wrong-language base text. Pure metadata caching — no LLM involved.
 
+**Taste extraction runs in the background, so onboarding lands fast.** Taste is a derived LLM
+artifact (see [`data-model.md`](data-model.md)); regenerating it is the slow part of a first import.
+So on ingest — seeding sample data, or connecting a source — the history is committed and the app
+reveals as soon as the catalog + history exist, while a single background pass (one per profile,
+in-process lock) extracts the taste behind it. `GET /profiles/{id}/onboarding` reports the ordered
+readiness (catalog → history → taste) the cold-start screen shows as steps; the "building your
+profile" state (see [`design.md`](design.md)) covers the window until taste lands. Offline there's
+no LLM pass — the deterministic centroid personalises instead — so that step completes immediately.
+
 **Guard — won't run in dev by accident.** Both the import endpoint and the CLI refuse to run unless
 `ENVIRONMENT=production`, **or** you explicitly override (`confirm=true` on the endpoint,
 `--confirm` on the CLI). This stops a dev box from fanning out thousands of TMDB requests during a
