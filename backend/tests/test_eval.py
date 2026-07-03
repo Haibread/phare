@@ -93,6 +93,26 @@ def test_alignment_summary_flags_offline_spread_skip() -> None:
     assert "skipped" not in alignment_checks_summary("real-prod-embed-v1")
 
 
+def test_empty_slate_is_skipped_offline_but_fails_on_real_embedder() -> None:
+    # An empty slate is an embedder artifact on the offline local-hash space (several personas have
+    # no neighbours there), so it must NOT fail the guardrail offline — but on the real production
+    # embedding space an empty slate is a genuine alignment failure (harness._alignment_failures).
+    from phare.eval.harness import _alignment_failures
+
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    assert _alignment_failures([], persona, model_version=LOCAL_MODEL_VERSION) == []
+    real = _alignment_failures([], persona, model_version="real-prod-embed-v1")
+    assert real and any("empty slate" in reason for reason in real)
+
+
+def test_alignment_summary_flags_offline_empty_slate_skip() -> None:
+    # The header must be honest that empty slates are not failed on the offline embedder.
+    from phare.eval.harness import alignment_checks_summary
+
+    assert "empty-slate" in alignment_checks_summary(LOCAL_MODEL_VERSION)
+    assert "empty-slate" not in alignment_checks_summary("real-prod-embed-v1")
+
+
 def test_alignment_fails_on_flat_affinity(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

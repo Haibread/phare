@@ -21,6 +21,11 @@ How we know recommendations are good with no crowd to A/B test.
   relevance regression introduced by a **model or config change** rather than a code change — so run
   it after changing models or upgrading. The similarity-spread check is embedder-specific and is
   skipped (and says so in the output) on the offline `local-hash-v1` embedder the CI harness uses.
+  For the same reason an **empty slate** is not failed offline: the local-hash space leaves several
+  personas with no neighbours, so an empty slate there is an embedder artifact, not an engine
+  regression — but on the real configured embedding space an empty slate *is* a genuine alignment
+  failure. The header names both offline skips so a green CI run is never mistaken for having
+  exercised them.
 - **Temporal holdout (sanity floor, not a target).** Hide each profile's last K watched, check
   if they rank highly (Recall@K / NDCG@K). **Don't over-optimize** — it rewards the obvious and
   is blind to discovery; a perfect score is a popularity machine. Swing slots are excluded from it.
