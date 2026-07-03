@@ -64,12 +64,13 @@ def alignment_checks_summary(model_version: str) -> str:
     """One line naming the alignment checks the harness runs, for the ``phare evaluate`` header.
 
     Names the similarity-spread check as *skipped* on the offline embedder so a green run is never
-    read as having exercised it (mission M10.2)."""
-    spread = (
-        "similarity-spread [skipped: offline local-hash embedder]"
-        if model_version == LOCAL_MODEL_VERSION
-        else f"similarity-spread (>= {_MIN_SIM_REL_SPREAD})"
-    )
+    read as having exercised it (mission M10.2). Empty slates are likewise not failed offline (the
+    local-hash embedder leaves several personas with no neighbours) — flagged here for the same
+    reason."""
+    if model_version == LOCAL_MODEL_VERSION:
+        spread = "similarity-spread + empty-slate [skipped: offline local-hash embedder]"
+    else:
+        spread = f"similarity-spread (>= {_MIN_SIM_REL_SPREAD})"
     return f"hard-avoids, affinity-variance, score-order, {spread}"
 
 
@@ -78,11 +79,19 @@ def _alignment_failures(
 ) -> list[str]:
     """Check the slate against the taste-alignment invariants (M10.2), returning a reason per
     failed check. Reuses the shared genre matcher (:func:`phare.recommend.genres.matches_any`) for
-    hard-avoids — no second matcher. The similarity-spread check is relaxed on the offline
-    local-hash embedder (not the production space); every other check runs on any model.
+    hard-avoids — no second matcher. The similarity-spread *and* empty-slate checks are relaxed on
+    the offline local-hash embedder (not the production space); every other check runs on any model.
     """
+    offline = model_version == LOCAL_MODEL_VERSION
     failures: list[str] = []
     if not recs:
+        # The local-hash embedder is not the production space: several personas' taste centroids
+        # have no meaningful neighbours in it, so an empty slate offline is an embedder artifact,
+        # not an engine regression — don't fail the guardrail on it (the header names this skip via
+        # ``alignment_checks_summary``). On the real embedding space an empty slate is a genuine
+        # alignment failure. Same rule as the similarity-spread check below.
+        if offline:
+            return []
         return ["empty slate: the engine returned nothing to align"]
 
     # (a) No hard-avoid the persona's taste marks may appear in the top-K.
