@@ -290,6 +290,15 @@ reply (it recommended without registering what you said), and a fallback "Today'
 `basic` badge. The matching log lines are `plan_failed` / `dynamic_llm_failed` /
 `unparseable_completion`.
 
+Degrading to a deterministic profile applies when the model *answered* but unparseably. A different
+case is the model being **unreachable** — a transport/HTTP error (403/429/5xx/network) or a spent
+`LLM_MONTHLY_TOKEN_BUDGET`. The automatic taste refresh swallows that quietly (taste is best-effort
+on ingest), but the **manual "Regenerate" button** does not: you explicitly asked for an LLM pass,
+so it returns `503 {"code": "llm_unavailable"}` and the UI shows a "couldn't reach the AI, try again"
+message rather than silently handing back a coarse genre-frequency profile (honesty over a fake
+result — principle #4). Your existing profile is left untouched, and the fallback is recorded on the
+`phare.fallback` counter (`component=taste_extraction`, `reason=llm_unreachable|budget_exhausted`).
+
 If you're running a reasoning model, set **`LLM_REASONING_MODEL=true`** — it grants the structured
 calls enough token headroom to finish thinking *and* emit their JSON, and strips the think block
 from the streamed reply, which clears up most of the degradation. Otherwise prefer an

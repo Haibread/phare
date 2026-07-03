@@ -37,6 +37,18 @@ export function syncPartialFailureCount(error: unknown): number | null {
   return null;
 }
 
+/** True when an error is the backend's `LLMUnavailable` DTO (`{ code: "llm_unavailable" }`) — the
+ * provider was unreachable or the token budget was spent on a manual LLM request (M9.2 / F3). The UI
+ * shows a localized "try again" message instead of the raw 503 status text. */
+export function isLLMUnavailable(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.data !== null &&
+    typeof error.data === "object" &&
+    (error.data as { code?: unknown }).code === "llm_unavailable"
+  );
+}
+
 export const profileSchema = z.object({
   id: z.string(),
   displayName: z.string(),

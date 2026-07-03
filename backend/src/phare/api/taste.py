@@ -6,15 +6,18 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.api.deps import get_language
-from phare.api.schemas import TasteResponse, UpdateTasteRequest
+from phare.api.schemas import LLMUnavailable, TasteResponse, UpdateTasteRequest
 from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import get_settings
+from phare.core.fallback import record_fallback
 from phare.core.i18n import Language
+from phare.core.llm_budget import LLMBudgetExceeded
 from phare.db.base import get_session
 from phare.db.models import TasteProfile, User
 from phare.providers.llm import OpenAILLMProvider
@@ -103,7 +106,26 @@ def generate_taste(
                 detail=f"Taste was just regenerated — try again in {human}.",
                 headers={"Retry-After": str(retry_after)},
             )
-    taste = TasteService(session, llm, settings.llm_chat_model, language).generate(profile_id)
+    # The manual "Regenerate" button explicitly asks for an LLM extraction. If the provider can't be
+    # reached (transport/HTTP error) or the monthly budget is spent, be honest (principle #4): give
+    # a 503 with a structured DTO instead of silently degrading to the deterministic profile (that
+    # silent fallback is only right for the *auto*-refresh, which stays untouched). An unparseable
+    # completion is still handled inside generate() — the model answered, just not with JSON — so it
+    # keeps degrading to the deterministic floor and does not reach here.
+    try:
+        taste = TasteService(session, llm, settings.llm_chat_model, language).generate(profile_id)
+    except LLMBudgetExceeded:
+        record_fallback("taste_extraction", "budget_exhausted", profile_id=str(profile_id))
+        raise HTTPException(
+            status_code=503,
+            detail=LLMUnavailable(reason="budget_exhausted").model_dump(by_alias=True),
+        ) from None
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as exc:
+        record_fallback("taste_extraction", "llm_unreachable", profile_id=str(profile_id))
+        raise HTTPException(
+            status_code=503,
+            detail=LLMUnavailable(reason="llm_unreachable").model_dump(by_alias=True),
+        ) from exc
     session.commit()
     return _to_response(taste)
 

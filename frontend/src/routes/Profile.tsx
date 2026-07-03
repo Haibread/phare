@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { HistoryItem } from "../api";
+import { type HistoryItem, isLLMUnavailable } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
 import { CardSkeleton, ErrorState, errorMessage } from "../components/states";
@@ -162,9 +162,11 @@ export function Profile(): React.JSX.Element {
             </button>
             {generateTaste.isError && (
               <p className={styles.errorText} data-testid="taste-generate-error" role="alert">
-                {t("taste.generateError", {
-                  message: errorMessage(generateTaste.error, tCommon),
-                })}
+                {isLLMUnavailable(generateTaste.error)
+                  ? t("taste.generateUnavailable")
+                  : t("taste.generateError", {
+                      message: errorMessage(generateTaste.error, tCommon),
+                    })}
               </p>
             )}
           </div>

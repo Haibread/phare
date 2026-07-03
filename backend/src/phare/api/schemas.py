@@ -129,6 +129,19 @@ class SyncPartialFailure(ApiModel):
     ingested: int
 
 
+class LLMUnavailable(ApiModel):
+    """Error body when a manual, user-requested LLM call can't be served — the provider is
+    unreachable (transport/HTTP error) or the monthly token budget is spent.
+
+    Only the *manual* ``POST /taste/generate`` returns this: the user explicitly asked for an LLM
+    regeneration, so honesty wins over silently falling back to the deterministic profile (principle
+    #4). The automatic taste refresh, by contrast, swallows the same failure by design. ``code`` is
+    the stable discriminant the frontend keys on to show a localized, actionable message."""
+
+    code: Literal["llm_unavailable"] = "llm_unavailable"
+    reason: Literal["llm_unreachable", "budget_exhausted"]
+
+
 class OnboardingStatus(ApiModel):
     """Where a fresh profile is in getting ready, as ordered steps the UI can show.
 

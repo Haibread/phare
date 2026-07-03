@@ -4,20 +4,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProfileProvider } from "../app/ProfileContext";
 import { Profile } from "./Profile";
 
-vi.mock("../api", () => ({
-  api: {
-    // taste is 404 (no profile yet) so the empty state with the Generate button renders.
-    getTaste: vi.fn().mockRejectedValue(new Error("not found")),
-    history: vi.fn().mockResolvedValue({ items: [] }),
-    conversion: vi.fn().mockResolvedValue({ rate: null, shown: 0, topK: 10, withinDays: 30 }),
-    listSources: vi.fn().mockResolvedValue([]),
-    listCommitments: vi.fn().mockResolvedValue({ items: [] }),
-    listMemory: vi.fn().mockResolvedValue({ items: [] }),
-    generateTaste: vi.fn(),
-  },
-}));
+vi.mock("../api", async (importActual) => {
+  // Keep the real ApiError + isLLMUnavailable so the 503 llm_unavailable path is exercised for real
+  // (the component keys the localized message off isLLMUnavailable), while the network calls are stubbed.
+  const actual = await importActual<typeof import("../api")>();
+  return {
+    ApiError: actual.ApiError,
+    isLLMUnavailable: actual.isLLMUnavailable,
+    api: {
+      // taste is 404 (no profile yet) so the empty state with the Generate button renders.
+      getTaste: vi.fn().mockRejectedValue(new Error("not found")),
+      history: vi.fn().mockResolvedValue({ items: [] }),
+      conversion: vi.fn().mockResolvedValue({ rate: null, shown: 0, topK: 10, withinDays: 30 }),
+      listSources: vi.fn().mockResolvedValue([]),
+      listCommitments: vi.fn().mockResolvedValue({ items: [] }),
+      listMemory: vi.fn().mockResolvedValue({ items: [] }),
+      generateTaste: vi.fn(),
+    },
+  };
+});
 
-import { api } from "../api";
+import { ApiError, api } from "../api";
 
 const mocked = vi.mocked(api);
 
@@ -69,6 +76,26 @@ describe("Profile taste generation", () => {
 
     const error = await screen.findByTestId("taste-generate-error");
     expect(error).toHaveTextContent("LLM is not configured (set LLM_API_KEY)");
+  });
+
+  it("shows a localized 'try again' message when the LLM is unavailable (503)", async () => {
+    // F3/M9.2: a manual regenerate that hits an unreachable provider or a spent budget returns a 503
+    // with { code: "llm_unavailable" }. The UI must show the friendly localized message, not the raw
+    // "Service Unavailable" status text.
+    mocked.generateTaste.mockRejectedValue(
+      new ApiError(503, "Service Unavailable", {
+        data: { code: "llm_unavailable", reason: "llm_unreachable" },
+      }),
+    );
+
+    renderProfile();
+
+    const button = await screen.findByTestId("taste-generate");
+    fireEvent.click(button);
+
+    const error = await screen.findByTestId("taste-generate-error");
+    expect(error).toHaveTextContent("Couldn't reach the AI to regenerate your taste right now.");
+    expect(error).not.toHaveTextContent("Service Unavailable");
   });
 
   it("offers Regenerate even when a taste profile already exists", async () => {
