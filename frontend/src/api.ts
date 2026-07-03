@@ -264,6 +264,18 @@ export const connectedSourceSchema = z.object({
 });
 export type ConnectedSource = z.infer<typeof connectedSourceSchema>;
 
+// Which sources the operator configured on this server, so the UI disables the rest (review D1).
+export const sourceCapabilitiesSchema = z.object({
+  trakt: z.boolean(),
+  plex: z.boolean(),
+  jellyfin: z.boolean(),
+  seerr: z.boolean(),
+});
+export type SourceCapabilities = z.infer<typeof sourceCapabilitiesSchema>;
+
+const jellyfinUserSchema = z.object({ id: z.string(), name: z.string() });
+export type JellyfinUser = z.infer<typeof jellyfinUserSchema>;
+
 // Seerr library availability per title: "available" | "queued" | "requestable" | "unknown".
 const availabilitySchema = z.object({
   configured: z.boolean(),
@@ -515,6 +527,12 @@ export const api = {
     }),
   listSources: (profileId: string) =>
     request(`/profiles/${profileId}/sources`, z.array(connectedSourceSchema)),
+  sourceCapabilities: () => request("/sources/capabilities", sourceCapabilitiesSchema),
+  jellyfinUsers: (baseUrl: string, apiKey: string) =>
+    request("/sources/jellyfin/users", z.array(jellyfinUserSchema), {
+      method: "POST",
+      body: JSON.stringify({ baseUrl, apiKey }),
+    }),
   syncPlex: (profileId: string, baseUrl: string, token: string) =>
     request("/sources/plex/sync", ingestSummarySchema, {
       method: "POST",

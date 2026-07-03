@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BeaconGlyph } from "../components/Brand";
 import { ErrorState } from "../components/states";
@@ -9,6 +9,9 @@ import styles from "./onboarding.module.css";
 
 type StepState = "done" | "active" | "pending";
 
+// How long the "N titles imported" confirmation lingers before it auto-advances (review D4).
+const CONFIRM_DWELL_MS = 3000;
+
 /** First-run takeover: one connect call-to-action + a sample-data escape hatch. Shown until the
  * profile has any history, at which point the app reveals the tabbed shell. */
 export function ColdStart({ profileId }: { profileId: string }): React.JSX.Element {
@@ -16,16 +19,30 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
   const qc = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  // Set to the imported count once a source sync finishes, so we show a brief confirmation instead
+  // of hard-cutting to Browse the instant history exists (review D4). Landing is deferred until the
+  // user (or the timer) continues, by holding back the history invalidation until then.
+  const [synced, setSynced] = useState<number | null>(null);
   const sample = useLoadSampleData(profileId);
   const catalog = useSeedCatalog();
   // Poll real backend readiness while the seed runs, so the steps reflect actual progress.
   const status = useOnboardingStatus(profileId, seeding);
 
-  function invalidate() {
+  const invalidate = useCallback(() => {
     qc.invalidateQueries({ queryKey: keys.history(profileId) });
     qc.invalidateQueries({ queryKey: keys.taste(profileId) });
     qc.invalidateQueries({ queryKey: keys.recommendations(profileId) });
     qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
+  }, [qc, profileId]);
+
+  /** After a source connects: for a real history import, show the confirmation (and land only once
+   * the user continues); for a request-only source (Seerr, count 0) just refresh in place. */
+  function handleConnected(importedCount: number) {
+    if (importedCount > 0) {
+      setSynced(importedCount);
+    } else {
+      invalidate();
+    }
   }
 
   async function exploreSample() {
@@ -34,6 +51,33 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
     // Landing is gated on history existing (App), and taste finishes in the background — so the
     // user drops into Browse (with its "building your profile" state) as soon as this resolves.
     await sample.mutateAsync();
+  }
+
+  // Auto-advance the confirmation after a short dwell so the user isn't forced to click through.
+  useEffect(() => {
+    if (synced === null) return;
+    const timer = setTimeout(invalidate, CONFIRM_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [synced, invalidate]);
+
+  if (synced !== null) {
+    return (
+      <main className={styles.cold} data-testid="sync-confirmation">
+        <span className={styles.halo} aria-hidden="true">
+          <BeaconGlyph />
+        </span>
+        <h1 className={styles.coldTitle}>{t("coldStart.synced.title", { count: synced })}</h1>
+        <p className={styles.lede}>{t("coldStart.synced.lede")}</p>
+        <button
+          type="button"
+          className={`btn btn-primary ${styles.cta}`}
+          data-testid="sync-continue"
+          onClick={invalidate}
+        >
+          {t("coldStart.synced.continue")}
+        </button>
+      </main>
+    );
   }
 
   if (seeding && !sample.isError) {
@@ -108,7 +152,7 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
         profileId={profileId}
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        onConnected={invalidate}
+        onConnected={handleConnected}
       />
     </main>
   );

@@ -128,6 +128,35 @@
   font-size: 0.82rem;
 }
 
+.source:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Soft "not configured on this server" note under a disabled source (review D1). */
+.softHint {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+  margin: -0.2rem 0 var(--sp-2);
+  padding: 0 0.2rem;
+}
+
+/* Progress-poll stalled note + retry (review D3). */
+.stallNote {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.stallRetry {
+  background: none;
+  border: none;
+  color: var(--info);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
 /* Import progress view --------------------------------------------------- */
 
 .syncing {

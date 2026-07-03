@@ -82,6 +82,16 @@ export function useSearch(profileId: string, query: string) {
   });
 }
 
+/** Which sources the operator configured on this server (review D1). Server-wide + stable within a
+ * session, so it's cached hard and not profile-scoped. */
+export function useSourceCapabilities() {
+  return useQuery({
+    queryKey: ["sourceCapabilities"],
+    queryFn: () => api.sourceCapabilities(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
 export function useConnectedSources(profileId: string | null) {
   return useQuery({
     queryKey: keys.sources(profileId ?? ""),
