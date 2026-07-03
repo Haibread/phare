@@ -101,6 +101,16 @@ docker compose pull        # or: git pull && docker compose build
 docker compose up -d       # recreates changed services; backend migrates on boot
 ```
 
+**After changing models or upgrading, run `phare evaluate`.** CI only tests the code (hermetic, fake
+providers); `phare evaluate` runs the persona suite against your real database with your configured
+embedding/LLM models and asserts taste alignment (hard-avoids, affinity variance, score order,
+similarity spread). It is the only check that catches a relevance regression caused by a model or
+config change — expect `4/4 PASS`, and read the per-persona reasons if not.
+
+```bash
+docker compose exec backend phare evaluate    # against the live instance + configured models
+```
+
 ## Attribution
 
 This product uses the TMDB API but is not endorsed or certified by TMDB. Watch-history data comes

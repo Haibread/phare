@@ -17,11 +17,27 @@ from phare.catalog.sample import seed_sample_catalog
 from phare.db.models import EventType, Profile, Title, WatchEvent
 from phare.eval import metrics
 from phare.eval.personas import PERSONAS, Persona
+from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider
+from phare.recommend import genres
 from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 
 logger = logging.getLogger(__name__)
+
+# Alignment thresholds (mission M10.2). These port the pytest lot-1 alignment invariants into the
+# harness, so `phare evaluate` — which runs against the *deployed* instance with the real embedding
+# model — catches a relevance regression the hermetic CI (fake providers) structurally can't see.
+#
+# ``similarity_rel`` spread: a healthy slate places its picks across the pool-relative scale rather
+# than reading "strong fit" for everything (review H2/A8). We require the top-K to span at least
+# this much. The offline local-hash embedder is not the production space, so this spread check is
+# skipped (and said so in the output) when the model is ``local-hash-v1`` — the CI harness runs on
+# it and it must stay green; the real deployed model is what this check is really guarding.
+_MIN_SIM_REL_SPREAD = 0.15
+# Affinity must actually vary across the pool: a flat affinity column means the taste key matched
+# nothing and every candidate scored neutral (review H1). At least this many distinct values.
+_MIN_DISTINCT_AFFINITY = 2
 
 
 @dataclass
@@ -30,13 +46,77 @@ class PersonaResult:
     count: int
     forbidden_violations: list[str] = field(default_factory=list)
     recommended_watched: list[str] = field(default_factory=list)
+    alignment_failures: list[str] = field(default_factory=list)
     popularity_bias: float = 0.0
     intra_list_diversity: float = 0.0
     novelty: float = 0.0
 
     @property
     def passed(self) -> bool:
-        return not self.forbidden_violations and not self.recommended_watched
+        return (
+            not self.forbidden_violations
+            and not self.recommended_watched
+            and not self.alignment_failures
+        )
+
+
+def alignment_checks_summary(model_version: str) -> str:
+    """One line naming the alignment checks the harness runs, for the ``phare evaluate`` header.
+
+    Names the similarity-spread check as *skipped* on the offline embedder so a green run is never
+    read as having exercised it (mission M10.2)."""
+    spread = (
+        "similarity-spread [skipped: offline local-hash embedder]"
+        if model_version == LOCAL_MODEL_VERSION
+        else f"similarity-spread (>= {_MIN_SIM_REL_SPREAD})"
+    )
+    return f"hard-avoids, affinity-variance, score-order, {spread}"
+
+
+def _alignment_failures(
+    recs: list[Recommendation], persona: Persona, *, model_version: str
+) -> list[str]:
+    """Check the slate against the taste-alignment invariants (M10.2), returning a reason per
+    failed check. Reuses the shared genre matcher (:func:`phare.recommend.genres.matches_any`) for
+    hard-avoids — no second matcher. The similarity-spread check is relaxed on the offline
+    local-hash embedder (not the production space); every other check runs on any model.
+    """
+    failures: list[str] = []
+    if not recs:
+        return ["empty slate: the engine returned nothing to align"]
+
+    # (a) No hard-avoid the persona's taste marks may appear in the top-K.
+    avoids = [a for a in (persona.taste.get("hard_avoids") or []) if str(a).strip()]
+    leaked = [rec.title for rec in recs if genres.matches_any(avoids, [rec.title, *rec.genres])]
+    if leaked:
+        failures.append(f"hard-avoid leaked into top-K: {', '.join(leaked)}")
+
+    # (b) Affinity must vary across the slate (a flat column = the taste key matched nothing).
+    if persona.taste.get("affinities"):
+        distinct_affinity = {rec.components.get("affinity") for rec in recs}
+        if len(distinct_affinity) < _MIN_DISTINCT_AFFINITY:
+            failures.append(
+                f"affinity is flat ({len(distinct_affinity)} distinct value): "
+                "the taste key matched no candidate genre"
+            )
+
+    # (c) The slate must read score-descending — a reintroduced vote-count sort breaks this (A1/H7).
+    scores = [rec.score for rec in recs]
+    if scores != sorted(scores, reverse=True):
+        failures.append("slate is not ordered by descending score")
+
+    # (d) Pool-relative similarity must spread, not read "strong fit" for everything (H2/A8).
+    # Skipped on the offline embedder (not the production space) — reported so a green run is not
+    # mistaken for having exercised this check.
+    sim_rels = [rec.components.get("similarity_rel", 0.5) for rec in recs]
+    if model_version != LOCAL_MODEL_VERSION:
+        spread = max(sim_rels) - min(sim_rels)
+        if spread < _MIN_SIM_REL_SPREAD:
+            failures.append(
+                f"similarity_rel is flat (spread {spread:.3f} < {_MIN_SIM_REL_SPREAD}): "
+                "the slate reads 'strong fit' for everything"
+            )
+    return failures
 
 
 def _seed_persona_history(session: Session, profile_id: uuid.UUID, persona: Persona) -> None:
@@ -82,6 +162,12 @@ def evaluate_persona(
     recs: list[Recommendation] = service.recommend(
         profile.id, taste=persona.taste, k=k, swing_slots=0
     )
+    # Alignment (M10.2) is checked on the score-ordered chat slate (``vote_mix``), not the MMR-
+    # diversified rows slate above — MMR reorders for genre variety, so a "score-descending" check
+    # only reads honestly on the score-ranked composition. Deterministic, no LLM (chat_llm=None).
+    aligned: list[Recommendation] = service.recommend(
+        profile.id, taste=persona.taste, k=k, swing_slots=0, vote_mix=True
+    )
 
     watched_ids = {
         title_id
@@ -96,6 +182,7 @@ def evaluate_persona(
             result.forbidden_violations.append(rec.title)
         if rec.title_id in watched_ids:
             result.recommended_watched.append(rec.title)
+    result.alignment_failures = _alignment_failures(aligned, persona, model_version=model_version)
 
     pops = [_popularity(session, rec.title_id) for rec in recs]
     result.popularity_bias = metrics.popularity_bias(pops)
