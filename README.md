@@ -66,6 +66,32 @@ cd e2e      && npm ci && npx playwright install chromium && npm test   # full-st
 cd backend  && uv run phare evaluate                     # persona guardrails + metrics
 ```
 
+## Operations
+
+Phare runs as a **single backend process** — caches, rate-limit counters, and the embedding/taste
+background jobs all live in-process, so don't scale the backend past one replica (the compose file
+runs one; all three services are `restart: unless-stopped` with healthchecks). Migrations run on
+boot via `MIGRATE_ON_STARTUP=true` in compose.
+
+**Back up** the Postgres volume — it holds everything (accounts, history, taste, catalog, embeddings):
+
+```bash
+docker compose exec -T db pg_dump -U phare phare | gzip > phare-$(date +%F).sql.gz   # dump
+gunzip -c phare-2026-07-03.sql.gz | docker compose exec -T db psql -U phare phare     # restore
+```
+
+**Upgrade**: back up first, then pull and recreate — migrations apply automatically on start.
+
+```bash
+docker compose pull        # or: git pull && docker compose build
+docker compose up -d       # recreates changed services; backend migrates on boot
+```
+
+## Attribution
+
+This product uses the TMDB API but is not endorsed or certified by TMDB. Watch-history data comes
+from your own Trakt / Plex / Jellyfin account. See the in-app **About** screen for the full notices.
+
 ## License
 
 [AGPL-3.0](LICENSE) — network copyleft: if you run a modified Phare as a service, you must offer
