@@ -3,9 +3,11 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BeaconGlyph } from "../components/Brand";
 import { ErrorState } from "../components/states";
-import { keys, useLoadSampleData, useSeedCatalog } from "../lib/queries";
+import { keys, useLoadSampleData, useOnboardingStatus, useSeedCatalog } from "../lib/queries";
 import { SourcePicker } from "./SourcePicker";
 import styles from "./onboarding.module.css";
+
+type StepState = "done" | "active" | "pending";
 
 /** First-run takeover: one connect call-to-action + a sample-data escape hatch. Shown until the
  * profile has any history, at which point the app reveals the tabbed shell. */
@@ -13,8 +15,11 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
   const { t } = useTranslation("onboarding");
   const qc = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const sample = useLoadSampleData(profileId);
   const catalog = useSeedCatalog();
+  // Poll real backend readiness while the seed runs, so the steps reflect actual progress.
+  const status = useOnboardingStatus(profileId, seeding);
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: keys.history(profileId) });
@@ -24,11 +29,47 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
   }
 
   async function exploreSample() {
+    setSeeding(true);
     await catalog.mutateAsync();
+    // Landing is gated on history existing (App), and taste finishes in the background — so the
+    // user drops into Browse (with its "building your profile" state) as soon as this resolves.
     await sample.mutateAsync();
   }
 
-  const busy = sample.isPending || catalog.isPending;
+  if (seeding && !sample.isError) {
+    // The three steps are driven by the polled onboarding status; the first not-yet-done one is
+    // "active". Catalog is seeded before history, so they light up in order.
+    const done = [
+      status.data?.catalogReady ?? false,
+      status.data?.historyReady ?? false,
+      status.data?.tasteReady ?? false,
+    ];
+    const activeIndex = done.indexOf(false);
+    const steps: Array<{ key: string; state: StepState }> = ["catalog", "history", "taste"].map(
+      (key, i) => ({
+        key,
+        state: done[i] ? "done" : i === activeIndex ? "active" : "pending",
+      }),
+    );
+    return (
+      <main className={styles.cold} data-testid="cold-start">
+        <span className={styles.halo} aria-hidden="true">
+          <BeaconGlyph />
+        </span>
+        <h1 className={styles.coldTitle}>{t("coldStart.steps.heading")}</h1>
+        <ol className={styles.steps} data-testid="onboarding-steps">
+          {steps.map((step) => (
+            <li key={step.key} className={styles.step} data-state={step.state}>
+              <span className={styles.stepMark} aria-hidden="true">
+                {step.state === "done" ? "✓" : step.state === "active" ? "•" : ""}
+              </span>
+              <span>{t(`coldStart.steps.${step.key}`)}</span>
+            </li>
+          ))}
+        </ol>
+      </main>
+    );
+  }
 
   return (
     <main className={styles.cold} data-testid="cold-start">
@@ -54,9 +95,8 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
         className={styles.link}
         data-testid="explore-sample"
         onClick={() => void exploreSample()}
-        disabled={busy}
       >
-        {busy ? t("coldStart.loadingSample") : t("coldStart.exploreSample")}
+        {t("coldStart.exploreSample")}
       </button>
       <p className="faint" style={{ fontSize: "0.8rem", maxWidth: "16rem" }}>
         {t("coldStart.sampleHint")}

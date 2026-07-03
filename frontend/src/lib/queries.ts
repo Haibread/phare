@@ -17,6 +17,7 @@ export const keys = {
   commitments: (id: string) => ["commitments", id] as const,
   memory: (id: string) => ["memory", id] as const,
   titleDetail: (id: string) => ["titleDetail", id] as const,
+  onboarding: (id: string) => ["onboarding", id] as const,
 };
 
 /** Lazily fetch a title's "more info" (synopsis/runtime/links); only runs while the sheet is open. */
@@ -142,6 +143,17 @@ export function useLoadSampleData(profileId: string) {
 
 export function useSeedCatalog() {
   return useMutation({ mutationFn: () => api.seedCatalog() });
+}
+
+/** Poll onboarding readiness while the sample seed runs, so ColdStart can show live step progress.
+ * Stops polling once the profile is ready to browse (the app then reveals the tabbed shell). */
+export function useOnboardingStatus(profileId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.onboarding(profileId),
+    queryFn: () => api.onboardingStatus(profileId),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.readyToBrowse ? false : 600),
+  });
 }
 
 export function useAvailability(profileId: string, titleIds: string[]) {

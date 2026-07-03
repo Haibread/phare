@@ -41,9 +41,19 @@ def test_not_interested_drops_the_title_and_undo_restores_it(db_session: Session
     client = _client(db_session, user)
     profile_id = _seed(client, user)
 
+    # "Not interested" is offered on *new* picks, so target an unwatched recommendation (rows like
+    # watch-again carry already-watched titles, which would already own a watch event). Sorted for a
+    # deterministic pick — set iteration order would otherwise flake the single-event assertions.
     shown = _recommended_ids(client, profile_id)
-    assert shown, "expected a non-empty slate to pick a target from"
-    target = next(iter(shown))
+    watched = {
+        str(tid)
+        for tid in db_session.scalars(
+            select(WatchEvent.title_id).where(WatchEvent.profile_id == uuid.UUID(profile_id))
+        )
+    }
+    fresh = sorted(shown - watched)
+    assert fresh, "expected an unwatched pick to reject"
+    target = fresh[0]
 
     resp = client.post(
         f"/profiles/{profile_id}/titles/{target}/feedback", json={"signal": "not_interested"}

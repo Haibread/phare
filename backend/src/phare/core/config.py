@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     tmdb_image_base_url: str = "https://image.tmdb.org/t/p/w342"
     # In-process TTL (seconds) for cached TMDB metadata/search reads. 0 disables caching.
     tmdb_cache_ttl_seconds: int = 3600
+    # DB-persisted TTL (seconds) for a title's localized synopsis/genres (per language). Long, since
+    # a synopsis rarely changes; past it the detail view re-fetches from TMDB. Survives restarts and
+    # doubles as the offline fallback when TMDB is unreachable (review C2). Default 30 days.
+    title_localization_ttl_seconds: int = 60 * 60 * 24 * 30
     # On startup, if the candidate pool is empty and TMDB is configured, seed the catalog in the
     # background so a fresh instance has something to recommend from. Disable to manage the catalog
     # yourself. No-op without TMDB_API_KEY.

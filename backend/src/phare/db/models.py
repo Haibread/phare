@@ -300,6 +300,26 @@ class TitleExplanation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TitleLocalization(Base):
+    """Cached localized synopsis + genres for a (title, language), fetched from TMDB.
+
+    A pure metadata cache — no LLM. The detail view shows the synopsis/genres in the request
+    language; without this it hit TMDB live on every open (~6 s observed, review C2). Keyed by
+    title + language, refreshed once past a long TTL, and served as the fallback when TMDB is
+    unreachable. ``fetched_at`` is the write time the TTL is measured against.
+    """
+
+    __tablename__ = "title_localization"
+
+    title_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("title.id", ondelete="CASCADE"), primary_key=True
+    )
+    language: Mapped[str] = mapped_column(String(8), primary_key=True)
+    overview: Mapped[str | None] = mapped_column(Text)
+    genres: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SourceToken(Base):
     """A per-profile access token for an external source (Trakt/Plex/Jellyfin), encrypted.
 

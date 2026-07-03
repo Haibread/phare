@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from phare.catalog.sample import seed_sample_catalog
-from phare.db.models import Profile
+from phare.db.models import Profile, Title, TitleKind
 from phare.ingest.sample import seed_sample_data
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
@@ -111,6 +111,84 @@ def test_enrich_runtimes_short_circuits_when_pool_is_already_filled(db_session: 
     result = _service(db_session)._enrich_runtimes(candidates, provider)
     assert result is candidates  # same list returned untouched
     assert provider.calls == []  # nothing fetched
+
+
+def _runtime_cand(title: Title, runtime: int | None):
+    from phare.recommend.schema import Candidate
+
+    return Candidate(
+        title_id=title.id,
+        title=title.title,
+        kind="movie",
+        year=None,
+        genres=[],
+        keywords=[],
+        runtime_minutes=runtime,
+        popularity=None,
+        overview=None,
+        similarity=0.5,
+    )
+
+
+def test_runtime_enrichment_persists_so_replay_makes_no_calls(db_session: Session) -> None:
+    # C4 validation: a runtime-filtered pool of titles with no runtime fetches + persists them; the
+    # same query replayed (its candidates now carry the persisted runtime) fetches nothing.
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+
+    titles = []
+    for i in range(4):
+        title = Title(kind=TitleKind.movie, title=f"Film {i}", tmdb_id=3000 + i)
+        db_session.add(title)
+        titles.append(title)
+    db_session.flush()
+    meta = {
+        (t.tmdb_id, TitleKind.movie): TitleMetadata(
+            kind=TitleKind.movie, title=t.title, runtime_minutes=100
+        )
+        for t in titles
+    }
+    service = _service(db_session)
+
+    first = FakeMetadataProvider(titles=meta)
+    service._enrich_runtimes([_runtime_cand(t, None) for t in titles], first)
+    assert len(first.calls) == 4  # every missing runtime fetched...
+    assert all(t.runtime_minutes == 100 for t in titles)  # ...and persisted to the titles
+
+    # Replay: candidates rebuilt from the persisted titles carry runtimes → nothing to fetch.
+    replay = FakeMetadataProvider(titles=meta)
+    service._enrich_runtimes([_runtime_cand(t, t.runtime_minutes) for t in titles], replay)
+    assert replay.calls == []  # zero TMDB calls on the second run
+
+
+def test_runtime_enrichment_is_bounded_per_request(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # C4 validation: online work is capped at READ_RUNTIME_CAP per request, so a big under-filled
+    # pool can't fan out one TMDB call per title on a single turn (it heals over successive turns).
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+
+    monkeypatch.setattr("phare.recommend.service.READ_RUNTIME_CAP", 2)
+    titles = []
+    for i in range(5):
+        title = Title(kind=TitleKind.movie, title=f"Film {i}", tmdb_id=4000 + i)
+        db_session.add(title)
+        titles.append(title)
+    db_session.flush()
+    provider = FakeMetadataProvider(
+        titles={
+            (t.tmdb_id, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, title=t.title, runtime_minutes=100
+            )
+            for t in titles
+        }
+    )
+
+    _service(db_session)._enrich_runtimes([_runtime_cand(t, None) for t in titles], provider)
+
+    assert len(provider.calls) == 2  # capped, not one per missing title
+    assert sum(t.runtime_minutes == 100 for t in titles) == 2  # only the capped subset persisted
 
 
 def test_centroid_is_memoized_per_request(

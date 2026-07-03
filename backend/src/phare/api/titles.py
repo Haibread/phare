@@ -12,23 +12,36 @@ import json
 import logging
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from phare.api.deps import get_language, get_optional_chat_llm
+from phare.api.deps import (
+    get_language,
+    get_optional_chat_llm,
+    get_optional_metadata_provider,
+)
 from phare.api.recommend import _poster_url, require_profile
 from phare.api.schemas import TitleDetail
 from phare.core.auth import get_current_user
 from phare.core.config import get_settings
+from phare.core.fallback import record_fallback
 from phare.core.i18n import Language
 from phare.db.base import get_session
-from phare.db.models import TasteProfile, Title, TitleKind, User, WatchEvent
-from phare.providers.tmdb import TMDBMetadataProvider
-from phare.providers.types import LLMProvider
+from phare.db.models import (
+    TasteProfile,
+    Title,
+    TitleKind,
+    TitleLocalization,
+    User,
+    WatchEvent,
+)
+from phare.providers.types import LLMProvider, MetadataProvider
 from phare.recommend.explain import (
     _EXPLANATION_CACHE,
     PersistentReasonCache,
@@ -41,30 +54,62 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Titles"])
 
 
-def _localized_overview_genres(title: Title, language: Language) -> tuple[str | None, list[str]]:
-    """The synopsis + genres in the request language.
+def _localized_overview_genres(
+    session: Session,
+    title: Title,
+    language: Language,
+    provider: MetadataProvider | None,
+) -> tuple[str | None, list[str]]:
+    """The synopsis + genres in the request language, cache-first.
 
-    Stored catalog metadata is in whatever language it was imported in, so for the detail view —
-    which the user explicitly opened — fetch the localised version live from TMDB when a key is
-    configured. Falls back to the stored values on any miss, so the sheet never fails to render."""
+    Stored catalog metadata is in whatever language it was imported in, so the detail view wants the
+    localized version. Fetching it from TMDB live on every open cost ~6 s (review C2), so it's
+    cached per (title, language) in ``title_localization`` with a long TTL. A copy inside the TTL
+    is served without touching TMDB; past the TTL (or on a first open) it's re-fetched and the cache
+    refreshed. When TMDB is unreachable — or unconfigured — any stored copy (even stale) is served
+    over the wrong-language base metadata, so the sheet always renders.
+    """
     stored = (title.overview, list(title.genres))
-    settings = get_settings()
-    if not settings.tmdb_api_key or title.tmdb_id is None:
-        return stored
+    cached = session.get(TitleLocalization, {"title_id": title.id, "language": language})
+
+    def _from_cache() -> tuple[str | None, list[str]]:
+        # A cached field may be empty (TMDB had none) — fall back to the base metadata there.
+        return (cached.overview or title.overview, list(cached.genres) or list(title.genres))
+
+    now = datetime.now(UTC)
+    ttl = timedelta(seconds=get_settings().title_localization_ttl_seconds)
+    if cached is not None and now - cached.fetched_at < ttl:
+        return _from_cache()
+    if provider is None or title.tmdb_id is None:
+        # No way to refresh — serve any stored copy (even stale) over the wrong-language base text.
+        return _from_cache() if cached is not None else stored
     try:
-        provider = TMDBMetadataProvider(
-            api_key=settings.tmdb_api_key,
-            base_url=settings.tmdb_base_url,
-            language=language,
-            cache_ttl=settings.tmdb_cache_ttl_seconds,
-        )
         meta = provider.get_title(title.tmdb_id, title.kind)
     except Exception:  # noqa: BLE001 - a TMDB hiccup must not break the detail view
         logger.warning("titles.localize_failed", extra={"title_id": str(title.id)})
-        return stored
+        record_fallback("titles", "localization_unavailable", title_id=str(title.id))
+        return _from_cache() if cached is not None else stored
     if meta is None:
-        return stored
-    return (meta.overview or title.overview, meta.genres or list(title.genres))
+        return _from_cache() if cached is not None else stored
+    _upsert_localization(session, title.id, language, meta.overview, list(meta.genres), now)
+    return (meta.overview or title.overview, list(meta.genres) or list(title.genres))
+
+
+def _upsert_localization(
+    session: Session,
+    title_id: uuid.UUID,
+    language: Language,
+    overview: str | None,
+    genres: list[str],
+    when: datetime,
+) -> None:
+    """Cache (or refresh) a title's localized synopsis + genres. The caller owns the commit."""
+    values = {"overview": overview, "genres": genres, "fetched_at": when}
+    session.execute(
+        pg_insert(TitleLocalization)
+        .values(title_id=title_id, language=language, **values)
+        .on_conflict_do_update(index_elements=["title_id", "language"], set_=values)
+    )
 
 
 def _tmdb_url(title: Title) -> str | None:
@@ -79,11 +124,13 @@ def get_title(
     title_id: uuid.UUID,
     session: Annotated[Session, Depends(get_session)],
     language: Annotated[Language, Depends(get_language)],
+    provider: Annotated[MetadataProvider | None, Depends(get_optional_metadata_provider)],
 ) -> TitleDetail:
     title = session.get(Title, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
-    overview, genres = _localized_overview_genres(title, language)
+    overview, genres = _localized_overview_genres(session, title, language, provider)
+    session.commit()  # persist the localization cache fill (if any)
     return TitleDetail(
         title_id=title.id,
         title=title.title,

@@ -12,14 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from phare.core.config import get_settings
 from phare.core.i18n import Language, parse_accept_language
 from phare.core.net import validate_external_url
 from phare.embeddings.version import embedding_model_version, get_embedding_provider
 from phare.providers.llm import OpenAILLMProvider
-from phare.providers.types import LLMProvider
+from phare.providers.tmdb import TMDBMetadataProvider
+from phare.providers.types import LLMProvider, MetadataProvider
 
 
 def require_safe_url(url: str) -> str:
@@ -52,6 +53,25 @@ def get_embedder() -> Embedder:
     return Embedder(
         provider=get_embedding_provider(settings),
         model_version=embedding_model_version(settings),
+    )
+
+
+def get_optional_metadata_provider(
+    language: Annotated[Language, Depends(get_language)],
+) -> MetadataProvider | None:
+    """TMDB metadata provider bound to the request language, or ``None`` when no TMDB key is set.
+
+    Injected (rather than built inline) so the title-detail cache fill is testable — a test swaps
+    in a counting/failing provider to prove the second open skips TMDB and that an outage is
+    absorbed by the stored copy."""
+    settings = get_settings()
+    if not settings.tmdb_api_key:
+        return None
+    return TMDBMetadataProvider(
+        api_key=settings.tmdb_api_key,
+        base_url=settings.tmdb_base_url,
+        language=language,
+        cache_ttl=settings.tmdb_cache_ttl_seconds,
     )
 
 

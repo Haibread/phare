@@ -61,8 +61,17 @@ const ingestSummarySchema = z.object({
   updated: z.number(),
   skipped: z.number(),
   titlesCreated: z.number(),
+  tasteBuilding: z.boolean(),
 });
 export type IngestSummary = z.infer<typeof ingestSummarySchema>;
+
+const onboardingStatusSchema = z.object({
+  catalogReady: z.boolean(),
+  historyReady: z.boolean(),
+  tasteReady: z.boolean(),
+  readyToBrowse: z.boolean(),
+});
+export type OnboardingStatus = z.infer<typeof onboardingStatusSchema>;
 
 export const tasteSchema = z.object({
   profileId: z.string(),
@@ -494,6 +503,8 @@ export const api = {
   listProfiles: () => request("/profiles", profilePageSchema),
   loadSampleData: (profileId: string) =>
     request(`/profiles/${profileId}/sample-data`, ingestSummarySchema, { method: "POST" }),
+  onboardingStatus: (profileId: string) =>
+    request(`/profiles/${profileId}/onboarding`, onboardingStatusSchema),
   history: (profileId: string) =>
     request(`/history?profileId=${profileId}&perPage=100`, historyPageSchema),
   syncTrakt: (profileId: string, accessToken?: string) =>

@@ -61,6 +61,10 @@ def loved_seed_titles(session: Session, profile_id: uuid.UUID, *, limit: int = 3
         )
         .group_by(Title.id)
         .having((best_rating >= 7.0) | loved)
+        # Deterministic base order: the interleave below is a *stable* sort, so an arbitrary SQL
+        # row order would let ties (equal rating / same recency) pick different seeds run-to-run —
+        # cascading into which "because" rows exist and can dedup you_might_like empty. Stable id.
+        .order_by(Title.tmdb_id.asc().nulls_last(), Title.id)
     ).all()
     if not rows:
         return []

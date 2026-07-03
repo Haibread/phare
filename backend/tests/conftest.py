@@ -4,6 +4,7 @@ skip cleanly when no Postgres server is reachable.
 
 from __future__ import annotations
 
+import itertools
 import os
 from collections.abc import Callable, Iterator
 
@@ -50,6 +51,10 @@ _BASE_URL = os.environ.get(
 )
 _TEST_DB = "phare_test"
 
+# Monotonic sequence for default account emails — see make_account. Keeps independent tests from
+# colliding on one login identity without threading a unique email through every call site.
+_account_email_seq = itertools.count(1)
+
 
 @pytest.fixture(scope="session")
 def engine() -> Iterator[Engine]:
@@ -78,10 +83,17 @@ def make_account(
     session: Session,
     *,
     display_name: str = "me",
-    email: str | None = "me@example.test",
+    email: str | None = None,
     is_admin: bool = True,
 ) -> User:
-    """Create a User and its 1:1 Profile directly in the DB (auth-bypassing test setup)."""
+    """Create a User and its 1:1 Profile directly in the DB (auth-bypassing test setup).
+
+    ``email`` defaults to a fresh unique address per call, so independent tests can't collide on the
+    same login identity if a rollback ever fails to isolate them; pass an explicit value when a test
+    needs a known or shared address (e.g. the multi-account isolation checks).
+    """
+    if email is None:
+        email = f"user{next(_account_email_seq)}@example.test"
     user = User(email=email, display_name=display_name, is_admin=is_admin)
     session.add(user)
     session.flush()
@@ -136,3 +148,58 @@ def db_session(engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _sync_embedding_backfill(request: pytest.FixtureRequest) -> None:
+    """Keep the "background" embedding backfill synchronous and on the test's own session.
+
+    In production ``ensure_embeddings`` embeds a small inline micro-batch and hands the rest to a
+    daemon thread with its *own* DB connection (review C1). In tests that thread would commit
+    outside the per-test rollback and race the assertions, so we replace the scheduler with a
+    synchronous pass on the test session — the catalog still fully embeds inline, exactly as the
+    old unbounded top-up did. Only touches DB-backed tests (those that pull in ``db_session``);
+    tests that exercise the scheduler itself re-patch it in their own body (last patch wins).
+    """
+    if "db_session" not in request.fixturenames:
+        return
+    from phare.embeddings.service import EmbeddingService
+
+    session = request.getfixturevalue("db_session")
+
+    def _sync(provider: object, model_version: str, *, runner: object = None) -> bool:
+        EmbeddingService(session, provider, model_version).embed_missing()  # type: ignore[arg-type]
+        return True
+
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    monkeypatch.setattr("phare.recommend.service.schedule_embedding_backfill", _sync)
+
+
+@pytest.fixture(autouse=True)
+def _sync_taste_refresh(request: pytest.FixtureRequest) -> None:
+    """Keep the "background" taste refresh synchronous and on the test's own session (review C3).
+
+    Same rationale as the embedding backfill: the real scheduler spawns a daemon thread with its own
+    connection. Offline (the default hermetic suite) it's a no-op — no LLM, nothing to extract — so
+    this only bites when a test wires an LLM in. Tests exercising the scheduler re-patch it."""
+    if "db_session" not in request.fixturenames:
+        return
+    from phare.taste.backfill import run_taste_refresh
+
+    session = request.getfixturevalue("db_session")
+
+    def _sync(
+        profile_id: object,
+        llm: object,
+        model_version: str,
+        language: object = "en",
+        *,
+        runner: object = None,
+    ) -> bool:
+        if llm is None:
+            return False
+        run_taste_refresh(session, profile_id, llm, model_version, language)  # type: ignore[arg-type]
+        return True
+
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    monkeypatch.setattr("phare.api.profiles.schedule_taste_refresh", _sync)

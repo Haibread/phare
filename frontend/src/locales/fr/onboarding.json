@@ -6,7 +6,13 @@
     "or": "ou",
     "exploreSample": "Explorer avec des données d'exemple",
     "loadingSample": "Chargement des données d'exemple…",
-    "sampleHint": "Voyez d'abord comment ça marche — aucun compte requis."
+    "sampleHint": "Voyez d'abord comment ça marche — aucun compte requis.",
+    "steps": {
+      "heading": "Préparation en cours…",
+      "catalog": "Constitution du catalogue d'exemple",
+      "history": "Chargement d'un historique de démo",
+      "taste": "Analyse de vos goûts"
+    }
   },
   "sources": {
     "title": "Connecter une source",

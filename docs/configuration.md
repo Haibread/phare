@@ -31,6 +31,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `TMDB_API_KEY` | _(unset)_ | TMDB metadata + catalog import (popular + broad) + poster art. |
 | `TMDB_BASE_URL` / `TMDB_IMAGE_BASE_URL` | TMDB defaults | Override for proxies/mirrors. |
 | `TMDB_CACHE_TTL_SECONDS` | `3600` | In-process TTL for cached TMDB metadata/search reads (see [Rate limits & caching](#rate-limits--caching)). `0` disables the cache. |
+| `TITLE_LOCALIZATION_TTL_SECONDS` | `2592000` (30 d) | DB-persisted TTL for a title's localized synopsis/genres (per language). A detail view serves the cached copy inside the TTL without hitting TMDB, and falls back to it when TMDB is down. |
 | `CATALOG_AUTOSEED` | `true` | On startup, if the candidate pool is empty and `TMDB_API_KEY` is set, seed the catalog in the background (see [Seeding the catalog](#seeding-the-catalog)). Master on/off switch. No-op without a TMDB key. |
 | `CATALOG_AUTOSEED_SCOPE` | `auto` | What autoseed pulls: `popular` (light front page), `broad` (deep genre sweep), or `auto` (**broad in production**, popular elsewhere — so a prod box deep-seeds itself with no command). |
 | `CATALOG_BROAD_PAGES_PER_GENRE` | `20` | Depth of a broad seed (also the autoseed when its scope is broad). Deeper = more titles + more embedding cost. |
@@ -117,6 +118,34 @@ filtered, not a global batch, so the cap bites on the first such turn; each fetc
 catalog heals as it's used — no command, no manual step. Without a `TMDB_API_KEY` (or offline), runtime
 filtering simply stays inert: length requests parse but don't constrain. Bounded by `READ_RUNTIME_CAP`
 (a code constant, mirroring the lazy embedding top-up).
+
+**Embeddings are backfilled off the read path.** A title has to be embedded before it can be
+recommended, but the read path never embeds a whole fresh import inline (that could freeze the first
+request for minutes against a real embedding API). Instead a render embeds only a tiny inline
+*micro-batch* — bounded by both a title count and a wall-clock budget (`READ_EMBED_MICRO_LIMIT` /
+`READ_EMBED_TIME_BUDGET_S`, code constants) — for the "almost nothing missing" case, and hands any
+larger backlog to a single background task that embeds the rest in batches. Only **one** backfill
+runs at a time (an in-process lock — the app is single-process). So right after a big import the
+first reads come back fast on a partial catalog, and each subsequent read widens the pool as the
+backfill catches up; the profile's own titles embedding is what flips the "building your profile"
+state off (see [`design.md`](design.md)). The authoritative unbounded pass is still
+`POST /catalog/embed`.
+
+**The detail view's synopsis is cached, per language.** Opening a title's "more info" sheet shows
+its synopsis and genres in the request language — which means a live TMDB fetch, ~6 s the first time.
+That result is cached in the DB keyed by `(title, language)` for `TITLE_LOCALIZATION_TTL_SECONDS`
+(default 30 days): a repeat open inside the TTL serves the stored copy with no TMDB call, and if
+TMDB is unreachable the stored copy is served anyway (flagged as a fallback) rather than dropping
+back to the wrong-language base text. Pure metadata caching — no LLM involved.
+
+**Taste extraction runs in the background, so onboarding lands fast.** Taste is a derived LLM
+artifact (see [`data-model.md`](data-model.md)); regenerating it is the slow part of a first import.
+So on ingest — seeding sample data, or connecting a source — the history is committed and the app
+reveals as soon as the catalog + history exist, while a single background pass (one per profile,
+in-process lock) extracts the taste behind it. `GET /profiles/{id}/onboarding` reports the ordered
+readiness (catalog → history → taste) the cold-start screen shows as steps; the "building your
+profile" state (see [`design.md`](design.md)) covers the window until taste lands. Offline there's
+no LLM pass — the deterministic centroid personalises instead — so that step completes immediately.
 
 **Guard — won't run in dev by accident.** Both the import endpoint and the CLI refuse to run unless
 `ENVIRONMENT=production`, **or** you explicitly override (`confirm=true` on the endpoint,
