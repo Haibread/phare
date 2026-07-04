@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
-import { useTitleDetail } from "../lib/queries";
+import { useSendTitleFeedback, useTitleDetail, useUndoChatAction } from "../lib/queries";
 import { translateGenre } from "../lib/tasteVocab";
 import { Sheet } from "./Sheet";
 import styles from "./components.module.css";
@@ -28,6 +28,43 @@ export function TitleDetailSheet({
   const detail = useTitleDetail(item.titleId, open);
   const [streamedWhy, setStreamedWhy] = useState("");
   const [whyStreaming, setWhyStreaming] = useState(false);
+
+  // "Not interested" is a deliberate, destructive signal — so it lives here in the sheet, behind an
+  // explicit tap, not on the card. After sending we hold an in-sheet confirmation with an undo
+  // affordance; the recommendation rows refresh (via useSendTitleFeedback) so the title drops from
+  // Browse, and undo brings it back. Reset when the sheet closes so reopening starts clean.
+  const feedback = useSendTitleFeedback(profileId);
+  const undo = useUndoChatAction(profileId);
+  const [removed, setRemoved] = useState(false);
+  const [undoToken, setUndoToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setRemoved(false);
+      setUndoToken(null);
+    }
+  }, [open]);
+
+  function dismiss(): void {
+    setRemoved(true); // optimistic — revert if the write fails
+    feedback.mutate(
+      { titleId: item.titleId, signal: "not_interested" },
+      {
+        onSuccess: (res) => setUndoToken(res.undoToken),
+        onError: () => setRemoved(false),
+      },
+    );
+  }
+
+  function restore(): void {
+    if (!undoToken) return;
+    undo.mutate(undoToken, {
+      onSuccess: () => {
+        setRemoved(false);
+        setUndoToken(null);
+      },
+    });
+  }
 
   // Generate the LLM "why this" only while the sheet is open, streaming it in; abort on close.
   useEffect(() => {
@@ -120,6 +157,34 @@ export function TitleDetailSheet({
               )}
             </div>
           )}
+          {/* Secondary, deliberate "not interested" — full-width but visually quiet, kept apart from
+              the primary content. After the tap it flips to a confirmation + undo in place. */}
+          <div className={styles.detailFeedback}>
+            {removed ? (
+              <div className={styles.detailRemoved} data-testid="detail-removed">
+                <span className="muted">{t("feedback.removed")}</span>
+                <button
+                  type="button"
+                  className={styles.undoInline}
+                  data-testid="detail-undo"
+                  disabled={!undoToken || undo.isPending}
+                  onClick={restore}
+                >
+                  {t("feedback.undo")}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={`btn ${styles.detailDismiss}`}
+                data-testid="detail-not-interested"
+                disabled={feedback.isPending}
+                onClick={dismiss}
+              >
+                {t("feedback.notInterested")}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </Sheet>

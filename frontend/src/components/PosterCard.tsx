@@ -1,11 +1,9 @@
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecommendationItem } from "../api";
-import { useProfileId } from "../app/ProfileContext";
 import { useEmbeddingsDegraded } from "../lib/degraded";
 import { fitFor } from "../lib/fit";
 import { posterTint } from "../lib/poster";
-import { useSendTitleFeedback, useUndoChatAction } from "../lib/queries";
 import { translateGenre } from "../lib/tasteVocab";
 import { TitleAction } from "./Availability";
 import { ConfidenceMeter } from "./ConfidenceMeter";
@@ -25,72 +23,17 @@ export function PosterCard({
 }): React.JSX.Element {
   const { t, i18n } = useTranslation("title");
   const { t: tCommon } = useTranslation("common");
-  const profileId = useProfileId();
   const degraded = useEmbeddingsDegraded();
   const swingHelpId = useId(); // unique per card so each swing badge describes its own help text
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  // Local removal: the card leaves its row on "not interested" but stays in place as an undo slot,
-  // so we don't refetch the whole row out from under the user (see useSendTitleFeedback).
-  const [removed, setRemoved] = useState(false);
-  const [undoToken, setUndoToken] = useState<string | null>(null);
-  const feedback = useSendTitleFeedback(profileId);
-  const undo = useUndoChatAction(profileId);
   const showPoster = item.posterUrl !== null && !imgFailed;
 
-  function dismiss(): void {
-    setRemoved(true); // optimistic — revert if the write fails
-    feedback.mutate(
-      { titleId: item.titleId, signal: "not_interested" },
-      {
-        onSuccess: (res) => setUndoToken(res.undoToken),
-        onError: () => setRemoved(false),
-      },
-    );
-  }
-
-  function restore(): void {
-    if (!undoToken) return;
-    undo.mutate(undoToken, {
-      onSuccess: () => {
-        setRemoved(false);
-        setUndoToken(null);
-      },
-    });
-  }
-
-  if (removed) {
-    return (
-      <article className={styles.card} data-testid="rec-card">
-        <div className={styles.cardRemoved} data-testid="rec-card-removed">
-          <span>{t("feedback.removed")}</span>
-          <button
-            type="button"
-            className={styles.undoInline}
-            data-testid="undo-not-interested"
-            disabled={!undoToken || undo.isPending}
-            onClick={restore}
-          >
-            {t("feedback.undo")}
-          </button>
-        </div>
-      </article>
-    );
-  }
-
+  // A card has exactly one action: open the detail sheet. The destructive "not interested" signal
+  // moved into the sheet (round 3), off the card's primary click target where a stray tap was too
+  // easy — especially on touch.
   return (
     <article className={styles.card} data-testid="rec-card">
-      <button
-        type="button"
-        className={styles.dismiss}
-        data-testid="not-interested"
-        aria-label={t("feedback.notInterested")}
-        title={t("feedback.notInterested")}
-        disabled={feedback.isPending}
-        onClick={dismiss}
-      >
-        ✕
-      </button>
       {/* Poster + title open the detail sheet; the request button below stays separately clickable.
           An explicit aria-label gives the button one clean name — "Open {title} ({year}), {fit}" —
           instead of the screen reader stitching together the badges, title and meta text (review L2). */}

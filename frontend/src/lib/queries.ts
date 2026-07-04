@@ -128,10 +128,11 @@ export function useInvalidateAfterChat(profileId: string): () => void {
   };
 }
 
-/** Send a card feedback signal ("not interested"). Deliberately does NOT invalidate the
- * recommendation queries: the card removes itself locally and keeps an undo affordance in its slot,
- * so a full refetch (which would yank that affordance) is left for the next natural navigation. The
- * negative signal does change history + taste, so those refresh. */
+/** Send a card feedback signal ("not interested"), fired from the detail sheet (round 3). Unlike the
+ * old on-card control (which removed the card locally and held an undo slot in place), the sheet has
+ * no card to hide, so we invalidate the recommendation rows here to drop the title from Browse once
+ * the write settles. Undo re-invalidates and the row reappears. History + taste change too, so those
+ * refresh as well. */
 export function useSendTitleFeedback(profileId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -140,6 +141,8 @@ export function useSendTitleFeedback(profileId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: keys.history(profileId) });
       qc.invalidateQueries({ queryKey: keys.taste(profileId) });
+      qc.invalidateQueries({ queryKey: keys.recommendations(profileId) });
+      qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
     },
   });
 }

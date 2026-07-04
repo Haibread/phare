@@ -37,9 +37,11 @@ Every source normalizes into one per-profile event shape:
 canonical title (+ season/episode for TV), rating normalized to 0–10, optional **free-text** (the
 LLM reads it), `occurred_at` (drives recency decay), `source` provenance, and an `excluded` flag.
 
-`not_interested` is the one type a user emits **directly from a recommendation card** ("not
-interested", review K2) — a negative taste contribution (weight −1.0) that, being an event on the
-title, also drops it from future candidate generation. It's distinct from `disliked`, which implies
+`not_interested` is the one type a user emits **directly from the UI**: the "not interested" button
+in a title's detail sheet (opened by tapping its card) — a negative taste contribution (weight −1.0)
+that, being an event on the title, also drops it from future candidate generation. It sits in the
+sheet, behind a deliberate tap, rather than on the card itself, so a stray tap on a card's primary
+target can't emit a destructive signal. It's distinct from `disliked`, which implies
 the title was actually watched. The write reuses the chat agent's undo mechanism: the endpoint
 returns an `event:<id>` token the client hands to `/chat/undo` to reverse it. No positive card
 signal exists — deliberately, to avoid optimizing for engagement.
