@@ -59,11 +59,20 @@ _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 _PROMPT_VERSION = "3"
 
 
-def _taste_fingerprint(taste: Mapping[str, Any], anchor: Anchor | None = None) -> str:
+def _taste_fingerprint(
+    taste: Mapping[str, Any],
+    anchor: Anchor | None = None,
+    language: Language = DEFAULT_LANGUAGE,
+) -> str:
+    # Fold the request language into the key: an explanation is generated in the reader's language
+    # (LLM output + the offline template), so a cache keyed only on taste would pin whichever
+    # language asked first and serve it to the other — a French reason returned for an English
+    # request, forever. The persistent L2 (title_explanation rows) inherits this key, so the same
+    # split holds across restarts.
+    raw = f"{_PROMPT_VERSION}|{language}|{taste.get('summary') or ''}"
     # The anchor segment is appended only when present, so an un-anchored reason keeps the exact
     # same fingerprint it had before anchors existed — only anchored reasons get their own cache
     # bucket (the same title explained "because you watched Dune" vs "...Her" must differ).
-    raw = f"{_PROMPT_VERSION}|{taste.get('summary') or ''}"
     if anchor is not None:
         raw = f"{raw}|anchor={anchor.title_id}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -287,7 +296,7 @@ class Explainer:
         decided sequentially — so spend is deterministic and front-loaded onto the top-ranked
         items — then fired concurrently.
         """
-        fingerprint = _taste_fingerprint(taste)
+        fingerprint = _taste_fingerprint(taste, language=self.language)
         texts: list[str | None] = [None] * len(recommendations)
         to_generate: list[tuple[int, Recommendation, tuple[str, bool, str]]] = []
         for i, rec in enumerate(recommendations):
@@ -380,7 +389,7 @@ def stream_lazy_reason(
     ``anchor`` (the "because you watched X" seed, when the card was opened from such a row) is
     folded into both the prompt and the cache key, so the same title gets a distinct, sharper
     reason per anchor — and the template fallback stays anchor-agnostic (it can't leak plot)."""
-    key = ("reason", str(rec.title_id), _taste_fingerprint(taste, anchor))
+    key = ("reason", str(rec.title_id), _taste_fingerprint(taste, anchor, language))
     if cache is not None and (hit := cache.get(key)) is not None:
         yield str(hit)
         return

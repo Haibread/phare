@@ -402,14 +402,16 @@ to explain cards nobody opens**:
 - **The LLM reason is generated lazily, per title.** When a detail sheet opens, the frontend calls
   `GET /profiles/{id}/titles/{titleId}/explanation`, which generates one workhorse-model reason
   ([`recommend/explain.py`](../backend/src/phare/recommend/explain.py)), spoiler-checks it, and
-  **caches** it (keyed by `(title, taste summary)`) so re-opening is free. The cache is two-tier: an
-  in-process layer over a durable `title_explanation` Postgres row, so an accepted reason **survives
-  restarts and replicas** — it's generated once per taste version, not re-spent every time the
-  process recycles. It self-invalidates when taste changes (new fingerprint → new row) **and when
-  the explanation prompt itself changes** (a prompt-version constant is folded into the fingerprint,
-  so a wording change re-generates fresh blurbs on the next open instead of serving stale cached
-  ones). Offline, it returns the template. The sheet shows the template immediately and swaps in the
-  richer reason when it arrives.
+  **caches** it (keyed by `(title, request language, taste summary)`) so re-opening is free. The
+  cache is two-tier: an in-process layer over a durable `title_explanation` Postgres row, so an
+  accepted reason **survives restarts and replicas** — it's generated once per taste version, not
+  re-spent every time the process recycles. The **request language is part of the key**: a reason is
+  written in the reader's language, so an English and a French reader each get (and cache) their own
+  text for the same title — the language that asked first never pins the other. It self-invalidates
+  when taste changes (new fingerprint → new row) **and when the explanation prompt itself changes** (a
+  prompt-version constant is folded into the fingerprint, so a wording change re-generates fresh
+  blurbs on the next open instead of serving stale cached ones). Offline, it returns the template.
+  The sheet shows the template immediately and swaps in the richer reason when it arrives.
 - **The reason is personalised, not a synopsis.** The prompt is fed the viewer's own taste — their
   stated likes and the specific genre affinity this title shares (the concrete reason it scored) —
   and is told to address them as "you" and open from that connection ("Since you lean toward …").

@@ -126,6 +126,15 @@ def test_anchor_sharpens_the_prompt_and_gets_its_own_cache_bucket() -> None:
     assert _taste_fingerprint(taste) == bare  # ...while the un-anchored key is unchanged
 
 
+def test_language_is_folded_into_the_cache_fingerprint() -> None:
+    # An explanation is generated in the reader's language, so the cache key must split on it —
+    # otherwise whoever asks first pins the language and the other reader gets the wrong one.
+    taste = {"summary": "loves cerebral sci-fi"}
+    assert _taste_fingerprint(taste, language="en") != _taste_fingerprint(taste, language="fr")
+    # The default keeps the pre-language key stable (English is DEFAULT_LANGUAGE).
+    assert _taste_fingerprint(taste) == _taste_fingerprint(taste, language="en")
+
+
 def test_prompt_version_is_folded_into_the_cache_fingerprint() -> None:
     # A prompt-wording change must invalidate previously cached blurbs (in-process + Postgres),
     # otherwise a deploy keeps serving stale phrasing until taste happens to change. The version is
@@ -266,6 +275,40 @@ def test_lazy_reason_persists_and_then_replays_without_the_model(db_session: Ses
     )
     assert replay == first
     assert cold.prompts == []  # the durable cache spared the workhorse call
+
+
+def test_lazy_reason_caches_per_language(db_session: Session) -> None:
+    # Reproduces the live bug: asking in French then English must not serve the cached French text
+    # to the English reader. Each language is its own cache entry, generated and replayed in kind.
+    title = Title(kind=TitleKind.movie, title="Tenet", year=2020, genres=["Thriller"])
+    db_session.add(title)
+    db_session.flush()
+    rec = Recommendation(
+        title_id=title.id, title="Tenet", kind="movie", year=2020, genres=["Thriller"], score=0.8
+    )
+    taste = {"summary": "loves tense thrillers"}
+    cache = PersistentReasonCache(db_session, TTLCache(ttl=3600))
+
+    fr_llm = FakeLLMProvider(completion="Un thriller tendu taillé pour vos goûts.")
+    fr = "".join(stream_lazy_reason(rec, taste, fr_llm, cache, language="fr"))
+    assert fr == "Un thriller tendu taillé pour vos goûts."
+
+    # Same title + taste, but in English: a cache miss (distinct key), so the model runs again and
+    # the English reader gets English — not the cached French text.
+    en_llm = FakeLLMProvider(completion="A taut thriller right up your alley.")
+    en = "".join(stream_lazy_reason(rec, taste, en_llm, cache, language="en"))
+    assert en == "A taut thriller right up your alley."
+    assert len(en_llm.prompts) == 1  # not served from the French entry
+
+    # Each language now replays its own text from the cache, no further model calls.
+    replay_fr = "".join(
+        stream_lazy_reason(rec, taste, FakeLLMProvider(completion="X"), cache, language="fr")
+    )
+    replay_en = "".join(
+        stream_lazy_reason(rec, taste, FakeLLMProvider(completion="Y"), cache, language="en")
+    )
+    assert replay_fr == fr
+    assert replay_en == en
 
 
 # --- G2: a transient LLM error must not cache the template forever (mission M2.4) --------------
