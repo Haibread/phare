@@ -19,6 +19,22 @@ def test_suite_pins_closed_registration() -> None:
     assert get_settings().registration_open is False
 
 
+def test_suite_disables_env_file_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The repo-root ``.env`` must not leak into the suite even for a var no test set. conftest
+    points ``Settings.model_config.env_file`` at nothing, so pydantic-settings never falls back to
+    the file — a var absent from the environment reads as unset, not as the developer's live value.
+
+    Guards the hermeticity hole from a real ``.env`` (live Trakt/LLM creds): a test that ``delenv``s
+    a credential used to re-expose the file's value and hit the network. If this assertion fails,
+    that guard was removed and the suite is no longer hermetic against ``.env``.
+    """
+    assert Settings.model_config["env_file"] is None
+    # And it actually takes effect: a fresh Settings with a credential deleted from the environment
+    # comes back unset, not populated from the repo .env.
+    monkeypatch.delenv("TRAKT_CLIENT_ID", raising=False)
+    assert Settings().trakt_client_id is None
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

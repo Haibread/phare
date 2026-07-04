@@ -27,6 +27,15 @@ from phare.db.models import Profile, User
 # make the suite hit the network. Env vars override .env in pydantic-settings, so setting them here
 # wins over the file. Done unless the opt-in live tests are requested (PHARE_LIVE_LLM=1).
 if not os.environ.get("PHARE_LIVE_LLM"):
+    # Cut the repo-root .env off at the root: pydantic-settings' env_file is a *fallback* consulted
+    # whenever a var is absent from the environment, so blanking vars below isn't enough — a test
+    # that delenv()s one (e.g. test_trakt_oauth's "requires credentials") re-exposes the .env value
+    # and reads the developer's live creds. Pointing model_config.env_file at nothing makes every
+    # Settings()/get_settings() in the suite ignore the file entirely, for *all* vars, not just the
+    # ones enumerated below. (The live-LLM opt-in keeps the .env so those tests can use real creds.)
+    from phare.core.config import Settings
+
+    Settings.model_config["env_file"] = None
     # Credentials: blank to empty (these are str|None, so "" reads as unset = offline).
     for _var in (
         "LLM_API_KEY",
