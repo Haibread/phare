@@ -20,13 +20,14 @@ _BASE_OVERVIEW = "Base-language overview."
 _LOCALIZED_OVERVIEW = "Localized synopsis in the request language."
 
 
-def _meta() -> TitleMetadata:
+def _meta(runtime_minutes: int | None = None) -> TitleMetadata:
     return TitleMetadata(
         kind=TitleKind.movie,
         tmdb_id=42,
         title="Dune",
         overview=_LOCALIZED_OVERVIEW,
         genres=["Science-Fiction"],
+        runtime_minutes=runtime_minutes,
     )
 
 
@@ -58,15 +59,18 @@ def _client(session: Session, provider: object) -> TestClient:
     )
 
 
-def _seed_title(session: Session) -> Title:
+def _seed_title(
+    session: Session, *, runtime_minutes: int | None = None, tmdb_id: int | None = 42
+) -> Title:
     title = Title(
         kind=TitleKind.movie,
         title="Dune",
         year=2021,
-        tmdb_id=42,
+        tmdb_id=tmdb_id,
         genres=["Sci-Fi"],
         keywords=["desert"],
         overview=_BASE_OVERVIEW,
+        runtime_minutes=runtime_minutes,
     )
     session.add(title)
     session.flush()
@@ -87,8 +91,10 @@ def test_first_open_localizes_and_caches(db_session: Session) -> None:
 
 
 def test_second_open_serves_cache_without_touching_tmdb(db_session: Session) -> None:
-    title = _seed_title(db_session)
-    provider = _CountingProvider(_meta())
+    # Runtime is already known, so the runtime backfill is a no-op and this isolates the
+    # localization cache: the second open must serve the synopsis with no TMDB fetch at all.
+    title = _seed_title(db_session, runtime_minutes=155)
+    provider = _CountingProvider(_meta(runtime_minutes=155))
     client = _client(db_session, provider)
 
     first = client.get(f"/titles/{title.id}").json()
@@ -120,6 +126,69 @@ def test_no_tmdb_provider_serves_base_metadata(db_session: Session) -> None:
 
     assert body["overview"] == _BASE_OVERVIEW  # offline: no localization, no crash
     assert db_session.get(TitleLocalization, {"title_id": title.id, "language": "en"}) is None
+
+
+def test_detail_backfills_missing_runtime_from_tmdb(db_session: Session) -> None:
+    # The bug: a discover-imported mainstream title (Inception) sits at runtime_minutes = NULL, and
+    # the detail read never healed it — the recommend path only backfills for runtime-cap turns. The
+    # detail open must fill it lazily from TMDB and persist it.
+    title = _seed_title(db_session, runtime_minutes=None)
+    provider = _CountingProvider(_meta(runtime_minutes=148))
+
+    body = _client(db_session, provider).get(f"/titles/{title.id}").json()
+
+    assert body["runtimeMinutes"] == 148
+    # Persisted permanently: a fresh read of the row sees the filled runtime.
+    db_session.expire(title)
+    assert db_session.get(Title, title.id).runtime_minutes == 148
+
+
+def test_detail_backfills_runtime_from_a_warm_localization_cache(db_session: Session) -> None:
+    # The fallback path: localization is already cached (so it serves without a TMDB fetch), but the
+    # runtime is still NULL. The dedicated backfill fetch must heal it even though localization
+    # didn't consult the provider this request.
+    title = _seed_title(db_session, runtime_minutes=None)
+    # Warm the localization cache without ever recording a runtime (meta carries none).
+    _client(db_session, _CountingProvider(_meta())).get(f"/titles/{title.id}")
+    db_session.expire(title)
+    assert (
+        db_session.get(Title, title.id).runtime_minutes is None
+    )  # still NULL after the first open
+
+    provider = _CountingProvider(_meta(runtime_minutes=148))
+    body = _client(db_session, provider).get(f"/titles/{title.id}").json()
+
+    assert body["runtimeMinutes"] == 148
+    assert provider.calls == 1  # exactly one fetch, and it healed the runtime
+
+
+def test_detail_does_not_refetch_runtime_when_already_known(db_session: Session) -> None:
+    # Runtime already present → no runtime fetch is spent for it. The localization fetch may still
+    # happen; what matters is the stored runtime survives (not overwritten by the provider's value).
+    title = _seed_title(db_session, runtime_minutes=120)
+    provider = _CountingProvider(_meta(runtime_minutes=999))
+
+    body = _client(db_session, provider).get(f"/titles/{title.id}").json()
+
+    assert body["runtimeMinutes"] == 120  # the stored runtime, not the provider's 999
+
+
+def test_detail_runtime_survives_a_tmdb_outage(db_session: Session) -> None:
+    # A flaky TMDB during the backfill must not break the detail view — runtime just stays NULL.
+    title = _seed_title(db_session, runtime_minutes=None)
+
+    resp = _client(db_session, _FailingProvider()).get(f"/titles/{title.id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["runtimeMinutes"] is None
+
+
+def test_detail_runtime_stays_null_without_a_tmdb_key(db_session: Session) -> None:
+    title = _seed_title(db_session, runtime_minutes=None)
+
+    body = _client(db_session, None).get(f"/titles/{title.id}").json()
+
+    assert body["runtimeMinutes"] is None  # offline: no backfill, no crash
 
 
 def test_unknown_title_is_404(db_session: Session) -> None:

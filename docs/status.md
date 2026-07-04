@@ -84,11 +84,13 @@ A compact snapshot of what's built and what's next. Update as features land.
 - **Seerr action provider** — request hand-off + library availability: `SeerrProvider` (request +
   `mediaInfo` status), `POST /profiles/{id}/{availability,requests}` (by internal titleId; TMDB id
   resolved server-side) and a `sources/seerr/connect` endpoint (creds encrypted in `source_token`,
-  env fallback). Browse cards show **Request / Queued / Available** when a Seerr is connected;
-  picker gains a "requests & availability" group.
+  env fallback). The **Request / Queued / Available** control lives in a title's detail sheet (a card
+  has one action — open the sheet), where it shows when a Seerr is connected; picker gains a
+  "requests & availability" group.
 - **Catalog search** — a header search icon opens a search surface. `POST /profiles/{id}/catalog/
   search` matches the local catalog and, when TMDB is configured, pulls live matches in first
-  (upserting them so they're requestable); results reuse the poster card + Seerr request action.
+  (upserting them so they're requestable); results reuse the poster card, whose detail sheet carries
+  the Seerr request action.
 - **Tool-using chat agent + memory** — chat is now a read *and write* path (when an LLM is
   configured; offline stays read-only). A planner picks tools (`recommend` / `log_signal` /
   `set_commitment` / `resolve_commitment` / `remember` / `update_taste`) executed deterministically

@@ -5,7 +5,6 @@ import { useEmbeddingsDegraded } from "../lib/degraded";
 import { fitFor } from "../lib/fit";
 import { posterTint } from "../lib/poster";
 import { translateGenre } from "../lib/tasteVocab";
-import { TitleAction } from "./Availability";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 import { TitleDetailSheet } from "./TitleDetailSheet";
 import styles from "./components.module.css";
@@ -30,8 +29,8 @@ export function PosterCard({
   const showPoster = item.posterUrl !== null && !imgFailed;
 
   // A card has exactly one action: open the detail sheet. The destructive "not interested" signal
-  // moved into the sheet (round 3), off the card's primary click target where a stray tap was too
-  // easy — especially on touch.
+  // (round 3) and the request/availability action (round 4) both moved into the sheet, off the
+  // card's primary click target where a stray tap was too easy — especially on touch.
   return (
     <article className={styles.card} data-testid="rec-card">
       {/* Poster + title open the detail sheet; the request button below stays separately clickable.
@@ -99,7 +98,6 @@ export function PosterCard({
         </div>
       </button>
       {showFit && <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />}
-      <TitleAction titleId={item.titleId} />
       <TitleDetailSheet
         item={item}
         open={detailOpen}

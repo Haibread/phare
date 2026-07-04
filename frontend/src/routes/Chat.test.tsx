@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatStreamHandlers, ChatStreamOptions } from "../api";
+import type { ChatStreamHandlers, ChatStreamOptions, RecommendationItem } from "../api";
 import { ChatProvider } from "../app/ChatContext";
 import { ProfileProvider } from "../app/ProfileContext";
-import { Chat } from "./Chat";
+import { Chat, citedTitleIds, orderByCitation } from "./Chat";
 
 vi.mock("../api", () => ({
   api: {
@@ -35,6 +35,67 @@ function renderChat() {
     </QueryClientProvider>,
   );
 }
+
+function item(overrides: Partial<RecommendationItem> = {}): RecommendationItem {
+  return {
+    titleId: crypto.randomUUID(),
+    title: "Arrival",
+    kind: "movie",
+    year: 2016,
+    genres: [],
+    score: 0.9,
+    isSwing: false,
+    confidence: 0.8,
+    explanation: null,
+    posterUrl: null,
+    components: {},
+    watched: false,
+    ...overrides,
+  };
+}
+
+describe("chat pick citation matching", () => {
+  it("matches a title named in the reply (case-insensitive, whole-word)", () => {
+    const items = [item({ titleId: "a", title: "Arrival" }), item({ titleId: "b", title: "Moon" })];
+    const cited = citedTitleIds("I'd start with arrival — it fits your taste.", items);
+    expect([...cited]).toEqual(["a"]);
+  });
+
+  it("does not match a short title mid-word", () => {
+    // "It" must not match inside "with"/"fits" — that's the whole point of the word-boundary guard.
+    const items = [item({ titleId: "a", title: "It" })];
+    expect(citedTitleIds("This fits with your taste.", items).size).toBe(0);
+    // …but a real mention still matches.
+    expect(citedTitleIds("Try It tonight.", items).has("a")).toBe(true);
+  });
+
+  it("does not crash on titles with regex-special characters", () => {
+    const items = [
+      item({ titleId: "a", title: "Amélie (2001)" }),
+      item({ titleId: "b", title: "What's Up, Doc?" }),
+      item({ titleId: "c", title: "[REC]" }),
+    ];
+    // No throw, and the literal titles still match when named.
+    expect(citedTitleIds("I loved Amélie (2001).", items).has("a")).toBe(true);
+    expect(citedTitleIds("Ever seen [REC]?", items).has("c")).toBe(true);
+  });
+
+  it("floats cited items to the front, stable otherwise", () => {
+    const items = [
+      item({ titleId: "a", title: "Moon" }),
+      item({ titleId: "b", title: "Arrival" }),
+      item({ titleId: "c", title: "Solaris" }),
+    ];
+    const cited = citedTitleIds("Go with Arrival.", items);
+    expect(orderByCitation(items, cited).map((i) => i.titleId)).toEqual(["b", "a", "c"]);
+  });
+
+  it("leaves order untouched when nothing is cited", () => {
+    const items = [item({ titleId: "a" }), item({ titleId: "b" })];
+    const order = orderByCitation(items, citedTitleIds("Here are some ideas.", items));
+    expect(order.map((i) => i.titleId)).toEqual(["a", "b"]);
+  });
+});
 
 describe("Chat write actions", () => {
   it("shows an undoable action chip after a streamed write and reverses it on undo", async () => {
@@ -203,6 +264,72 @@ describe("Chat write actions", () => {
     expect(followUp?.[1]).toBe("a series"); // the tapped chip is sent as the next message
     // The clarify turn had no picks, so its throwaway intent must NOT become an active filter.
     expect(followUp?.[2].activeIntent).toBeNull();
+  });
+
+  it("floats the cited pick to the front of the grid and tags it, once the reply settles", async () => {
+    mocked.chatOpening.mockResolvedValue({ greeting: null });
+    mocked.chatStream.mockImplementation(
+      async (_p: string, _m: string, _o: ChatStreamOptions, handlers: ChatStreamHandlers) => {
+        handlers.onMeta?.({
+          degraded: false,
+          intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
+          items: [
+            item({ titleId: "moon", title: "Moon" }),
+            item({ titleId: "arr", title: "Arrival" }),
+          ],
+          actions: [],
+          suggestions: [],
+        });
+        handlers.onDelta?.("I'd go with Arrival — it fits you.");
+        handlers.onDone?.();
+      },
+    );
+
+    renderChat();
+    fireEvent.change(screen.getByTestId("chat-input"), { target: { value: "sci-fi please" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+
+    // Exactly one pick is cited and tagged, and it's the first card in the grid.
+    const tag = await screen.findByTestId("chat-cited-tag");
+    expect(tag).toHaveTextContent("Recommended");
+    const grid = screen.getByTestId("chat-item-grid");
+    const first = grid.querySelector('[data-testid="chat-item-cited"]');
+    expect(first).toHaveTextContent("Arrival");
+    // The uncited pick keeps the plain testid.
+    expect(screen.getByTestId("chat-item")).toHaveTextContent("Moon");
+  });
+
+  it("leaves the grid order unchanged and untagged when the reply names no pick", async () => {
+    mocked.chatOpening.mockResolvedValue({ greeting: null });
+    mocked.chatStream.mockImplementation(
+      async (_p: string, _m: string, _o: ChatStreamOptions, handlers: ChatStreamHandlers) => {
+        handlers.onMeta?.({
+          degraded: false,
+          intent: { maxRuntime: null, includeGenres: [], excludeGenres: [], mood: null },
+          items: [
+            item({ titleId: "moon", title: "Moon" }),
+            item({ titleId: "arr", title: "Arrival" }),
+          ],
+          actions: [],
+          suggestions: [],
+        });
+        handlers.onDelta?.("Here are a few ideas for tonight.");
+        handlers.onDone?.();
+      },
+    );
+
+    renderChat();
+    fireEvent.change(screen.getByTestId("chat-input"), { target: { value: "surprise me" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+
+    await screen.findByText("Here are a few ideas for tonight.");
+    expect(screen.queryByTestId("chat-cited-tag")).toBeNull();
+    const grid = screen.getByTestId("chat-item-grid");
+    const titles = [...grid.querySelectorAll('[data-testid="chat-item"]')].map(
+      (el) => el.textContent,
+    );
+    expect(titles[0]).toContain("Moon"); // returned order preserved
+    expect(titles[1]).toContain("Arrival");
   });
 
   it("uses the proactive opening greeting when there are pending plans", async () => {

@@ -6,6 +6,7 @@
   "inputLabel": "Indique une humeur à l'agent",
   "inputPlaceholder": "p. ex. un truc drôle et court",
   "send": "Envoyer",
+  "recommended": "Recommandé",
   "undo": "annuler",
   "undone": "annulé",
   "reducedMode": "⚠ Mode basique — je n'ai pas pu tout traiter, j'ai donc simplement recommandé sans rien noter. Vérifie la configuration du modèle d'IA.",

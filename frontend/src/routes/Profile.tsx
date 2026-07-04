@@ -18,7 +18,7 @@ import {
   useTaste,
   useUpdateTaste,
 } from "../lib/queries";
-import { relativeTime } from "../lib/time";
+import { relativeTime, relativeTimeLocalized } from "../lib/time";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import { AccountCard } from "./AccountCard";
 import { Attributions } from "./Attributions";
@@ -43,7 +43,7 @@ function episodeLabel(item: HistoryItem): string {
 }
 
 export function Profile(): React.JSX.Element {
-  const { t } = useTranslation("profile");
+  const { t, i18n } = useTranslation("profile");
   const { t: tCommon } = useTranslation("common");
   const profileId = useProfileId();
   const qc = useQueryClient();
@@ -91,6 +91,20 @@ export function Profile(): React.JSX.Element {
             {t("taste.updatesAuto")}
           </span>
         </div>
+
+        {/* Freshness evidence for the "updates automatically" claim above. Null generatedAt means
+            the taste was never generated (fresh profile) — show nothing rather than a bogus time. */}
+        {taste.data?.generatedAt && (
+          <p
+            className="faint"
+            data-testid="taste-freshness"
+            style={{ fontSize: "0.75rem", marginTop: "calc(-1 * var(--sp-2))" }}
+          >
+            {t("taste.updatedAt", {
+              when: relativeTimeLocalized(taste.data.generatedAt, i18n.language),
+            })}
+          </p>
+        )}
 
         {taste.isPending ? (
           <CardSkeleton lines={4} />

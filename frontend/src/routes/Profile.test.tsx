@@ -127,6 +127,37 @@ describe("Profile taste generation", () => {
     expect(screen.queryByTestId("taste-empty")).toBeNull();
   });
 
+  it("shows a relative freshness line when the taste has a generatedAt", async () => {
+    mocked.getTaste.mockResolvedValueOnce({
+      summary: "Loves cerebral sci-fi",
+      structured: { likes: [], hard_avoids: [] },
+      confidence: 0.7,
+      userOverrides: {},
+      generatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2h ago
+    } as never);
+
+    renderProfile();
+
+    const freshness = await screen.findByTestId("taste-freshness");
+    // Localized via Intl.RelativeTimeFormat — assert the "updated … hours ago" shape, not exact copy.
+    expect(freshness).toHaveTextContent(/updated .*2 hours ago/);
+  });
+
+  it("shows no freshness line when the taste was never generated (null generatedAt)", async () => {
+    mocked.getTaste.mockResolvedValueOnce({
+      summary: "Loves cerebral sci-fi",
+      structured: { likes: [], hard_avoids: [] },
+      confidence: 0.7,
+      userOverrides: {},
+      generatedAt: null,
+    } as never);
+
+    renderProfile();
+
+    expect(await screen.findByTestId("taste-summary")).toBeInTheDocument();
+    expect(screen.queryByTestId("taste-freshness")).toBeNull();
+  });
+
   it("offers Regenerate even when a taste profile already exists", async () => {
     // The bug: the button only showed in the empty state, so a user with taste had no way to
     // recompute it. It must always be available — labelled "Regenerate" once taste exists.
