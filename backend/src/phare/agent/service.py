@@ -66,11 +66,43 @@ def intent_filter(intent: ChatIntent):
     def apply(candidates: list[Candidate]) -> list[Candidate]:
         result = candidates
         if intent.max_runtime is not None:
-            result = [
+            # A candidate with a known runtime must fit the cap. One with an *unknown* runtime is a
+            # coin flip against "under N minutes" — a 167-minute film with a NULL runtime silently
+            # passed a "under 2 hours" request before. tool_recommend already runs the TMDB runtime
+            # backfill on a capped turn, so a still-NULL runtime here is one TMDB couldn't fill;
+            # dropping it keeps the cap honest. But only when known-fitting titles remain — offline
+            # (no backfill ran, so the whole pool is NULL) dropping them all would empty the slate,
+            # a worse failure than a loose cap; there we keep the NULL-runtime pool and flag it.
+            known_fit = [
                 c
                 for c in result
-                if c.runtime_minutes is None or c.runtime_minutes <= intent.max_runtime
+                if c.runtime_minutes is not None and c.runtime_minutes <= intent.max_runtime
             ]
+            dropped_unknown = sum(1 for c in result if c.runtime_minutes is None)
+            if known_fit:
+                if dropped_unknown:
+                    record_fallback(
+                        "intent_filter",
+                        "runtime_unknown_dropped",
+                        dropped=dropped_unknown,
+                        max_runtime=intent.max_runtime,
+                    )
+                result = known_fit
+            else:
+                # No known-fitting title — keep the unknown-runtime pool rather than empty the
+                # slate, but make the loosened cap visible (the runtimes never got backfilled).
+                result = [
+                    c
+                    for c in result
+                    if c.runtime_minutes is None or c.runtime_minutes <= intent.max_runtime
+                ]
+                if dropped_unknown:
+                    record_fallback(
+                        "intent_filter",
+                        "runtime_cap_unenforced",
+                        unknown=dropped_unknown,
+                        max_runtime=intent.max_runtime,
+                    )
         if intent.kind is not None:
             # Hard filter — "a movie for tonight" must not return a show (review A5).
             result = [c for c in result if c.kind == intent.kind]

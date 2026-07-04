@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from unittest import mock
 
 from phare.recommend.reranker import rerank, score_candidate
 from phare.recommend.schema import Candidate
@@ -199,15 +200,21 @@ def test_score_components_are_transparent() -> None:
 def test_vote_mix_orders_the_slate_by_score_not_votes() -> None:
     # The vote mix picks *which* titles are on the slate (a spread of known-ness); ordering is by
     # score, so the best match leads even when it's the least-voted (review A1: votes were burying
-    # the strongest pick at the bottom of the strip).
+    # the strongest pick at the bottom of the strip). Filler candidates spread across the similarity
+    # range keep the three titles-of-interest in the mid-pool (all clearing the relevance floor
+    # tested separately below), so this asserts ordering only.
+    filler = [_cand(title=f"pad{i}", sim=0.40 + 0.02 * i, vote_count=1_000) for i in range(11)]
     cands = [
-        _cand(title="obscure", sim=0.9, vote_count=50),
-        _cand(title="megahit", sim=0.1, vote_count=30_000),
-        _cand(title="midsize", sim=0.5, vote_count=900),
+        _cand(title="obscure", sim=0.52, vote_count=50),
+        _cand(title="megahit", sim=0.48, vote_count=30_000),
+        _cand(title="midsize", sim=0.50, vote_count=900),
+        *filler,
     ]
-    out = rerank(cands, {}, k=3, vote_mix=True)
-    # Score = (sim+1)/2 with no penalties → obscure 0.95 > midsize 0.75 > megahit 0.55.
-    assert [r.title for r in out] == ["obscure", "midsize", "megahit"]
+    out = rerank(cands, {}, k=14, vote_mix=True)
+    titles = [r.title for r in out]
+    # Score = (sim+1)/2 with no penalties: obscure 0.76 > midsize 0.75 > megahit 0.74. Ranking is by
+    # score, not votes, so the least-voted obscure leads and the most-voted megahit trails.
+    assert titles.index("obscure") < titles.index("midsize") < titles.index("megahit")
 
 
 def test_quality_penalty_demotes_poorly_rated_title() -> None:
@@ -245,6 +252,50 @@ def test_vote_mix_backfills_when_a_tier_is_empty() -> None:
     cands = [_cand(title=f"low{i}", sim=0.5, vote_count=20 + i) for i in range(6)]
     out = rerank(cands, {}, k=5, vote_mix=True)
     assert len(out) == 5
+
+
+def test_vote_mix_trims_weak_tail_instead_of_padding_to_k() -> None:
+    # Principle 4 (honesty over engagement): a chat slate must not be padded to k with weak-fit
+    # tail candidates. A pool split into strong matches and a tail of near-misses (their
+    # pool-relative similarity below the floor) yields a shorter, honest slate — not twelve items
+    # where the last few are there only to reach twelve (the reported "Dude, Where's My Car?" tail).
+    strong = [_cand(title=f"fit{i}", sim=0.80 - i * 0.005, vote_count=3_000) for i in range(6)]
+    weak = [_cand(title=f"miss{i}", sim=0.20 - i * 0.005, vote_count=1_500) for i in range(6)]
+    out = rerank([*strong, *weak], {}, k=12, vote_mix=True)
+    titles = {r.title for r in out}
+    assert len(out) == 6  # trimmed to the strong fits, not padded to 12
+    assert all(t.startswith("fit") for t in titles)  # the strong fits survive
+    assert not any(t.startswith("miss") for t in titles)  # the weak tail is dropped
+
+
+def test_vote_mix_does_not_trim_a_flat_pool_it_cannot_measure() -> None:
+    # The floor reads pool-relative similarity; when every candidate is equally similar there is no
+    # spread to normalise, so _relative_similarities hands back a neutral 0.5 for all and nothing is
+    # trimmed. We never drop a slate we couldn't measure the spread of (degrade gracefully at N=1).
+    cands = [_cand(title=f"t{i}", sim=0.5, vote_count=1_000) for i in range(12)]
+    out = rerank(cands, {}, k=12, vote_mix=True)
+    assert len(out) == 12
+
+
+def test_vote_mix_trim_records_a_fallback() -> None:
+    # A trimmed slate must be visible, never a silent quality erosion (G1). The reranker records a
+    # `reranker.chat_slate_trimmed` fallback whenever the floor drops the slate below requested k.
+    strong = [_cand(title=f"fit{i}", sim=0.80 - i * 0.005, vote_count=3_000) for i in range(6)]
+    weak = [_cand(title=f"miss{i}", sim=0.20 - i * 0.005, vote_count=1_500) for i in range(6)]
+    with mock.patch("phare.recommend.reranker.record_fallback") as record:
+        rerank([*strong, *weak], {}, k=12, vote_mix=True)
+    record.assert_called_once()
+    assert record.call_args.args == ("reranker", "chat_slate_trimmed")
+
+
+def test_vote_mix_no_fallback_when_pool_smaller_than_k() -> None:
+    # Asking for more than the pool holds is not a relevance trim — a 6-candidate pool returning 6
+    # for k=12 must not record a trim fallback (it would cry wolf on every thin catalog).
+    cands = [_cand(title=f"t{i}", sim=0.5, vote_count=1_000) for i in range(6)]
+    with mock.patch("phare.recommend.reranker.record_fallback") as record:
+        out = rerank(cands, {}, k=12, vote_mix=True)
+    assert len(out) == 6
+    record.assert_not_called()
 
 
 def test_unproven_low_vote_title_confidence_is_capped() -> None:

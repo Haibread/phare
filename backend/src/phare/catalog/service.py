@@ -154,6 +154,7 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
                 keywords=meta.keywords,
                 popularity=meta.popularity,
                 vote_count=meta.vote_count,
+                vote_average=meta.vote_average,
             )
         )
         created += 1

@@ -23,7 +23,7 @@ from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.backfill import schedule_embedding_backfill
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
-from phare.providers.types import LLMProvider, MetadataProvider
+from phare.providers.types import LLMProvider, MetadataProvider, TitleMetadata
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
 from phare.recommend.explain import _EXPLANATION_CACHE, Explainer
@@ -151,6 +151,12 @@ class RecommendationService:
         worker threads do *only* HTTP, never touch the session), persists each runtime permanently,
         and returns the pool with the fetched values applied. Best-effort: a failed fetch is logged
         and skipped. The caller owns the commit.
+
+        The same per-title fetch already carries the title's ``vote_average`` / ``vote_count``, so
+        while we're here we heal those too when the row is missing them — the broad discover import
+        (and, historically, a bug in the insert path) left most titles with a NULL ``vote_average``,
+        which silently disabled the re-ranker's quality floor. Backfilling on the read path repairs
+        the quality signal for the titles being ranked, as the catalog is used (principle 8).
         """
         missing = [c for c in candidates if c.runtime_minutes is None][:READ_RUNTIME_CAP]
         if not missing:  # pool already fully runtime'd (the common case once enriched) — no DB hit
@@ -165,21 +171,29 @@ class RecommendationService:
         if not fetchable:
             return candidates
 
-        def fetch(item: tuple[uuid.UUID, int, object]) -> tuple[uuid.UUID, int | None]:
+        def fetch(item: tuple[uuid.UUID, int, object]) -> tuple[uuid.UUID, TitleMetadata | None]:
             title_id, tmdb_id, kind = item
             try:
                 meta = source.get_title(tmdb_id, kind)  # type: ignore[arg-type]
             except Exception:  # noqa: BLE001 - a flaky fetch must not sink the turn
                 logger.warning("recommend.runtime_fetch_failed", extra={"title_id": str(title_id)})
                 return title_id, None
-            return title_id, (meta.runtime_minutes if meta is not None else None)
+            return title_id, meta
 
         runtimes: dict[uuid.UUID, int] = {}
         with ThreadPoolExecutor(max_workers=_RUNTIME_FETCH_WORKERS) as pool:
-            for title_id, runtime in pool.map(fetch, fetchable):
-                if runtime is not None:
-                    by_id[title_id].runtime_minutes = runtime  # main thread → safe to write
-                    runtimes[title_id] = runtime
+            for title_id, meta in pool.map(fetch, fetchable):
+                if meta is None:
+                    continue
+                row = by_id[title_id]  # main thread → safe to write
+                if meta.runtime_minutes is not None:
+                    row.runtime_minutes = meta.runtime_minutes
+                    runtimes[title_id] = meta.runtime_minutes
+                # Heal the quality signal too, only when the row is missing it (never clobber).
+                if row.vote_average is None and meta.vote_average is not None:
+                    row.vote_average = meta.vote_average
+                if row.vote_count is None and meta.vote_count is not None:
+                    row.vote_count = meta.vote_count
         if not runtimes:
             return candidates
         logger.info("recommend.runtimes_enriched", extra={"enriched_count": len(runtimes)})
