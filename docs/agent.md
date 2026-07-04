@@ -88,7 +88,10 @@ bounded to ≤1 agent-model call plus a couple of workhorse calls. See [`configu
 ## Writing signals — auto-write + undo
 
 The agent registers what you tell it immediately and surfaces each write as an **undoable action**
-(`✓ logged Dune as loved · undo`). A mis-parse can never silently poison taste:
+(`✓ logged Dune as loved · undo`). The action summary is **localised to the conversation's
+language** (built server-side via the i18n catalog, keyed off the request's `Accept-Language`), so a
+French turn reads `✓ j'ai enregistré Dune (2021) comme adoré` rather than an English chip under a
+French reply. A mis-parse can never silently poison taste:
 
 - "I already saw *Dune* and loved it" → a `watched` + `liked` event (`source="chat"`); Dune drops
   from recs and pulls the taste centroid.

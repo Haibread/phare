@@ -20,6 +20,7 @@ from phare.agent import memory as memory_store
 from phare.agent.schema import AgentAction, AgentPlan, ChatIntent
 from phare.catalog.service import CatalogMetadataSource, search_titles
 from phare.core.fallback import record_fallback
+from phare.core.i18n import Language, translate
 from phare.db.models import (
     CommitmentStatus,
     EventType,
@@ -58,6 +59,12 @@ class ToolContext:
     now: datetime
     # TMDB provider: resolves named titles (search) and backfills candidate runtimes (get_title).
     metadata: CatalogMetadataSource | None
+
+    @property
+    def language(self) -> Language:
+        """The conversation's language — used to localise the action-chip summaries the tools
+        build. Resolved once per turn from the request's Accept-Language on the recommender."""
+        return self.recommender.language
 
 
 @dataclass
@@ -150,6 +157,16 @@ def _title_label(title: Title) -> str:
     return f"{title.title} ({title.year})" if title.year else title.title
 
 
+def _signal_word(signal: str, language: Language) -> str:
+    """Localised signal word for the "logged … as X" chip. Falls back to the raw signal for any
+    value not in the catalog (the planner is held to the known set, so this is just a backstop)."""
+    key = f"action.signal.{signal}"
+    return translate(language, key) if key in _SIGNAL_MESSAGE_KEYS else signal
+
+
+_SIGNAL_MESSAGE_KEYS = frozenset(f"action.signal.{s}" for s in _SIGNAL_EVENTS)
+
+
 def _write_event(
     ctx: ToolContext,
     title_id: uuid.UUID,
@@ -238,7 +255,13 @@ def tool_log_signal(ctx: ToolContext, args: dict, result: ExecutionResult) -> No
         AgentAction(
             kind="logged_signal",
             # Name the resolved title + year so the reply confirms exactly what was written (H3b).
-            summary=f"logged {_title_label(title)} as {signal}",
+            # Localised to the conversation language — the chip is rendered verbatim by the client.
+            summary=translate(
+                ctx.language,
+                "action.logged",
+                label=_title_label(title),
+                signal=_signal_word(signal, ctx.language),
+            ),
             undo_token=",".join(f"event:{cid}" for cid in created),
         )
     )
@@ -256,7 +279,7 @@ def tool_set_commitment(ctx: ToolContext, args: dict, result: ExecutionResult) -
     result.actions.append(
         AgentAction(
             kind="commitment",
-            summary=f"added {title.title} to your watch plans",
+            summary=translate(ctx.language, "action.commitment", label=title.title),
             undo_token=f"commitment:{commitment.id}",
         )
     )
@@ -283,7 +306,7 @@ def tool_resolve_commitment(ctx: ToolContext, args: dict, result: ExecutionResul
         commitments_store.resolve_commitment(
             commitment, status=CommitmentStatus.dropped, resolved_at=ctx.now
         )
-        summary = f"marked {title.title} as dropped"
+        summary = translate(ctx.language, "action.markedDropped", label=title.title)
     else:
         commitments_store.resolve_commitment(
             commitment, status=CommitmentStatus.watched, resolved_at=ctx.now
@@ -297,7 +320,13 @@ def tool_resolve_commitment(ctx: ToolContext, args: dict, result: ExecutionResul
             like_id = _write_event(ctx, title.id, EventType.liked, text=None, rating=None)
             tokens.append(f"event:{like_id}")
         result.taste_dirty = True
-        summary = f"marked {title.title} watched" + (f" — {reaction}" if reaction else "")
+        summary = (
+            translate(
+                ctx.language, "action.markedWatchedReaction", label=title.title, reaction=reaction
+            )
+            if reaction
+            else translate(ctx.language, "action.markedWatched", label=title.title)
+        )
     result.actions.append(
         AgentAction(kind="resolved", summary=summary, undo_token=",".join(tokens))
     )
@@ -326,7 +355,11 @@ def tool_remember(ctx: ToolContext, args: dict, result: ExecutionResult) -> None
         ctx.session, ctx.profile_id, text, kind=kind, expires_at=expires_at, source="chat"
     )
     result.actions.append(
-        AgentAction(kind="memory", summary=f"remembered: {text}", undo_token=f"note:{note.id}")
+        AgentAction(
+            kind="memory",
+            summary=translate(ctx.language, "action.remembered", text=text),
+            undo_token=f"note:{note.id}",
+        )
     )
 
 
@@ -359,7 +392,7 @@ def tool_update_taste(ctx: ToolContext, args: dict, result: ExecutionResult) -> 
     result.actions.append(
         AgentAction(
             kind="taste",
-            summary=f"noted a lasting preference: {added}",
+            summary=translate(ctx.language, "action.taste", added=added),
             undo_token=",".join(tokens),
         )
     )

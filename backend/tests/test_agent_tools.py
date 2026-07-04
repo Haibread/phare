@@ -33,12 +33,13 @@ from phare.recommend.service import RecommendationService
 _NOW = datetime(2026, 6, 20, tzinfo=UTC)
 
 
-def _recommender(session: Session) -> RecommendationService:
+def _recommender(session: Session, language: str = "en") -> RecommendationService:
     return RecommendationService(
         session,
         embed_provider=LocalHashEmbeddingProvider(),
         embed_model_version=LOCAL_MODEL_VERSION,
         chat_llm=None,
+        language=language,
     )
 
 
@@ -172,6 +173,34 @@ def test_log_signal_resolves_exact_popular_title_over_obscure_near_name(
     events = db_session.scalars(select(WatchEvent).where(WatchEvent.profile_id == profile_id)).all()
     assert events and all(e.title_id == get_out.id for e in events)
     assert any("Get Out" in a.summary and "2017" in a.summary for a in result.actions)
+
+
+def test_log_signal_summary_follows_the_conversation_language(db_session: Session) -> None:
+    # Regression: a French chat turn showed the reply in French but the action chip stayed English
+    # ("logged Tenet (2020) as watched"). The summary is built server-side and rendered verbatim, so
+    # it must honour the request language.
+    profile_id = _seed(db_session)
+    title = Title(kind=TitleKind.movie, tmdb_id=401, title="Tenet", year=2020, vote_count=8000)
+    db_session.add(title)
+    db_session.flush()
+
+    plan = AgentPlan(
+        calls=[ToolCall(tool="log_signal", args={"title": "Tenet", "signal": "loved"})]
+    )
+    ctx = ToolContext(
+        session=db_session,
+        profile_id=profile_id,
+        recommender=_recommender(db_session, language="fr"),
+        now=_NOW,
+        metadata=None,
+    )
+    result = execute_plan(ctx, plan)
+
+    [action] = result.actions
+    assert action.summary == "j'ai enregistré Tenet (2020) comme adoré"
+    # English stays the default (English recommender), proving it's language-driven not hard-coded.
+    en = _run(db_session, profile_id, "log_signal", {"title": "Tenet", "signal": "watched"})
+    assert en.actions[0].summary == "logged Tenet (2020) as watched"
 
 
 def test_log_signal_prefers_a_recently_recommended_title(db_session: Session) -> None:

@@ -152,6 +152,41 @@ _MESSAGES: dict[str, dict[Language, str]] = {
     },
     "chat.statusWorking": {"en": "Working on it…", "fr": "Je m'en occupe…"},
     "chat.statusComposing": {"en": "Writing a reply…", "fr": "Je rédige la réponse…"},
+    # Chat action-chip summaries. Built server-side after a tool writes, and rendered verbatim by
+    # the frontend — so they must follow the conversation's language, not sit in English under a
+    # French reply. The title/year (label) and the free text interpolate in as-is. The signal word
+    # is itself localised via the action.signal.* keys below (loved/watched/liked/…), so "logged
+    # Tenet (2020) as watched" reads "j'ai enregistré Tenet (2020) comme adoré".
+    "action.logged": {
+        "en": "logged {label} as {signal}",
+        "fr": "j'ai enregistré {label} comme {signal}",
+    },
+    "action.commitment": {
+        "en": "added {label} to your watch plans",
+        "fr": "j'ai ajouté {label} à vos projets de visionnage",
+    },
+    "action.markedDropped": {
+        "en": "marked {label} as dropped",
+        "fr": "j'ai marqué {label} comme abandonné",
+    },
+    "action.markedWatched": {"en": "marked {label} watched", "fr": "j'ai marqué {label} comme vu"},
+    "action.markedWatchedReaction": {
+        "en": "marked {label} watched — {reaction}",
+        "fr": "j'ai marqué {label} comme vu — {reaction}",
+    },
+    "action.remembered": {"en": "remembered: {text}", "fr": "j'ai retenu : {text}"},
+    "action.taste": {
+        "en": "noted a lasting preference: {added}",
+        "fr": "j'ai noté une préférence durable : {added}",
+    },
+    # Signal words used inside action.logged (the chip after logging a watch/like/etc).
+    "action.signal.watched": {"en": "watched", "fr": "vu"},
+    "action.signal.loved": {"en": "loved", "fr": "adoré"},
+    "action.signal.liked": {"en": "liked", "fr": "aimé"},
+    "action.signal.disliked": {"en": "disliked", "fr": "pas aimé"},
+    "action.signal.abandoned": {"en": "abandoned", "fr": "abandonné"},
+    "action.signal.rewatched": {"en": "rewatched", "fr": "revu"},
+    "action.signal.watchlist": {"en": "watchlist", "fr": "à voir"},
     # Dynamic-row fallback theme titles (used offline / when the LLM proposes nothing).
     "theme.februaryRomance": {"en": "February romance", "fr": "Romance de février"},
     "theme.summerBlockbusters": {"en": "Summer blockbusters", "fr": "Blockbusters de l'été"},
