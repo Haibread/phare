@@ -238,6 +238,26 @@
   object-fit: cover;
 }
 
+/* A pick the agent actually argued for by name: accent border on its poster + a small tag, so the
+   cited titles stand out from the rest of the returned grid. Reuses the saffron accent token. */
+.chatItemCited .chatPoster {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.chatCitedTag {
+  display: inline-block;
+  margin-bottom: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .followups {
   display: flex;
   flex-wrap: wrap;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiError, type RecommendationItem, api } from "../api";
 import { type ChatTurn, useChat } from "../app/ChatContext";
@@ -11,6 +11,49 @@ import styles from "./routes.module.css";
 /** Suggestion keys map to a translated chip label; "whyThese" also rewrites the outbound message. */
 const STARTER_KEYS = ["funnyShort", "slowBurnSciFi", "comfortRewatch"] as const;
 const FOLLOWUP_KEYS = ["weirder", "shorter", "lighter", "whyThese"] as const;
+
+/** Escape a string for safe inclusion in a RegExp — titles carry `()+.?` etc. and this is a display
+ * heuristic that must never throw on an odd title. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Which of `items` the agent actually named in `reply`. Match is case-insensitive on the title as a
+ * whole "phrase" bounded by non-word characters, so a short/generic title ("It", "Us") doesn't match
+ * mid-word (e.g. "It" inside "with"). Purely a display heuristic — resilient to any title text. */
+export function citedTitleIds(reply: string, items: readonly RecommendationItem[]): Set<string> {
+  const cited = new Set<string>();
+  if (reply.trim() === "") {
+    return cited;
+  }
+  for (const item of items) {
+    const title = item.title.trim();
+    if (title === "") {
+      continue;
+    }
+    // \b is unreliable around punctuation/unicode; bound on start/whitespace/non-word instead.
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(title)}($|[^\\p{L}\\p{N}])`, "iu");
+    if (re.test(reply)) {
+      cited.add(item.titleId);
+    }
+  }
+  return cited;
+}
+
+/** Cited picks float to the front (stable order otherwise), so the titles the reply argues for lead
+ * the grid instead of drowning in it. No citation → the returned order is untouched. */
+export function orderByCitation(
+  items: readonly RecommendationItem[],
+  cited: Set<string>,
+): RecommendationItem[] {
+  if (cited.size === 0) {
+    return [...items];
+  }
+  return [
+    ...items.filter((i) => cited.has(i.titleId)),
+    ...items.filter((i) => !cited.has(i.titleId)),
+  ];
+}
 
 /** Apply a patch to the last turn (the streaming agent bubble) without mutating the array. */
 function patchLast(
@@ -25,7 +68,14 @@ function patchLast(
   return [...log.slice(0, -1), { ...last, ...delta }];
 }
 
-function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
+function ChatPoster({
+  item,
+  cited = false,
+}: {
+  item: RecommendationItem;
+  cited?: boolean;
+}): React.JSX.Element {
+  const { t } = useTranslation("chat");
   const [failed, setFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const show = item.posterUrl !== null && !failed;
@@ -33,10 +83,15 @@ function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
     <>
       <button
         type="button"
-        className={styles.chatItem}
-        data-testid="chat-item"
+        className={`${styles.chatItem} ${cited ? styles.chatItemCited : ""}`}
+        data-testid={cited ? "chat-item-cited" : "chat-item"}
         onClick={() => setDetailOpen(true)}
       >
+        {cited && (
+          <span className={styles.chatCitedTag} data-testid="chat-cited-tag">
+            {t("recommended")}
+          </span>
+        )}
         <div
           className={styles.chatPoster}
           style={show ? undefined : { background: posterTint(item.titleId) }}
@@ -49,6 +104,29 @@ function ChatPoster({ item }: { item: RecommendationItem }): React.JSX.Element {
       </button>
       <TitleDetailSheet item={item} open={detailOpen} onOpenChange={setDetailOpen} />
     </>
+  );
+}
+
+/** The grid of a turn's returned picks. Once the reply text is settled, the titles it argues for by
+ * name lead the grid and wear a "recommended" tag; while streaming (empty reply) nothing is cited so
+ * the grid renders in its returned order. Recomputed only when the reply or items change. */
+function ChatItemGrid({
+  items,
+  reply,
+}: {
+  items: readonly RecommendationItem[];
+  reply: string;
+}): React.JSX.Element {
+  const { cited, ordered } = useMemo(() => {
+    const c = citedTitleIds(reply, items);
+    return { cited: c, ordered: orderByCitation(items, c) };
+  }, [reply, items]);
+  return (
+    <div className={styles.bubbleStrip} data-testid="chat-item-grid">
+      {ordered.map((item) => (
+        <ChatPoster key={item.titleId} item={item} cited={cited.has(item.titleId)} />
+      ))}
+    </div>
   );
 }
 
@@ -219,11 +297,7 @@ export function Chat(): React.JSX.Element {
               </div>
             )}
             {turn.items && turn.items.length > 0 && (
-              <div className={styles.bubbleStrip}>
-                {turn.items.map((item) => (
-                  <ChatPoster key={item.titleId} item={item} />
-                ))}
-              </div>
+              <ChatItemGrid items={turn.items} reply={turn.streaming ? "" : turn.text} />
             )}
           </div>
         ))}
