@@ -5,8 +5,10 @@ import { type RecommendationItem, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
 import { TitleDetailSheet } from "./TitleDetailSheet";
 
-function renderSheet(ui: React.ReactElement): RenderResult {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderSheet(
+  ui: React.ReactElement,
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+): RenderResult {
   return render(
     <QueryClientProvider client={qc}>
       <ProfileProvider value="p1">{ui}</ProfileProvider>
@@ -98,6 +100,56 @@ describe("TitleDetailSheet", () => {
       // The action button returns; the confirmation is gone (item visible again).
       expect(await screen.findByTestId("detail-not-interested")).toBeInTheDocument();
       expect(screen.queryByTestId("detail-removed")).toBeNull();
+    });
+
+    it("defers the row refresh until the sheet closes, so the undo offer survives", async () => {
+      // Regression: the sheet lives inside the row's card. Invalidating the recommendation rows
+      // as soon as the feedback lands refetches the rows, drops the title, unmounts the card —
+      // and takes the sheet's undo affordance down with it. The refresh must wait for close.
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue({
+        titleId: "t1",
+        title: "Arrival",
+        kind: "movie",
+        year: 2016,
+        runtimeMinutes: null,
+        genres: [],
+        overview: null,
+        posterUrl: null,
+        tmdbUrl: null,
+        imdbUrl: null,
+      });
+      const send = vi.spyOn(api, "sendTitleFeedback").mockResolvedValue({
+        titleId: "t1",
+        signal: "not_interested",
+        undoToken: "event:e1",
+      });
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const invalidated = vi.spyOn(qc, "invalidateQueries");
+      const rowKeys = () =>
+        invalidated.mock.calls.filter((c) => {
+          const key = (c[0] as { queryKey: unknown[] }).queryKey;
+          return key.includes("recommendations") || key.includes("dynamic");
+        });
+
+      const view = renderSheet(
+        <TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />,
+        qc,
+      );
+      fireEvent.click(await screen.findByTestId("detail-not-interested"));
+      await waitFor(() => expect(send).toHaveBeenCalled());
+      // While the sheet is open with the undo on offer, the rows stay untouched.
+      expect(rowKeys()).toHaveLength(0);
+
+      // Closing the sheet un-undone flushes the refresh and the title drops from Browse.
+      view.rerender(
+        <QueryClientProvider client={qc}>
+          <ProfileProvider value="p1">
+            <TitleDetailSheet item={recItem()} open={false} onOpenChange={() => {}} />
+          </ProfileProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(rowKeys().length).toBeGreaterThanOrEqual(2));
     });
   });
 });

@@ -3,7 +3,12 @@ import { useTranslation } from "react-i18next";
 import { type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { posterTint } from "../lib/poster";
-import { useSendTitleFeedback, useTitleDetail, useUndoChatAction } from "../lib/queries";
+import {
+  useRowRefreshOnClose,
+  useSendTitleFeedback,
+  useTitleDetail,
+  useUndoChatAction,
+} from "../lib/queries";
 import { translateGenre } from "../lib/tasteVocab";
 import { Sheet } from "./Sheet";
 import styles from "./components.module.css";
@@ -31,12 +36,15 @@ export function TitleDetailSheet({
 
   // "Not interested" is a deliberate, destructive signal — so it lives here in the sheet, behind an
   // explicit tap, not on the card. After sending we hold an in-sheet confirmation with an undo
-  // affordance; the recommendation rows refresh (via useSendTitleFeedback) so the title drops from
-  // Browse, and undo brings it back. Reset when the sheet closes so reopening starts clean.
+  // affordance. The recommendation rows must NOT refresh yet: this sheet is mounted inside the
+  // row's card, so an immediate refetch would unmount the card and kill the undo mid-offer. The
+  // rows refresh when the sheet closes (or unmounts) still-removed; undo cancels the flush and
+  // useUndoChatAction's own invalidation restores everything. Reset on close so reopening is clean.
   const feedback = useSendTitleFeedback(profileId);
   const undo = useUndoChatAction(profileId);
   const [removed, setRemoved] = useState(false);
   const [undoToken, setUndoToken] = useState<string | null>(null);
+  useRowRefreshOnClose(profileId, open, removed);
 
   useEffect(() => {
     if (!open) {

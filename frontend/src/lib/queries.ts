@@ -2,6 +2,7 @@
  * invalidate precisely (e.g. loading sample data refreshes history + recommendations). */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { api } from "../api";
 
 export const keys = {
@@ -139,12 +140,33 @@ export function useSendTitleFeedback(profileId: string) {
     mutationFn: ({ titleId, signal }: { titleId: string; signal: "not_interested" }) =>
       api.sendTitleFeedback(profileId, titleId, signal),
     onSuccess: () => {
+      // History + taste only. Deliberately NOT the recommendation rows: the sheet showing the
+      // undo affordance lives inside the row's card, so refetching rows here unmounts the card
+      // and takes the confirmation (and its undo) down with it. The sheet invalidates the rows
+      // itself once it closes un-undone (see useRowRefreshOnClose).
       qc.invalidateQueries({ queryKey: keys.history(profileId) });
       qc.invalidateQueries({ queryKey: keys.taste(profileId) });
-      qc.invalidateQueries({ queryKey: keys.recommendations(profileId) });
-      qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
     },
   });
+}
+
+/** Refresh the recommendation rows when a sheet that dismissed its title closes (or unmounts)
+ * without an undo. Deferring the refetch keeps the card — and the sheet's undo affordance it
+ * hosts — mounted for as long as the user can still change their mind. */
+export function useRowRefreshOnClose(profileId: string, open: boolean, pending: boolean) {
+  const qc = useQueryClient();
+  const flush = useRef(false);
+  flush.current = pending;
+  useEffect(() => {
+    const refresh = () => {
+      if (!flush.current) return;
+      flush.current = false;
+      qc.invalidateQueries({ queryKey: keys.recommendations(profileId) });
+      qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
+    };
+    if (!open) refresh();
+    return refresh; // unmount (e.g. navigation) counts as closing
+  }, [open, profileId, qc]);
 }
 
 export function useLoadSampleData(profileId: string) {
