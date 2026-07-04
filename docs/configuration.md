@@ -196,10 +196,13 @@ omits the runtime line.
 **quality floor** on TMDB's `vote_average` (a hold-back, never a boost). *discover* does return a
 rating, so a broad import records it — but a title with a **NULL** `vote_average` takes *no* penalty
 (we never guess a title is bad because TMDB is silent). That's the honest default, but it means a
-title with no rating on record rides pure similarity. Ratings are kept current two ways: a re-import
-or the background **freshness refresh** refreshes `vote_average` / `vote_count` on titles it touches,
-and the read-path runtime backfill above heals a NULL rating for the titles it fetches. So the quality
-signal fills in as the catalog is imported and used, without a manual pass.
+title with no rating on record rides pure similarity. Ratings are kept current three ways: a
+re-import or the background **freshness refresh** refreshes `vote_average` / `vote_count` on titles
+it touches; the read-path runtime backfill above heals a NULL rating for the titles it fetches; and
+**at boot**, if more than half the catalog lacks a rating (the state a past import bug left behind),
+the autoseed skip path re-pulls the import as a bulk metadata refresh
+(`catalog.autoseed.rating_heal_*` in the logs) — one-time, self-triggering, no operator command. So
+the quality signal fills in as the catalog is imported and used, without a manual pass.
 
 **Embeddings are backfilled off the read path.** A title has to be embedded before it can be
 recommended, but the read path never embeds a whole fresh import inline (that could freeze the first
