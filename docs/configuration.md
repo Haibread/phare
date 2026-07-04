@@ -411,7 +411,11 @@ to explain cards nobody opens**:
   when taste changes (new fingerprint → new row) **and when the explanation prompt itself changes** (a
   prompt-version constant is folded into the fingerprint, so a wording change re-generates fresh
   blurbs on the next open instead of serving stale cached ones). Offline, it returns the template.
-  The sheet shows the template immediately and swaps in the richer reason when it arrives.
+  The sheet shows the template immediately and swaps in the richer reason when it arrives. The
+  **"top pick tonight" hero** does the same on the Browse page: it renders the template on mount,
+  streams the personalised reason in the background (no `because` anchor), and swaps it in — so the
+  most premium slot shows a real reason, not the deterministic blurb. Later loads hit the cache and
+  swap instantly.
 - **The reason is personalised, not a synopsis.** The prompt is fed the viewer's own taste — their
   stated likes and the specific genre affinity this title shares (the concrete reason it scored) —
   and is told to address them as "you" and open from that connection ("Since you lean toward …").

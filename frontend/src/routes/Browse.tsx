@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import type { RecommendationItem, RecommendationRow } from "../api";
+import { type RecommendationItem, type RecommendationRow, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { AvailabilityProvider } from "../components/Availability";
 import { ConfidenceMeter } from "../components/ConfidenceMeter";
@@ -17,8 +17,30 @@ import {
 } from "../lib/queries";
 import styles from "./routes.module.css";
 
-function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
+export function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
   const { t } = useTranslation("browse");
+  const profileId = useProfileId();
+  const [streamedWhy, setStreamedWhy] = useState("");
+
+  // The top pick deserves its real, personalized "why", not the deterministic template. Stream the
+  // LLM reason on mount (same server-cached endpoint the detail sheet uses — no `because` anchor
+  // here) and swap it in as it arrives; abort on unmount. Falls back to the template when the stream
+  // yields nothing (offline / transient error). Subsequent loads hit the cache and swap instantly.
+  useEffect(() => {
+    const controller = new AbortController();
+    setStreamedWhy("");
+    api
+      .streamTitleExplanation(
+        profileId,
+        item.titleId,
+        { onDelta: (chunk) => setStreamedWhy((prev) => prev + chunk) },
+        controller.signal,
+      )
+      .catch(() => {}); // aborted on unmount, or a transient error — keep the template
+    return () => controller.abort();
+  }, [profileId, item.titleId]);
+
+  const why = streamedWhy || item.explanation;
   return (
     <section className={styles.hero} data-testid="hero">
       <div
@@ -39,7 +61,11 @@ function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
           {item.title}
           {item.year !== null && <span className="muted"> ({item.year})</span>}
         </h2>
-        {item.explanation !== null && <p className="muted">{item.explanation}</p>}
+        {why !== null && why !== "" && (
+          <p className="muted" data-testid="hero-why">
+            {why}
+          </p>
+        )}
         <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />
       </div>
     </section>
