@@ -35,9 +35,12 @@ logger = logging.getLogger(__name__)
 # skipped (and said so in the output) when the model is ``local-hash-v1`` — the CI harness runs on
 # it and it must stay green; the real deployed model is what this check is really guarding.
 _MIN_SIM_REL_SPREAD = 0.15
-# Affinity must actually vary across the pool: a flat affinity column means the taste key matched
-# nothing and every candidate scored neutral (review H1). At least this many distinct values.
-_MIN_DISTINCT_AFFINITY = 2
+# Affinity variance: a slate whose affinity column is flat *at the neutral value* is the H1 bug —
+# the taste key matched no candidate genre, so every candidate scored neutral. A column flat at any
+# *non-neutral* value is the opposite (the key matched everything: a perfectly on-genre slate), the
+# goal rather than a bug. score_candidate maps a net affinity of 0 to (0 + 1) / 2 = 0.5, so that's
+# the neutral point the check keys on.
+_NEUTRAL_AFFINITY = 0.5
 
 
 @dataclass
@@ -100,12 +103,17 @@ def _alignment_failures(
     if leaked:
         failures.append(f"hard-avoid leaked into top-K: {', '.join(leaked)}")
 
-    # (b) Affinity must vary across the slate (a flat column = the taste key matched nothing).
+    # (b) Affinity must not be flat at the *neutral* value — that's the H1 bug signature: the taste
+    # key matched no candidate genre, so every candidate scored the neutral 0.5. A slate flat at a
+    # *non-neutral* value is the opposite: the key matched everything (a perfectly on-genre slate,
+    # e.g. a comedy-only taste over a comedy-heavy pool) — that's the goal, not a bug, so it passes.
+    # (Was: any flat column failed, which false-flagged a well-aligned slate once the relevance
+    # floor trimmed its off-genre tail — a comedy-only slate at uniform high affinity is fine.)
     if persona.taste.get("affinities"):
         distinct_affinity = {rec.components.get("affinity") for rec in recs}
-        if len(distinct_affinity) < _MIN_DISTINCT_AFFINITY:
+        if distinct_affinity == {_NEUTRAL_AFFINITY}:
             failures.append(
-                f"affinity is flat ({len(distinct_affinity)} distinct value): "
+                f"affinity is flat at the neutral {_NEUTRAL_AFFINITY}: "
                 "the taste key matched no candidate genre"
             )
 

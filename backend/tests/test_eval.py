@@ -18,6 +18,7 @@ from phare.eval.personas import PERSONAS, Persona
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.providers.fakes import FakeLLMProvider
 from phare.recommend import genres as genre_match
+from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 
 # --- pure metrics -----------------------------------------------------------
@@ -111,6 +112,42 @@ def test_alignment_summary_flags_offline_empty_slate_skip() -> None:
 
     assert "empty-slate" in alignment_checks_summary(LOCAL_MODEL_VERSION)
     assert "empty-slate" not in alignment_checks_summary("real-prod-embed-v1")
+
+
+def _aligned_rec(title: str, affinity: float) -> Recommendation:
+    return Recommendation(
+        title_id=uuid.uuid4(),
+        title=title,
+        kind="movie",
+        year=2020,
+        genres=["Comedy"],
+        score=1.0,
+        components={"affinity": affinity, "similarity_rel": 0.6, "score": 1.0},
+    )
+
+
+def test_alignment_passes_a_slate_flat_at_high_affinity() -> None:
+    # A slate flat at a *non-neutral* affinity is the taste key matching everything (a perfectly
+    # on-genre slate, e.g. comedy-only over a comedy-heavy pool) — the goal, not the H1 bug. The
+    # relevance floor can trim a slate down to exactly this; it must not read as a flat-affinity
+    # failure. (Regression: the check used to fail any single-distinct-value column.)
+    from phare.eval.harness import _alignment_failures
+
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    slate = [_aligned_rec(f"c{i}", affinity=0.95) for i in range(6)]
+    failures = _alignment_failures(slate, persona, model_version="real-prod-embed-v1")
+    assert not any("affinity is flat" in reason for reason in failures)
+
+
+def test_alignment_fails_a_slate_flat_at_neutral_affinity() -> None:
+    # The H1 bug signature: the taste key matched nothing, so every candidate scored the neutral
+    # 0.5. That must still fail — this is exactly what the check exists to catch.
+    from phare.eval.harness import _alignment_failures
+
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    slate = [_aligned_rec(f"c{i}", affinity=0.5) for i in range(6)]
+    failures = _alignment_failures(slate, persona, model_version="real-prod-embed-v1")
+    assert any("affinity is flat" in reason for reason in failures)
 
 
 def test_alignment_fails_on_flat_affinity(
