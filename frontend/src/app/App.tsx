@@ -90,8 +90,9 @@ function Bootstrapped({ profileId }: { profileId: string | null }): React.JSX.El
     return <ErrorState error={history.error} onRetry={() => history.refetch()} />;
   }
 
-  // First run: no events yet → onboarding takeover (no tabs).
-  if ((history.data?.items.length ?? 0) === 0) {
+  // First run: no events yet → onboarding takeover (no tabs). History is paged; the first page's
+  // total tells us whether ANY event exists, regardless of page size.
+  if ((history.data?.pages[0]?.total ?? 0) === 0) {
     return <ColdStart profileId={resolvedProfileId} />;
   }
 

@@ -62,7 +62,10 @@
       "event": "Événement",
       "rating": "Note",
       "when": "Quand"
-    }
+    },
+    "showing": "{{shown}} événements affichés sur {{total}}",
+    "showMore": "Voir plus",
+    "loadingMore": "Chargement…"
   },
   "chips": {
     "add": "+ ajouter",

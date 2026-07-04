@@ -18,7 +18,7 @@ vi.mock("../api", async (importActual) => {
       getTaste: vi
         .fn()
         .mockRejectedValue(new actual.ApiError(404, "No taste profile yet; generate one first")),
-      history: vi.fn().mockResolvedValue({ items: [] }),
+      history: vi.fn().mockResolvedValue({ items: [], page: 1, perPage: 50, total: 0 }),
       conversion: vi.fn().mockResolvedValue({ rate: null, shown: 0, topK: 10, withinDays: 30 }),
       listSources: vi.fn().mockResolvedValue([]),
       listCommitments: vi.fn().mockResolvedValue({ items: [] }),
@@ -173,5 +173,46 @@ describe("Profile taste generation", () => {
     expect(await screen.findByTestId("taste-summary")).toBeInTheDocument();
     const button = await screen.findByTestId("taste-generate");
     expect(button).toHaveTextContent("Regenerate");
+  });
+});
+
+describe("Profile history pagination", () => {
+  const event = (id: string) => ({
+    id,
+    titleId: `t-${id}`,
+    title: `Title ${id}`,
+    kind: "movie",
+    seasonNumber: null,
+    episodeNumber: null,
+    type: "watched",
+    rating: null,
+    occurredAt: "2026-07-01T00:00:00Z",
+    source: "trakt",
+    excluded: false,
+  });
+
+  it("shows the honest count and loads the next page on demand", async () => {
+    // The regression this guards: the table used to fetch one page and silently truncate —
+    // a 5 900-event history read as 50 rows with no hint there was more.
+    mocked.history
+      .mockResolvedValueOnce({ items: [event("e1"), event("e2")], page: 1, perPage: 2, total: 5 })
+      .mockResolvedValueOnce({ items: [event("e3"), event("e4")], page: 2, perPage: 2, total: 5 });
+
+    renderProfile();
+
+    expect(await screen.findByTestId("history-count")).toHaveTextContent("Showing 2 of 5 events");
+    fireEvent.click(screen.getByTestId("history-more"));
+    await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(4));
+    expect(screen.getByTestId("history-count")).toHaveTextContent("Showing 4 of 5 events");
+    expect(mocked.history).toHaveBeenLastCalledWith("p1", 2);
+  });
+
+  it("hides the show-more button when everything is on screen", async () => {
+    mocked.history.mockResolvedValueOnce({ items: [event("e1")], page: 1, perPage: 50, total: 1 });
+
+    renderProfile();
+
+    expect(await screen.findByTestId("history-count")).toHaveTextContent("Showing 1 of 1 events");
+    expect(screen.queryByTestId("history-more")).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 /** react-query hooks over the typed API client. Query keys are centralised so mutations can
  * invalidate precisely (e.g. loading sample data refreshes history + recommendations). */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api } from "../api";
 
@@ -40,9 +40,13 @@ export function useProfiles() {
 }
 
 export function useHistory(profileId: string | null) {
-  return useQuery({
+  // Infinite pages: the API paginates (page/perPage/total) but the UI used to fetch one page and
+  // silently truncate — 5 900 events looked like 50. Now pages accumulate behind a "show more".
+  return useInfiniteQuery({
     queryKey: keys.history(profileId ?? ""),
-    queryFn: () => api.history(profileId as string),
+    queryFn: ({ pageParam }) => api.history(profileId as string, pageParam),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.page * last.perPage < last.total ? last.page + 1 : undefined),
     enabled: profileId !== null,
   });
 }

@@ -573,8 +573,8 @@ export const api = {
     request(`/profiles/${profileId}/sample-data`, ingestSummarySchema, { method: "POST" }),
   onboardingStatus: (profileId: string) =>
     request(`/profiles/${profileId}/onboarding`, onboardingStatusSchema),
-  history: (profileId: string) =>
-    request(`/history?profileId=${profileId}&perPage=100`, historyPageSchema),
+  history: (profileId: string, page = 1) =>
+    request(`/history?profileId=${profileId}&page=${page}&perPage=50`, historyPageSchema),
   syncTrakt: (profileId: string, accessToken?: string) =>
     request("/sources/trakt/sync", ingestSummarySchema, {
       method: "POST",

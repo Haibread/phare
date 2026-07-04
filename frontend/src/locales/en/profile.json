@@ -62,7 +62,10 @@
       "event": "Event",
       "rating": "Rating",
       "when": "When"
-    }
+    },
+    "showing": "Showing {{shown}} of {{total}} events",
+    "showMore": "Show more",
+    "loadingMore": "Loading…"
   },
   "chips": {
     "add": "+ add",

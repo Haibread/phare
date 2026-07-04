@@ -401,6 +401,15 @@
   border-bottom: 1px solid var(--border);
 }
 
+.histFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  font-size: 0.88rem;
+}
+
 .errorText {
   color: var(--danger);
   font-size: 0.82rem;
