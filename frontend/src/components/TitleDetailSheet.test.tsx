@@ -3,6 +3,7 @@ import { type RenderResult, fireEvent, render, screen, waitFor } from "@testing-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RecommendationItem, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
+import { type AvailabilityCtx, AvailabilityProvider } from "./Availability";
 import { TitleDetailSheet } from "./TitleDetailSheet";
 
 function renderSheet(
@@ -60,6 +61,55 @@ describe("TitleDetailSheet", () => {
 
     const why = await screen.findByTestId("detail-why");
     await waitFor(() => expect(why).toHaveTextContent("Because you loved tense, cerebral sci-fi."));
+  });
+
+  describe("request / availability action (moved from the card, round 4)", () => {
+    function stubDetail() {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue({
+        titleId: "t1",
+        title: "Arrival",
+        kind: "movie",
+        year: 2016,
+        runtimeMinutes: null,
+        genres: [],
+        overview: null,
+        posterUrl: null,
+        tmdbUrl: null,
+        imdbUrl: null,
+      });
+    }
+
+    function renderWithAvailability(ctx: Partial<AvailabilityCtx>): void {
+      const value: AvailabilityCtx = {
+        configured: true,
+        results: {},
+        requestingId: null,
+        onRequest: () => {},
+        ...ctx,
+      };
+      renderSheet(
+        <AvailabilityProvider value={value}>
+          <TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />
+        </AvailabilityProvider>,
+      );
+    }
+
+    it("offers the Request button inside the sheet under a configured provider", async () => {
+      stubDetail();
+      const onRequest = vi.fn();
+      renderWithAvailability({ results: { t1: "requestable" }, onRequest });
+      fireEvent.click(await screen.findByTestId("title-request"));
+      expect(onRequest).toHaveBeenCalledWith("t1");
+    });
+
+    it("renders nothing (gracefully) when there is no availability provider — Browse/chat", () => {
+      // Exactly as the card version did: with no provider in the tree, TitleAction is null.
+      stubDetail();
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      expect(screen.queryByTestId("title-request")).toBeNull();
+      expect(screen.queryByTestId("title-available")).toBeNull();
+    });
   });
 
   describe("not interested (moved from the card, round 3)", () => {

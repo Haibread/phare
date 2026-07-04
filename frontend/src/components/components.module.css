@@ -83,6 +83,19 @@
 
 /* "Not interested" now lives in the detail sheet (round 3), not on the card. A full-width but quiet
    secondary control, set apart from the content above it; flips to a confirmation + undo in place. */
+/* Request / availability action in the sheet. Flex so the tag/button's own `align-self: flex-start`
+   keeps them compact-left, matching how they sat on the card. Empty (the common case, no provider)
+   it collapses to nothing. */
+.detailAction {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--sp-3);
+}
+
+.detailAction:empty {
+  display: none;
+}
+
 .detailFeedback {
   margin-top: var(--sp-2);
   padding-top: var(--sp-3);
