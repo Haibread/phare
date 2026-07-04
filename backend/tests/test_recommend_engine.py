@@ -113,6 +113,61 @@ def test_enrich_runtimes_short_circuits_when_pool_is_already_filled(db_session: 
     assert provider.calls == []  # nothing fetched
 
 
+def test_enrich_runtimes_also_heals_missing_quality_signal(db_session: Session) -> None:
+    # The per-title fetch already carries vote_average / vote_count, so while filling a missing
+    # runtime we heal a NULL quality signal too (most broad-imported titles had a NULL vote_average,
+    # which disabled the re-ranker's quality floor). Never clobber a value the row already has.
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+    from phare.recommend.schema import Candidate
+
+    missing_quality = Title(kind=TitleKind.movie, title="Ungraded", tmdb_id=3001)
+    already_graded = Title(
+        kind=TitleKind.movie, title="Graded", tmdb_id=3002, vote_average=8.0, vote_count=5_000
+    )
+    db_session.add_all([missing_quality, already_graded])
+    db_session.flush()
+    provider = FakeMetadataProvider(
+        titles={
+            (3001, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie,
+                title="Ungraded",
+                runtime_minutes=100,
+                vote_average=6.5,
+                vote_count=1_100,
+            ),
+            (3002, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie,
+                title="Graded",
+                runtime_minutes=100,
+                vote_average=2.0,  # a re-fetch must NOT overwrite the row's existing 8.0
+                vote_count=1,
+            ),
+        }
+    )
+
+    def cand(title: Title) -> Candidate:
+        return Candidate(
+            title_id=title.id,
+            title=title.title,
+            kind="movie",
+            year=None,
+            genres=[],
+            keywords=[],
+            runtime_minutes=None,  # both need a runtime, so both get fetched
+            popularity=None,
+            overview=None,
+            similarity=0.5,
+        )
+
+    _service(db_session)._enrich_runtimes([cand(missing_quality), cand(already_graded)], provider)
+
+    assert missing_quality.vote_average == 6.5  # healed from the fetch
+    assert missing_quality.vote_count == 1_100
+    assert already_graded.vote_average == 8.0  # untouched — never clobber an existing value
+    assert already_graded.vote_count == 5_000
+
+
 def _runtime_cand(title: Title, runtime: int | None):
     from phare.recommend.schema import Candidate
 
