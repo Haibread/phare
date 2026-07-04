@@ -20,6 +20,7 @@
     "drawnTo": "Attiré par",
     "avoiding": "À éviter",
     "empty": "Votre profil de goûts se construit automatiquement à partir de votre historique, une fois qu'un LLM est configuré.",
+    "noTasteYet": "Aucun profil de goûts pour l'instant — générez-le à partir de votre historique.",
     "generate": "Générer maintenant",
     "regenerate": "Régénérer",
     "generating": "Génération…",

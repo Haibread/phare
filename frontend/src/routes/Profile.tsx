@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { type HistoryItem, isLLMUnavailable } from "../api";
+import { type HistoryItem, isLLMUnavailable, isNotFound } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
 import { CardSkeleton, ErrorState, errorMessage } from "../components/states";
@@ -94,7 +94,10 @@ export function Profile(): React.JSX.Element {
 
         {taste.isPending ? (
           <CardSkeleton lines={4} />
-        ) : taste.isError ? (
+        ) : taste.isError && !isNotFound(taste.error) ? (
+          // A real failure (500, network) keeps the alarming error + retry. A 404 is just "no taste
+          // yet" on a fresh profile — a first visit, not an error — so it falls through to the
+          // friendly empty copy below, with the single "Generate now" CTA (rendered further down).
           <ErrorState error={taste.error} onRetry={() => taste.refetch()} />
         ) : taste.data?.summary ? (
           <>
@@ -140,7 +143,9 @@ export function Profile(): React.JSX.Element {
           </>
         ) : (
           <p className="muted" data-testid="taste-empty">
-            {t("taste.empty")}
+            {/* 404 = fresh profile, no taste generated yet: steer to the generate CTA. Any other
+                falsy state (loaded but summary still null) keeps the "builds automatically" note. */}
+            {taste.isError ? t("taste.noTasteYet") : t("taste.empty")}
           </p>
         )}
 

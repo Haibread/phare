@@ -49,6 +49,15 @@ export function isLLMUnavailable(error: unknown): boolean {
   );
 }
 
+/** True for a 404 from the backend. Duck-types on `status` (like errorMessage) so it stays robust
+ * when `api` is mocked in tests. Used to tell "no taste profile yet" (a first-visit empty state)
+ * apart from a real error worth an alarm + retry. */
+export function isNotFound(error: unknown): boolean {
+  return (
+    error !== null && typeof error === "object" && (error as { status?: number }).status === 404
+  );
+}
+
 export const profileSchema = z.object({
   id: z.string(),
   displayName: z.string(),

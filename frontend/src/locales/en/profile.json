@@ -20,6 +20,7 @@
     "drawnTo": "Drawn to",
     "avoiding": "Avoiding",
     "empty": "Your taste profile builds automatically from your watch history, once an LLM is configured.",
+    "noTasteYet": "No taste profile yet — generate it from your watch history.",
     "generate": "Generate now",
     "regenerate": "Regenerate",
     "generating": "Generating…",
