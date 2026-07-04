@@ -16,6 +16,7 @@
   "taste": {
     "heading": "Vos goûts",
     "updatesAuto": "mise à jour automatique",
+    "updatedAt": "mis à jour {{when}}",
     "loading": "Chargement des goûts…",
     "drawnTo": "Attiré par",
     "avoiding": "À éviter",
