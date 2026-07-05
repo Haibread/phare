@@ -266,6 +266,14 @@ What localises with the request language:
   LLM-picked dynamic row themes are written in the request language. The model is _instructed_ in
   the request language (the English system prompts — which carry the scope/guardrails — are kept and
   a one-line output-language directive is appended), so behaviour and safety wording don't drift.
+  Recommendation "why this" blurbs are cached (in-process, and durably in `title_explanation`) keyed
+  by `(title, language, taste)` — so a blurb is generated once per reader-language and reused. A
+  cheap **language sanity guard** screens the model's output before it's cached: a completion that
+  clearly reads as the wrong language (a French reply to an English request, or English-led
+  Franglais to a French one) is rejected, the deterministic template is served instead, and a
+  `phare.fallback` `wrong_language` signal is emitted — so a weak workhorse can't pin a
+  mismatched-language blurb into the cache. The check is a deterministic function-word heuristic (no
+  extra LLM call) and tolerates the common case of an English film title inside a French sentence.
 
 **Genre names** (TMDB labels) are display-translated in explanation templates via a static table, so
 a French sentence reads "Science-Fiction", not the stored English "Science Fiction". The stored
