@@ -51,12 +51,14 @@ _REASON_MAX_TOKENS = 80
 # TTL is fine; the key carries correctness, the TTL only bounds memory.
 _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 
-# Bump when the explanation *prompt* changes. It's folded into the cache fingerprint so a wording
-# change invalidates every previously-cached blurb (in-process and the durable Postgres rows)
-# without a manual purge — otherwise a deploy keeps serving the old phrasing until taste happens to
-# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite;
-# "3" = grounded in synopsis/keywords + honest weak-fit framing (review H4).
-_PROMPT_VERSION = "3"
+# Bump when the explanation *prompt* — or the acceptance contract on its output — changes. It's
+# folded into the cache fingerprint so a bump invalidates every previously-cached blurb (in-process
+# and the durable Postgres rows) without a manual purge — otherwise a deploy keeps serving the old
+# phrasing until taste happens to change, since the key is otherwise only the taste summary.
+# "2" = the personalised-prompt rewrite; "3" = grounded in synopsis/keywords + honest weak-fit
+# framing (review H4); "4" = the wrong-language guard (R5) — entries cached before it exist that
+# the guard would now reject (observed: Franglais on a French hero), so flush them.
+_PROMPT_VERSION = "4"
 
 
 def _taste_fingerprint(
