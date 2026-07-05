@@ -16,6 +16,22 @@ filters) → re-ranker → explanations (LLM)`.
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
   guarantee catalog coverage over time.
+  - **Graded affinity (review R1).** The affinity term measures *how much of a profile's taste a
+    candidate satisfies*, not just whether it hits anything. It used to sum the matched affinity
+    weights and clamp to 1, so a real profile (a dozen-plus positives weighted 0.3–0.9) saturated:
+    matching any two liked genres already read a flat 1.0, and the fit meter it feeds collapsed to
+    "strong" for the whole slate. Now each match contributes its weight against a **saturating
+    budget** — the sum of the profile's four strongest same-sign weights: `pos = min(1, Σ matched
+    positive weights ÷ budget)`, `neg = min(1, Σ |matched negative weights| ÷ budget)`, and
+    `affinity = pos − neg` in [−1, 1] (mapped to [0, 1] with 0.5 = neutral for scoring). The
+    budget is capped at the strongest few keys rather than the whole profile because a title carries
+    only a handful of genres/keywords and can realistically satisfy only a few affinities;
+    normalising against every key would crush every genuine match toward neutral. Consequences: a
+    candidate matching **three strong** positives scores visibly above one matching **a single
+    mid-weight** key (measured spread ≈ 0.26 on a real profile); a candidate matching **nothing**
+    stays at the neutral 0.5 — vocabulary silence is never punished (honesty, principle 4);
+    **negative** affinities pull the score down proportionally; and hard-avoids remain a **separate
+    upstream filter**, untouched by this term. Deterministic, cheap, no LLM.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
 - **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.

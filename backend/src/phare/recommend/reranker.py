@@ -25,6 +25,12 @@ from phare.recommend.schema import Candidate, Recommendation
 # Scoring weights. Similarity leads; affinity steers; popularity is a mild penalty (a cap, not a
 # boost — popularity must never be the thing that wins); quality gently demotes poorly-rated titles.
 _W_SIMILARITY = 1.0
+# Affinity now *grades* (review R1 — it used to saturate at 1.0 for nearly every candidate, adding a
+# constant 0.6 offset that steered nothing). Graded, ``affinity_norm`` spreads across ~[0.5, 0.95]
+# for real profiles, so at 0.6 it can swing a score by up to ~0.27 — enough to reorder titles of
+# comparable similarity (that's steering) without overriding the pool-relative similarity that
+# leads. Kept at 0.6: the weight was never the saturation bug, the score was, so re-tuning it would
+# only muddy the before/after comparison.
 _W_AFFINITY = 0.6
 _W_POPULARITY = 0.3
 _W_QUALITY = 0.2
@@ -137,20 +143,73 @@ def _select_vote_mix(
 
 
 def _affinity_score(candidate: Candidate, affinities: Mapping[str, float]) -> float:
-    """Net taste affinity for a candidate's genres/keywords, clamped to [-1, 1].
+    """Net *graded* taste affinity for a candidate's genres/keywords, in [-1, 1].
 
-    An affinity key contributes its weight once if it matches *any* of the candidate's tokens under
-    the shared genre-match rule (alias + substring), so free keys like "Sci-Fi" line up with a
-    "Science Fiction" tag instead of scoring 0 on an exact-string miss (review H1)."""
+    Old semantics (review R1) summed the *raw* weights of matched keys and clamped to [-1, 1]. A
+    real profile carries a dozen-plus affinities weighted 0.3–0.9, so matching just two positives
+    (e.g. Action 0.9 + Crime 0.8 = 1.7) already clamped to 1.0 — every candidate that hit any two
+    liked genres scored a flat 1.0. The component stopped discriminating: a stoner comedy tagged
+    "Science Fiction" read the same as a three-way thriller match, and the confidence meter it feeds
+    collapsed to "Forte affinité" for the whole slate.
+
+    Graded semantics: score matches by *how much taste weight they satisfy*, against a saturating
+    budget, so breadth and weight both count and the result stays graded instead of saturating.
+
+    - Split the affinities into positives (weight > 0) and negatives (weight < 0).
+    - ``pos = sum(matched positive weights) / budget(positive weights)`` — the share of the taste's
+      positive "pull" this candidate satisfies. The budget is the sum of the ``_AFFINITY_BUDGET_K``
+      *strongest* positive weights, not the whole profile: a candidate carries only a handful of
+      genres/keywords, so it can realistically hit only a few affinities, and normalising against
+      the full dozen-plus-key budget would crush every real match to a sliver (a 3-strong-match
+      would read barely above neutral). Capping the denominator at the top-K keeps fractions honest
+      *and* spread: matching three strong positives fills most of the budget → high; matching a
+      single mid-weight key → a small fraction; and the ``min(1.0, …)`` clamp handles a candidate
+      that happens to match more than K keys.
+    - ``neg = sum(|matched negative weights|) / budget(negative weights)`` — same construction for
+      dislikes; it pulls the net *down* proportionally. (Hard-avoids are a separate upstream filter;
+      this only handles soft negative taste.)
+    - ``net = pos - neg``, in [-1, 1] since each share is clamped to [0, 1].
+
+    A candidate that matches nothing scores 0 (→ neutral 0.5 after normalisation): vocabulary
+    silence is never punished (principle 4, honesty). Deterministic, no I/O, no LLM. Free keys
+    still line up with catalog tags via the shared matcher, so "Sci-Fi" hits "Science Fiction" (H1).
+    """
     if not affinities:
         return 0.0
     tokens = [*candidate.genres, *candidate.keywords]
     if not tokens:
         return 0.0
-    total = sum(
-        float(weight) for key, weight in affinities.items() if genres.matches_any((key,), tokens)
+    pos_matched = [
+        float(w)
+        for k, w in affinities.items()
+        if float(w) > 0.0 and genres.matches_any((k,), tokens)
+    ]
+    neg_matched = [
+        -float(w)
+        for k, w in affinities.items()
+        if float(w) < 0.0 and genres.matches_any((k,), tokens)
+    ]
+    pos = min(1.0, sum(pos_matched) / _affinity_budget(affinities, positive=True))
+    neg = min(1.0, sum(neg_matched) / _affinity_budget(affinities, positive=False))
+    return max(-1.0, min(1.0, pos - neg))
+
+
+# How many of the strongest same-sign weights form the normalisation budget. A candidate carries a
+# few genres plus a few keywords, so it can realistically satisfy on the order of this many affinity
+# keys; capping the denominator here (rather than at the whole profile) is what keeps a genuine
+# 3-strong match well above a 1-mid match instead of both reading near-neutral (review R1). Set to
+# 4 to match the typical 2–4 genres a title is tagged with; larger only flattens the gradient again.
+_AFFINITY_BUDGET_K = 4
+
+
+def _affinity_budget(affinities: Mapping[str, float], *, positive: bool) -> float:
+    """Sum of the ``_AFFINITY_BUDGET_K`` strongest same-sign magnitudes (empty → 1.0, no /0)."""
+    magnitudes = sorted(
+        (abs(float(w)) for w in affinities.values() if (float(w) > 0.0) == positive),
+        reverse=True,
     )
-    return max(-1.0, min(1.0, total))
+    total = sum(magnitudes[:_AFFINITY_BUDGET_K])
+    return total if total > 0.0 else 1.0
 
 
 def _popularity_penalty(candidate: Candidate) -> float:

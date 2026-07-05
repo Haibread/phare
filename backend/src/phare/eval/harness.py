@@ -40,6 +40,15 @@ _MIN_SIM_REL_SPREAD = 0.15
 # *non-neutral* value is the opposite (the key matched everything: a perfectly on-genre slate), the
 # goal rather than a bug. score_candidate maps a net affinity of 0 to (0 + 1) / 2 = 0.5, so that's
 # the neutral point the check keys on.
+#
+# With the *graded* affinity (review R1) this check reads even more honestly: the old saturating
+# affinity pinned nearly every candidate at 1.0, so a real slate's column was flat at a non-neutral
+# value and this check passed for the wrong reason (saturation, not alignment). Graded, an aligned
+# slate's affinity column genuinely *spreads* — the only way it goes flat-at-neutral is the H1 bug
+# it is meant to catch, so the neutral-set equality below stays the right, tight signal. (We do not
+# add a positive spread threshold here: the offline local-hash pool is too thin — several personas
+# yield tiny or empty slates — to assert a minimum spread without flaking; the pool-relative
+# similarity-spread guardrail already enforces "not flat" on the production embedder.)
 _NEUTRAL_AFFINITY = 0.5
 
 

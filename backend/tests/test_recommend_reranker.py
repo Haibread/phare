@@ -78,6 +78,40 @@ def test_affinity_distribution_has_nonzero_variance() -> None:
     assert len({r.components["affinity"] for r in recs}) >= 2
 
 
+def test_affinity_is_graded_across_match_tiers() -> None:
+    # R1: affinity used to saturate at 1.0 for nearly every candidate (sum-of-matched-weights, then
+    # clamped to 1), so a 3-strong-match read the same as a 1-match and the fit meter went "strong"
+    # for the whole slate. Graded now: more/heavier matches score strictly higher, with real spread.
+    # A realistic broad profile (like the ones seen in prod) — a dozen positives plus a dislike.
+    taste: dict[str, Any] = {
+        "affinities": {
+            "Crime": 0.8,
+            "Drama": 0.5,
+            "Action": 0.9,
+            "Thriller": 0.8,
+            "Adventure": 0.6,
+            "Science Fiction": 0.7,
+            "Horror": -0.7,
+        }
+    }
+    three = _cand(title="Three", sim=0.4, genres=["Action", "Crime", "Thriller"])  # 3 strong hits
+    one = _cand(title="One", sim=0.4, genres=["Adventure"])  # 1 mid-weight hit
+    zero = _cand(title="Zero", sim=0.4, genres=["Documentary"])  # vocabulary silence
+    negative = _cand(title="Neg", sim=0.4, genres=["Horror"])  # a disliked genre
+    recs = {r.title: r for r in rerank([three, one, zero, negative], taste, k=4, swing_slots=0)}
+    a3 = recs["Three"].components["affinity"]
+    a1 = recs["One"].components["affinity"]
+    a0 = recs["Zero"].components["affinity"]
+    an = recs["Neg"].components["affinity"]
+    # Strict ordering: 3-match > 1-match > neutral(0-match) > negative.
+    assert a3 > a1 > a0 > an
+    assert a0 == 0.5  # nothing matched → neutral, never punished for silence (principle 4)
+    # Meaningful spread, not a hair's-width separation. 0.15 mirrors the eval harness's
+    # _MIN_SIM_REL_SPREAD guardrail — the smallest gap we treat as "genuinely discriminating"
+    # rather than saturation noise. Here the 3-vs-1 tier gap clears it comfortably (~0.26).
+    assert a3 - a1 >= 0.15
+
+
 def test_popularity_penalty_demotes_blockbuster() -> None:
     niche = _cand(title="Indie", sim=0.4, genres=["Drama"], popularity=1.0)
     blockbuster = _cand(title="Blockbuster", sim=0.4, genres=["Action"], popularity=100.0)
