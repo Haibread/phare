@@ -150,6 +150,75 @@ def test_alignment_fails_a_slate_flat_at_neutral_affinity() -> None:
     assert any("affinity is flat" in reason for reason in failures)
 
 
+def _conf_rec(title: str, confidence: float, sim_rel: float) -> Recommendation:
+    # A rec whose confidence and pool-relative similarity we control, for the anti-uniformity check.
+    # affinity varies with sim_rel so the affinity-variance check never masks the uniformity result.
+    return Recommendation(
+        title_id=uuid.uuid4(),
+        title=title,
+        kind="movie",
+        year=2020,
+        genres=["Comedy"],
+        score=1.0,
+        confidence=confidence,
+        components={"affinity": sim_rel, "similarity_rel": sim_rel, "score": 1.0},
+    )
+
+
+def test_alignment_fails_a_uniform_fit_slate() -> None:
+    # R2: every displayed item in the same fit bucket is a badge carrying no information (the owner
+    # complained every card reads 3/3 "strong fit"). On the real embedder that must fail. sim_rel is
+    # spread so *only* the uniformity check bites, not the similarity-spread one.
+    from phare.eval.harness import _alignment_failures
+
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    # All confidences >= _FIT_STRONG (0.72) → all bucket 2, but sim_rel genuinely spreads.
+    slate = [_conf_rec(f"c{i}", confidence=0.80, sim_rel=0.3 + 0.1 * i) for i in range(6)]
+    failures = _alignment_failures(slate, persona, model_version="real-prod-embed-v1")
+    assert any("fit chips are uniform" in reason for reason in failures)
+
+
+def test_alignment_passes_a_multi_bucket_fit_slate() -> None:
+    # A slate whose confidences land in more than one fit bucket is exactly the goal — it must not
+    # trip the uniformity check.
+    from phare.eval.harness import _alignment_failures
+
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    confs = [0.90, 0.78, 0.55, 0.50, 0.40, 0.30]  # spans strong / worth-a-try / long-shot
+    slate = [_conf_rec(f"c{i}", confidence=c, sim_rel=0.3 + 0.1 * i) for i, c in enumerate(confs)]
+    failures = _alignment_failures(slate, persona, model_version="real-prod-embed-v1")
+    assert not any("fit chips are uniform" in reason for reason in failures)
+
+
+def test_uniform_fit_slate_is_skipped_offline_and_on_tiny_slates() -> None:
+    # The uniformity check is gated exactly like the similarity-spread one: skipped on the offline
+    # local-hash embedder (not the production space) and on slates too small to judge (< 6 items).
+    from phare.eval.harness import _alignment_failures
+
+    persona = next(p for p in PERSONAS if p.name == "comedy-only")
+    uniform_big = [_conf_rec(f"c{i}", confidence=0.80, sim_rel=0.3 + 0.1 * i) for i in range(6)]
+    # Offline: the whole spread family of checks is relaxed, so no uniformity failure.
+    assert not any(
+        "fit chips are uniform" in r
+        for r in _alignment_failures(uniform_big, persona, model_version=LOCAL_MODEL_VERSION)
+    )
+    # Tiny slate on the real embedder: too few items to call it uniform (a 5-item cluster is fine).
+    uniform_small = [_conf_rec(f"c{i}", confidence=0.80, sim_rel=0.3 + 0.1 * i) for i in range(5)]
+    assert not any(
+        "fit chips are uniform" in r
+        for r in _alignment_failures(uniform_small, persona, model_version="real-prod-embed-v1")
+    )
+
+
+def test_alignment_summary_names_the_fit_uniformity_check() -> None:
+    # The header must name the anti-uniformity check, and say it's skipped offline.
+    from phare.eval.harness import alignment_checks_summary
+
+    assert "fit-uniformity" in alignment_checks_summary("real-prod-embed-v1")
+    assert "fit-uniformity" in alignment_checks_summary(LOCAL_MODEL_VERSION)
+    assert "skipped" in alignment_checks_summary(LOCAL_MODEL_VERSION)
+
+
 def test_alignment_fails_on_flat_affinity(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
