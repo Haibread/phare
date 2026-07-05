@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from phare.recommend.explain import (
     _taste_fingerprint,
     coerce_safe,
     explain,
+    is_plausible_language,
     is_spoiler_safe,
     stream_lazy_reason,
 )
@@ -445,3 +447,135 @@ def test_template_hedges_a_low_confidence_pick() -> None:
     [weak] = explain([_rec(title="Same", genres=["Drama"], confidence=0.3)], taste, llm=None)
     assert strong.explanation != weak.explanation
     assert "fits your profile" not in (weak.explanation or "")
+
+
+# --- R3: wrong-language guard on cached explanations -------------------------------------------
+
+# An English-led Franglais reply — the shape mistral-small produced on a French request in prod.
+_FRANGLAIS = "Since you love cerebral sci-fi thrillers, this one aimeras."
+# A legitimate French sentence carrying an English movie title — must NOT be mistaken for English.
+_FRENCH_WITH_EN_TITLE = (
+    "Comme vous aimez les thrillers, Blade Runner est tout à fait dans vos goûts."
+)
+
+
+def test_is_plausible_language_accepts_matching_prose() -> None:
+    assert is_plausible_language("A taut, cerebral sci-fi right up your alley.", "en")
+    assert is_plausible_language("Un thriller lent et atmosphérique, tout à fait votre goût.", "fr")
+
+
+def test_is_plausible_language_tolerates_an_english_title_in_french() -> None:
+    # The load-bearing false-positive case: an English movie title (a proper noun) inside a French
+    # sentence contributes no English function-word signal, so the French prose still wins.
+    assert is_plausible_language(_FRENCH_WITH_EN_TITLE, "fr")
+
+
+def test_is_plausible_language_rejects_cross_language_and_franglais() -> None:
+    assert not is_plausible_language("Un thriller tendu taillé pour vos goûts.", "en")  # FR for en
+    assert not is_plausible_language(_FRANGLAIS, "fr")  # English-led Franglais for a fr request
+
+
+def test_is_plausible_language_passes_short_texts() -> None:
+    # Below the ~40-char threshold there's too little signal to judge — don't second-guess it.
+    assert is_plausible_language("Un pari.", "en")
+    assert is_plausible_language("A gamble.", "fr")
+
+
+def test_franglais_on_french_request_is_templated_not_cached(caplog) -> None:
+    cache = TTLCache(ttl=9999, maxsize=16)
+    llm = FakeLLMProvider(completion=_FRANGLAIS)
+    rec = _rec()
+    taste = {"affinities": {"Science Fiction": 0.9}, "summary": "aime la SF cérébrale"}
+
+    with caplog.at_level(logging.WARNING):
+        [out] = Explainer(llm=llm, cache=cache, language="fr").explain([rec], taste)
+
+    # The Franglais was rejected: the reader gets the correct-language French template instead.
+    assert out.explanation is not None
+    assert out.explanation != _FRANGLAIS
+    assert out.explanation.startswith("Film")  # the French template, localised kind
+    # ...and the silent-fallback rule is honoured: a wrong_language fallback was recorded.
+    fallback = next(r for r in caplog.records if r.message == "explain.fallback")
+    assert fallback.reason == "wrong_language"
+
+    # A reliable wrong-language answer is a stable outcome — cached, so it isn't re-burned. The
+    # second render is a cache hit on the template, no new LLM call.
+    Explainer(llm=llm, cache=cache, language="fr").explain([rec], taste)
+    assert len(llm.prompts) == 1
+
+
+def test_legitimate_french_with_english_title_is_accepted() -> None:
+    # A real French blurb that happens to name an English film must survive the guard and be served.
+    llm = FakeLLMProvider(completion=_FRENCH_WITH_EN_TITLE)
+    [out] = Explainer(llm=llm, language="fr").explain([_rec()], {"summary": "aime les thrillers"})
+    assert out.explanation == _FRENCH_WITH_EN_TITLE
+
+
+def test_french_completion_on_english_request_is_rejected() -> None:
+    llm = FakeLLMProvider(completion="Un thriller tendu taillé pour vos goûts d'amateur de SF.")
+    [out] = Explainer(llm=llm, language="en").explain(
+        [_rec()], {"affinities": {"Science Fiction": 0.9}}
+    )
+    assert out.explanation is not None
+    assert "thriller tendu" not in out.explanation  # the French reply was rejected...
+    assert "Science Fiction" in out.explanation  # ...and the English template served instead
+
+
+def test_stream_lazy_reason_does_not_cache_wrong_language(db_session: Session, caplog) -> None:
+    # Streamed text can only be checked once the stream completes (same as the spoiler check there):
+    # a wrong-language completion is shown live but NOT cached, so the next open regenerates.
+    title = Title(kind=TitleKind.movie, title="Tenet", year=2020, genres=["Thriller"])
+    db_session.add(title)
+    db_session.flush()
+    rec = Recommendation(
+        title_id=title.id, title="Tenet", kind="movie", year=2020, genres=["Thriller"], score=0.8
+    )
+    taste = {"summary": "aime les thrillers tendus"}
+    cache = PersistentReasonCache(db_session, TTLCache(ttl=3600))
+    franglais_llm = FakeLLMProvider(completion=_FRANGLAIS)
+
+    with caplog.at_level(logging.WARNING):
+        streamed = "".join(stream_lazy_reason(rec, taste, franglais_llm, cache, language="fr"))
+    assert streamed == _FRANGLAIS  # the reader saw the live stream...
+    fallback = next(r for r in caplog.records if r.message == "explain_stream.fallback")
+    assert fallback.reason == "wrong_language"
+
+    # ...but nothing was cached: a fresh open regenerates rather than replaying the Franglais.
+    good_llm = FakeLLMProvider(completion="Un thriller tendu et cérébral, tout à fait votre goût.")
+    replay = "".join(
+        stream_lazy_reason(
+            rec,
+            taste,
+            good_llm,
+            PersistentReasonCache(db_session, TTLCache(ttl=3600)),
+            language="fr",
+        )
+    )
+    assert replay == "Un thriller tendu et cérébral, tout à fait votre goût."
+    assert len(good_llm.prompts) == 1  # not served from a poisoned cache entry
+
+
+def test_stream_lazy_reason_caches_legitimate_french_with_english_title(
+    db_session: Session,
+) -> None:
+    title = Title(kind=TitleKind.movie, title="Heat", year=1995, genres=["Thriller"])
+    db_session.add(title)
+    db_session.flush()
+    rec = Recommendation(
+        title_id=title.id, title="Heat", kind="movie", year=1995, genres=["Thriller"], score=0.8
+    )
+    taste = {"summary": "aime les thrillers"}
+    cache = PersistentReasonCache(db_session, TTLCache(ttl=3600))
+    llm = FakeLLMProvider(completion=_FRENCH_WITH_EN_TITLE)
+
+    first = "".join(stream_lazy_reason(rec, taste, llm, cache, language="fr"))
+    assert first == _FRENCH_WITH_EN_TITLE
+    # It passed the guard, so it was cached: re-open replays it without a second model call.
+    cold = FakeLLMProvider(completion="SHOULD NOT REGENERATE")
+    replay = "".join(
+        stream_lazy_reason(
+            rec, taste, cold, PersistentReasonCache(db_session, TTLCache(ttl=3600)), language="fr"
+        )
+    )
+    assert replay == first
+    assert cold.prompts == []
