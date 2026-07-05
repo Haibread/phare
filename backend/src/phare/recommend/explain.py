@@ -57,8 +57,9 @@ _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 # phrasing until taste happens to change, since the key is otherwise only the taste summary.
 # "2" = the personalised-prompt rewrite; "3" = grounded in synopsis/keywords + honest weak-fit
 # framing (review H4); "4" = the wrong-language guard (R5) — entries cached before it exist that
-# the guard would now reject (observed: Franglais on a French hero), so flush them.
-_PROMPT_VERSION = "4"
+# the guard would now reject (observed: Franglais on a French hero), so flush them; "5" = the
+# no-English-opener directive + opener rejection (R6) — v4 entries could still open with "Since".
+_PROMPT_VERSION = "5"
 
 
 def _taste_fingerprint(
@@ -131,6 +132,15 @@ _LANGUAGE_SIGNALS: dict[Language, re.Pattern[str]] = {
 # spoiler net's "don't over-reject" stance). Kept in sync with the ~40-char task threshold.
 _LANGUAGE_MIN_LEN = 40
 
+# A non-English reply must not OPEN with an English connective: the workhorse model's observed
+# failure mode is exactly one code-switched leading word ("Since tu aimes…") — invisible to the
+# majority count (one word), yet the most prominent word of the most prominent sentence. French
+# never opens a sentence with these, so the check is essentially free of false positives.
+_ENGLISH_OPENERS = re.compile(
+    r"^\s*[*_\"«']*\s*(since|because|as|while|if|although|though|whether|given|when)\b",
+    re.IGNORECASE,
+)
+
 
 def is_plausible_language(text: str, language: Language) -> bool:
     """True if ``text`` reads as ``language`` (or is too short to judge). Cheap and deterministic.
@@ -145,6 +155,10 @@ def is_plausible_language(text: str, language: Language) -> bool:
     requested = _LANGUAGE_SIGNALS.get(language)
     if requested is None:  # a language with no signal table configured — don't gate it
         return True
+    # One code-switched opener beats the majority count (it's a single word) but is the most
+    # visible defect a reply can have — reject it outright for non-English requests.
+    if language != DEFAULT_LANGUAGE and _ENGLISH_OPENERS.match(text):
+        return False
     mine = len(requested.findall(text))
     others = max(
         (

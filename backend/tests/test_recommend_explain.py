@@ -475,6 +475,30 @@ def test_is_plausible_language_rejects_cross_language_and_franglais() -> None:
     assert not is_plausible_language(_FRANGLAIS, "fr")  # English-led Franglais for a fr request
 
 
+def test_is_plausible_language_rejects_a_code_switched_english_opener() -> None:
+    # The workhorse's observed tic: one English connective opening an otherwise-French sentence
+    # ("Since tu aimes…" — seen repeatedly on fresh prod generations). A single word can't lose the
+    # majority count, so the opener is rejected outright for non-English requests.
+    assert not is_plausible_language(
+        "Since tu aimes les drames d'action avec des intrigues politiques, ce film va te plaire.",
+        "fr",
+    )
+    assert not is_plausible_language(
+        "*Because* tu apprécies les thrillers cérébraux et les mystères, tente celui-ci ce soir.",
+        "fr",
+    )
+    # …but the same connectives are obviously fine for an English request,
+    assert is_plausible_language(
+        "Since you love cerebral thrillers with political intrigue, this one will grip you.",
+        "en",
+    )
+    # and a French word that merely STARTS like one ("Sincerement" is not "Since") must not match.
+    assert is_plausible_language(
+        "Sincèrement, ce thriller lent et atmosphérique est taillé pour votre goût du mystère.",
+        "fr",
+    )
+
+
 def test_is_plausible_language_passes_short_texts() -> None:
     # Below the ~40-char threshold there's too little signal to judge — don't second-guess it.
     assert is_plausible_language("Un pari.", "en")

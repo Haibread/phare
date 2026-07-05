@@ -212,4 +212,11 @@ def llm_output_directive(language: Language) -> str:
     stays exactly as written and only the output language changes."""
     if language == DEFAULT_LANGUAGE:
         return ""
-    return f"Write your response in {LANGUAGE_NAMES[language]}."
+    # "including the very first word": the workhorse model reliably code-switches its opening
+    # connective otherwise ("Since tu aimes…" observed repeatedly on fresh generations) — one
+    # English word the wrong-language guard can't reject without false positives, so head it off
+    # in the instruction instead.
+    return (
+        f"Write your response entirely in {LANGUAGE_NAMES[language]}, including the very first "
+        f"word — never open with an English connective like 'Since' or 'Because'."
+    )
