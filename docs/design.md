@@ -53,17 +53,29 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 
 - `watch_again` — from own history.
 - `you_might_like` — the full pipeline. **This is the actual product**; most value/risk is here.
-- `popular` — global popularity. Stays off-taste (no taste sort, no fit gauge), but it still
-  **respects the profile's `hard_avoids`**: a title matching a hard-avoid is never served here, so
-  "popular" means "popular *and* something you'd actually watch" (a profile with no hard-avoids
-  leaves the row unchanged, and the row is hidden if the filter thins it below the row minimum).
+- `popular` — global popularity. **Selected and ordered by popularity** (that's the row's identity),
+  but its fit gauge reads an **honest taste fit**, not popularity magnitude (lot R6b): each popular
+  title is scored against the profile's real taste — similarity of its embedding to the taste
+  centroid, folded with the graded affinity through the same `_confidence` blend the taste rows use
+  (unproven cap included, since popular skews recent) — so a blockbuster that doesn't fit you reads
+  as a long shot, not a confident pick. It still **respects the profile's `hard_avoids`**: a title
+  matching a hard-avoid is never served here, so "popular" means "popular *and* something you'd
+  actually watch" (a profile with no hard-avoids leaves *selection* unchanged, and the row is hidden
+  if the filter thins it below the row minimum). No taste centroid (cold start) → `confidence` is
+  null → the UI's neutral "worth a look", so the cold-start experience doesn't regress.
 - `continue_watching` / `next_up` — in-progress shows, next episodes (TV roll-up).
 
-Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
-chip (never a number — see *honesty over engagement*). Only `you_might_like` derives it from the
-taste-vector match. The chip **must discriminate** — a badge that reads "strong fit" for every card
-is not information (lot R2, owner complaint: every home-row item at 3/3). Confidence is a weighted
-blend of the per-title signals that actually vary across a slate:
+Each item carries a per-item **confidence** [0,1] that the UI renders as a **continuous-fill gauge**
+(lot R6a): a slim track whose fill width is proportional to the confidence and whose colour is keyed
+to the fit bucket (saffron/success ≥ 0.72, neutral below). **No number and no inline text** — a
+percentage would be false precision on a heuristic blend (*honesty over engagement*). The worded
+bucket label (`common:fit`) still reaches screen readers via the gauge's `aria-label` + hover title,
+and shows visibly in the **detail sheet**. **Swings** keep a categorical badge treatment instead of a
+gauge — a swing is a deliberate stretch, not a point on the confidence axis. In degraded (local-hash)
+mode the gauge tone is capped to neutral so an approximate pick can't read as a confident success.
+The chip **must discriminate** — a gauge that reads "strong fit" for every card is not information
+(lot R2, owner complaint: every home-row item at 3/3). Confidence is a weighted blend of the
+per-title signals that actually vary across a slate:
 
 - **pool-relative similarity** (0.55) — where the pick sits among that query's candidates, *not*
   the raw cosine, which is compressed near the top and would read "strong fit" for everything (H2/A8);
@@ -96,12 +108,14 @@ rows expose an honest signal of their *own* kind, not a fake taste score:
 
 Items the profile has already watched carry a `watched` flag, so the UI badges them "Watched" — most
 visibly in **search**, where a title you've seen can turn up and should say so (review A11).
-- `popular` → popularity magnitude on a log scale (a runaway hit reads stronger than a mild one).
 
-Because those last two aren't a *taste-fit* signal, the UI **doesn't render the fit meter** on the
-`continue_watching` and `popular` rows — the same worded gauge meaning "how far in" or "how
-well-known" on some rows and "how well it fits you" on others would make one label mean several
-things (review H8). Only the taste-driven rows (`you_might_like`, `because…`, dynamic themes) show it.
+Because `continue_watching`'s confidence is recency warmth ("how far into the show you are") and not
+a *taste-fit* signal, the UI **doesn't render the fit gauge** on that row — the same gauge meaning
+"how far in" on one row and "how well it fits you" on another would make one control mean two things
+(review H8). `popular` used to be hidden for the same reason (its old confidence was popularity
+magnitude), but since R6b its confidence *is* a real taste fit, so it now **shows the gauge** like the
+taste-driven rows (`you_might_like`, `because…`, dynamic themes). `continue_watching` is the sole
+remaining member of the frontend's `NO_FIT_ROWS`.
 
 **Page hygiene:** a title appears at most **twice** across the whole page, applied in row-priority
 order so the strongest rows keep it (this is what stops "The Wire" turning up in the hero,

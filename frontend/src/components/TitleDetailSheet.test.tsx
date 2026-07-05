@@ -67,7 +67,11 @@ describe("TitleDetailSheet", () => {
     it("shows the bucket wording, toned to match the gauge", () => {
       vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
       renderSheet(
-        <TitleDetailSheet item={recItem({ confidence: 0.8 })} open={true} onOpenChange={() => {}} />,
+        <TitleDetailSheet
+          item={recItem({ confidence: 0.8 })}
+          open={true}
+          onOpenChange={() => {}}
+        />,
       );
       const fit = screen.getByTestId("detail-fit");
       expect(fit).toHaveTextContent("Strong fit");
@@ -77,12 +81,7 @@ describe("TitleDetailSheet", () => {
     it("omits the fit label for a row with no taste-fit signal (showFit=false)", () => {
       vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
       renderSheet(
-        <TitleDetailSheet
-          item={recItem()}
-          open={true}
-          onOpenChange={() => {}}
-          showFit={false}
-        />,
+        <TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} showFit={false} />,
       );
       expect(screen.queryByTestId("detail-fit")).toBeNull();
     });

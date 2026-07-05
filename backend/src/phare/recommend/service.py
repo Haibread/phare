@@ -423,6 +423,11 @@ class RecommendationService:
                 limit=self.row_size,
                 language=self.language,
                 hard_avoids=avoids,
+                # Honest fit (R6b): score the popularity-ordered picks against the profile's real
+                # taste. No centroid (cold start) → confidence stays null → neutral "worth a look".
+                centroid=self._centroid(profile_id),
+                taste=taste,
+                model_version=self.embed_model_version,
             ),
         ]
         # Cap cross-row repeats (The Wire in hero + you_might_like + popular + theme — review A7),

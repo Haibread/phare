@@ -9,7 +9,14 @@ import uuid
 from typing import Any
 from unittest import mock
 
-from phare.recommend.reranker import _FIT_STRONG, _FIT_TRY, rerank, score_candidate
+from phare.recommend.reranker import (
+    _FIT_STRONG,
+    _FIT_TRY,
+    _UNPROVEN_CONF_CAP,
+    confidence_for_pool,
+    rerank,
+    score_candidate,
+)
 from phare.recommend.schema import Candidate
 
 
@@ -383,3 +390,37 @@ def test_unknown_vote_count_is_not_treated_as_unproven() -> None:
     unknown = _cand(title="Unknown", sim=0.9, genres=["Drama"], vote_count=None)
     recs = {r.title: r for r in rerank([known, unknown], taste, k=2, swing_slots=0)}
     assert recs["Unknown"].confidence == recs["Known"].confidence  # not force-capped
+
+
+def test_confidence_for_pool_matches_rerank_on_the_same_pool() -> None:
+    # confidence_for_pool (R6b: the popular row's honest fit) must be the SAME blend rerank stamps —
+    # it just doesn't re-order. Scoring the identical candidates both ways yields identical
+    # confidences per title, positionally aligned to the input order.
+    taste: dict[str, Any] = {"affinities": {"Drama": 0.9, "Horror": -0.5}, "confidence": 0.8}
+    pool = [
+        _cand(title="A", sim=0.8, genres=["Drama"], vote_count=8000),
+        _cand(title="B", sim=0.2, genres=["Horror"], vote_count=8000),
+        _cand(title="C", sim=0.5, genres=["Comedy"], vote_count=8000),
+    ]
+    pooled = confidence_for_pool(pool, taste)
+    assert len(pooled) == len(pool)  # one confidence per input, positionally aligned
+    by_title = {r.title: r.confidence for r in rerank(pool, taste, k=3, swing_slots=0)}
+    for cand, conf in zip(pool, pooled, strict=True):
+        assert conf == by_title[cand.title]
+
+
+def test_confidence_for_pool_applies_the_unproven_cap() -> None:
+    # A just-dropped popular title (few votes) is capped below the top buckets even top-of-pool and
+    # on-genre — the same A9 cap the reranker enforces, wired for the popular row (skews recent).
+    taste: dict[str, Any] = {"affinities": {"Drama": 1.0}, "confidence": 0.9}
+    pool = [
+        _cand(title="Fresh", sim=0.9, genres=["Drama"], vote_count=5),
+        _cand(title="Proven", sim=0.9, genres=["Drama"], vote_count=8000),
+    ]
+    fresh_conf, proven_conf = confidence_for_pool(pool, taste)
+    assert fresh_conf is not None and fresh_conf <= _UNPROVEN_CONF_CAP
+    assert (proven_conf or 0) > fresh_conf
+
+
+def test_confidence_for_pool_empty_is_empty() -> None:
+    assert confidence_for_pool([], {}) == []
