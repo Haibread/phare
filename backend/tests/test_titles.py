@@ -183,6 +183,32 @@ def test_detail_runtime_survives_a_tmdb_outage(db_session: Session) -> None:
     assert resp.json()["runtimeMinutes"] is None
 
 
+def test_runtime_backfill_still_gets_its_attempt_when_localization_errored(
+    db_session: Session,
+) -> None:
+    # Review finding (round 4): a TMDB exception during localization used to return the
+    # "already fetched" flag as True, so the runtime backfill was skipped even though no
+    # metadata was ever obtained. A transient blip mid-request must not cost the runtime
+    # heal: the first call (localization) fails, the second (backfill) succeeds.
+    class _FlakyThenHealthy:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata | None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("tmdb blip")
+            return _meta(runtime_minutes=148)
+
+    title = _seed_title(db_session, runtime_minutes=None)
+    provider = _FlakyThenHealthy()
+
+    body = _client(db_session, provider).get(f"/titles/{title.id}").json()
+
+    assert provider.calls == 2  # localization failed, backfill still tried
+    assert body["runtimeMinutes"] == 148
+
+
 def test_detail_runtime_stays_null_without_a_tmdb_key(db_session: Session) -> None:
     title = _seed_title(db_session, runtime_minutes=None)
 

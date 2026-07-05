@@ -91,7 +91,11 @@ def _localized_overview_genres(
     except Exception:  # noqa: BLE001 - a TMDB hiccup must not break the detail view
         logger.warning("titles.localize_failed", extra={"title_id": str(title.id)})
         record_fallback("titles", "localization_unavailable", title_id=str(title.id))
-        return (*(_from_cache() if cached is not None else stored), True)
+        # ``False``: no metadata was actually obtained, so the runtime backfill on this request
+        # still gets its one best-effort attempt — the flag means "already *successfully*
+        # consulted", not "already tried". (The failed localization isn't cached, so a later
+        # open retries either way; review finding round-4.)
+        return (*(_from_cache() if cached is not None else stored), False)
     if meta is None:
         return (*(_from_cache() if cached is not None else stored), True)
     # We already have the full metadata in hand — opportunistically heal a missing runtime from the

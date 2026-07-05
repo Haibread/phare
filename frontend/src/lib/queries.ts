@@ -42,6 +42,10 @@ export function useProfiles() {
 export function useHistory(profileId: string | null) {
   // Infinite pages: the API paginates (page/perPage/total) but the UI used to fetch one page and
   // silently truncate — 5 900 events looked like 50. Now pages accumulate behind a "show more".
+  // Known trade-off: an invalidation (feedback, undo, sync…) refetches every accumulated page to
+  // rebuild the cache — linear in how deep the user clicked "show more". Deliberately unbounded
+  // (no maxPages): dropping loaded pages would visually truncate the table the user just expanded,
+  // and history invalidations are rare, user-initiated events.
   return useInfiniteQuery({
     queryKey: keys.history(profileId ?? ""),
     queryFn: ({ pageParam }) => api.history(profileId as string, pageParam),
