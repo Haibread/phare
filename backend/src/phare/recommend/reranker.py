@@ -52,6 +52,54 @@ _CONF_FLOOR = 0.35
 _MIN_PROVEN_VOTES = 200
 _UNPROVEN_CONF_CAP = 0.5
 
+# Confidence blend weights (lot R2 — "the fit badge must discriminate"). Confidence is the input to
+# the frontend fit chip and the eval anti-uniformity guardrail; it must *spread* across a real
+# slate, not read "strong fit" for everything. Measured live on the R1-merged branch, the old mean
+# of three terms — pool-relative similarity, affinity, and taste-confidence — put 35/38 and 41/42
+# displayed items into the top bucket. Two structural reasons, addressed per term below:
+#
+#   sim_rel (0.55): pool-relative placement is the sharpest per-title taste signal now that R1 made
+#   affinity genuinely spread; it stays the lead term. But "top of its pool" alone can't tell a
+#   strong pool from a weak one (every query has a #1), so it no longer carries the whole weight.
+#
+#   affinity (0.25): the *steering* signal — does the pick hit a genre they like. It varies
+#   title-to-title, so folding it in is what keeps a row from collapsing to one label. Only counted
+#   when a taste profile exists; with none, similarity is all we honestly have (below).
+#
+#   sim_abs pool-strength (0.20): absolute normalised similarity, rescaled against the embedder's
+#   observed compressed band (``_SIM_ABS_*`` below). This is the term that makes "top of a weak
+#   pool" read lower than "top of a strong pool" — sim_rel is 1.0 for the #1 of *any* pool, but its
+#   absolute cosine still says how good that #1 actually is. Without it, a thin-taste user's best-of
+#   a-mediocre-set reads as confidently as a rich-taste user's genuine bullseye.
+#
+# The former third term, taste-confidence, is deliberately *dropped from the mean*: it's a
+# per-profile constant (~0.9 on both live profiles), so averaging it into every card lifted the
+# whole slate equally while informing nothing per-title — pure spread compression. It survives only
+# as the CAP it already provided (``_CONF_FLOOR`` below): a thin history still can't emit a blanket
+# "strong fit", but it no longer inflates a well-evidenced profile's every card toward that label.
+_W_CONF_SIM_REL = 0.55
+_W_CONF_AFFINITY = 0.25
+_W_CONF_SIM_ABS = 0.20
+# Absolute-similarity pool-strength band. Raw cosines from the production embedder land compressed
+# in roughly [0.76, 0.92] once mapped to [0,1] (measured live: profile A 0.79–0.92, B 0.76–0.88).
+# Rescale that band to [0,1] so the *level* of a pool separates a strong match from a merely-least-
+# bad one; below the floor reads ~0, at/above the ceiling reads ~1. A generous floor of 0.70 keeps a
+# genuinely weak absolute match from being clamped straight to 0 on a single noisy query.
+_SIM_ABS_FLOOR = 0.70
+_SIM_ABS_CEIL = 0.92
+
+# Fit-chip bucket thresholds — the CANONICAL source, mirrored by the frontend ``fitFor`` in
+# ``frontend/src/lib/fit.ts`` (keep the two in sync; the numbers must match). Confidence at/above
+# ``_FIT_STRONG`` reads "strong fit", at/above ``_FIT_TRY`` reads "worth a try", below is "long
+# shot" (plus swings, which get their own "a stretch" regardless). Calibrated against the new
+# confidence blend on the two live profiles: with these cuts the displayed slate lands in ≥2 buckets
+# with no bucket above ~60% (A 5%/55%/39%, B 0%/60%/40% long/try/strong) — a badge that's constant
+# is not information (lot R2). The bar was lifted from the old 0.66/0.40 because the recalibrated
+# blend rightly produces high values for genuinely strong picks; "strong" now means a real top pick,
+# not merely above the pool median. The eval anti-uniformity guardrail reads these same constants.
+_FIT_STRONG = 0.72
+_FIT_TRY = 0.45
+
 # Chat slate composition by vote count (how well-known a title is — TMDB rating count). This is a
 # deliberate *mix*, not a popularity ranking: ~half well-known, ~a third lesser-known, ~15% low-vote
 # for genuine discovery. The mix controls *which* titles make the slate; the slate is then ordered
@@ -241,36 +289,60 @@ def _select_diverse(
     return chosen
 
 
+def _sim_abs_strength(sim_norm: float) -> float:
+    """Rescale absolute normalised similarity to a [0,1] pool-strength reading over the embedder's
+    observed compressed band (``_SIM_ABS_FLOOR``..``_SIM_ABS_CEIL``). Answers "how good is this pick
+    *in absolute terms*", the signal ``sim_rel`` (relative to its pool) can't carry — the #1 of a
+    weak pool and the #1 of a strong one both read sim_rel≈1.0, but their absolute cosines differ.
+    """
+    return max(0.0, min(1.0, (sim_norm - _SIM_ABS_FLOOR) / (_SIM_ABS_CEIL - _SIM_ABS_FLOOR)))
+
+
 def _confidence(
     taste: Mapping[str, Any],
     *,
     is_swing: bool,
     sim_rel: float,
+    sim_norm: float,
     affinity_norm: float,
     unproven: bool = False,
 ) -> float:
-    """Honest confidence, blending the signals we actually have:
+    """Honest, *discriminating* confidence (lot R2) — a weighted blend of the per-title signals that
+    actually vary across a slate, so the fit chip spreads instead of reading "strong fit" for
+    everything (the owner's complaint: every home-row card at 3/3). The former equal-weight mean of
+    three terms compressed the range; the weights and rationale live on ``_W_CONF_*`` above.
 
-    - **relative similarity** — where this pick sits *within its pool*, not an absolute cosine
-      (compressed near the top, so it reads "strong fit" for everything — review H2/A8);
-    - **affinity** — does it hit a genre they like (the *steering* signal); folding this in is what
-      stops a whole row collapsing to one label, since affinity varies title-to-title. Only counted
-      when a taste profile exists — with none, similarity is all we honestly have, so we don't drag
-      every pick toward neutral;
-    - **taste confidence** — how much history backs the profile at all.
+    - **pool-relative similarity** (``_W_CONF_SIM_REL``) — where this pick sits *within its pool*,
+      the sharpest per-title taste signal; the lead term.
+    - **absolute pool-strength** (``_W_CONF_SIM_ABS``) — how good the match is in absolute terms, so
+      "top of a weak pool" reads lower than "top of a strong pool" (``sim_rel`` alone can't, since
+      every pool has a #1). See :func:`_sim_abs_strength`.
+    - **affinity** (``_W_CONF_AFFINITY``) — does it hit a genre they like (the *steering* signal);
+      varies title-to-title, so it keeps a row from collapsing to one label. Only counted when a
+      taste profile exists — with none, similarity is all we honestly have.
 
-    A thin taste profile also *caps* the result: a barely-evidenced profile can't emit a blanket
-    "strong fit" (A8). An ``unproven`` title (barely any votes — a just-dropped release) is likewise
-    capped: recommending an unwatched-by-anyone title *with confidence* contradicts the whole point
-    of the meter (review A9). Swings hedge low regardless — a reserved discovery pick is a bet.
+    When there is **no taste profile**, affinity carries no signal, so it's dropped and the two
+    similarity terms are renormalised to sum to 1 — the no-taste path stays purely similarity-driven
+    (relative placement + absolute strength), never dragged toward a neutral affinity.
+
+    **Taste-confidence is no longer in the mean** — a per-profile constant averaged into every card
+    lifted the whole slate equally while informing nothing per-title (pure spread compression). It
+    survives only as the CAP it already provided: a lightly-evidenced profile still can't emit a
+    blanket "strong fit" (A8), but a well-evidenced one no longer has every card inflated toward it.
+
+    An ``unproven`` title (barely any votes — a just-dropped release) is likewise capped:
+    recommending an unwatched-by-anyone title *with confidence* contradicts the meter (A9). Swings
+    hedge low regardless — a reserved discovery pick is a bet.
     """
-    signals = [sim_rel]
+    sim_abs = _sim_abs_strength(sim_norm)
     if taste.get("affinities"):
-        signals.append(affinity_norm)
+        base = (
+            _W_CONF_SIM_REL * sim_rel + _W_CONF_SIM_ABS * sim_abs + _W_CONF_AFFINITY * affinity_norm
+        )
+    else:  # no steering signal — renormalise the two similarity terms to a full [0,1] blend
+        sim_weight = _W_CONF_SIM_REL + _W_CONF_SIM_ABS
+        base = (_W_CONF_SIM_REL * sim_rel + _W_CONF_SIM_ABS * sim_abs) / sim_weight
     taste_conf = taste.get("confidence")
-    if taste_conf is not None:
-        signals.append(float(taste_conf))
-    base = sum(signals) / len(signals)
     if taste_conf is not None:  # a lightly-evidenced profile can't claim high confidence
         base = min(base, _CONF_FLOOR + (1.0 - _CONF_FLOOR) * float(taste_conf))
     if unproven:  # no quality signal yet — can't be a confident pick
@@ -356,6 +428,7 @@ def _to_rec(
             taste,
             is_swing=is_swing,
             sim_rel=components["similarity_rel"],
+            sim_norm=components["similarity"],
             affinity_norm=components["affinity"],
             unproven=candidate.vote_count is not None and candidate.vote_count < _MIN_PROVEN_VOTES,
         ),
