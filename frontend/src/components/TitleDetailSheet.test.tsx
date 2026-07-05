@@ -63,6 +63,31 @@ describe("TitleDetailSheet", () => {
     await waitFor(() => expect(why).toHaveTextContent("Because you loved tense, cerebral sci-fi."));
   });
 
+  describe("worded fit label (R6a: the card gauge dropped its inline text)", () => {
+    it("shows the bucket wording, toned to match the gauge", () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      renderSheet(
+        <TitleDetailSheet item={recItem({ confidence: 0.8 })} open={true} onOpenChange={() => {}} />,
+      );
+      const fit = screen.getByTestId("detail-fit");
+      expect(fit).toHaveTextContent("Strong fit");
+      expect(fit).toHaveAttribute("data-tone", "success");
+    });
+
+    it("omits the fit label for a row with no taste-fit signal (showFit=false)", () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      renderSheet(
+        <TitleDetailSheet
+          item={recItem()}
+          open={true}
+          onOpenChange={() => {}}
+          showFit={false}
+        />,
+      );
+      expect(screen.queryByTestId("detail-fit")).toBeNull();
+    });
+  });
+
   describe("request / availability action (moved from the card, round 4)", () => {
     function stubDetail() {
       vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();

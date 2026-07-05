@@ -38,11 +38,39 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
 }
 
 describe("PosterCard", () => {
-  it("shows the title, year, and a worded fit label", () => {
-    renderCard(<PosterCard item={recItem({ title: "Arrival" })} />);
+  it("shows the title, year, and a continuous-fill fit gauge (no inline text)", () => {
+    renderCard(<PosterCard item={recItem({ title: "Arrival", confidence: 0.8 })} />);
     expect(screen.getAllByText("Arrival").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Strong fit")).toBeInTheDocument();
     expect(screen.getByText(/2016/)).toBeInTheDocument();
+    // The gauge is a meter labelled with the bucket wording (no inline text on the card anymore).
+    const gauge = screen.getByTestId("fit");
+    expect(gauge).toHaveAttribute("role", "meter");
+    expect(gauge).toHaveAttribute("aria-label", "Strong fit");
+    // The worded label is NOT rendered as visible card text.
+    expect(screen.queryByText("Strong fit")).toBeNull();
+  });
+
+  it("fills the gauge proportionally to confidence and tones it by bucket", () => {
+    const { container } = renderCard(<PosterCard item={recItem({ confidence: 0.8 })} />);
+    const fill = container.querySelector('[data-testid="fit"] > span > span') as HTMLElement;
+    expect(fill.style.width).toBe("80%");
+    expect(fill.getAttribute("data-tone")).toBe("success");
+  });
+
+  it("tones a mid-confidence gauge neutral and fills it less", () => {
+    const { container } = renderCard(<PosterCard item={recItem({ confidence: 0.5 })} />);
+    const gauge = screen.getByTestId("fit");
+    expect(gauge).toHaveAttribute("aria-label", "Worth a try");
+    const fill = container.querySelector('[data-testid="fit"] > span > span') as HTMLElement;
+    expect(fill.style.width).toBe("50%");
+    expect(fill.getAttribute("data-tone")).toBe("neutral");
+  });
+
+  it("renders a swing as its badge, not as a gauge", () => {
+    renderCard(<PosterCard item={recItem({ isSwing: true })} />);
+    // The swing badge carries the categorical meaning; the scalar gauge is suppressed.
+    expect(screen.getByTestId("swing-badge")).toBeInTheDocument();
+    expect(screen.queryByTestId("fit")).toBeNull();
   });
 
   it("gives the open button a full accessible name: title, year and fit (L2)", () => {
@@ -61,10 +89,12 @@ describe("PosterCard", () => {
     expect(label).not.toContain("fit");
   });
 
-  it("badges swing picks and labels them a stretch", () => {
+  it("badges swing picks (the categorical treatment, in place of the scalar gauge)", () => {
     renderCard(<PosterCard item={recItem({ isSwing: true })} />);
+    // A swing keeps its distinct badge treatment; the worded "A stretch" wording survives in the
+    // gauge/detail-sheet path, not as inline card text — the card no longer renders any fit words.
     expect(screen.getByTestId("swing-badge")).toBeInTheDocument();
-    expect(screen.getByText("A stretch")).toBeInTheDocument();
+    expect(screen.queryByTestId("fit")).toBeNull();
   });
 
   it("explains the swing badge via a tooltip and aria-describedby (K3)", () => {
@@ -169,10 +199,21 @@ describe("RecRow", () => {
     expect(screen.queryByTestId("fit")).toBeNull();
   });
 
-  it("hides the fit label on the popular row", () => {
-    // H8: the popular row's confidence is popularity magnitude, not taste fit — showing it as the
-    // same affinity gauge as a personalised row makes one number mean two different things.
+  it("shows the fit gauge on the popular row (R6b: popular now carries an honest taste fit)", () => {
+    // The popular row's confidence is now a real taste fit (similarity to the profile centroid +
+    // affinity + the standard blend), not popularity magnitude — so it earns the same gauge as the
+    // taste-driven rows. Popularity only orders the row now; the gauge reads how well it fits you.
     renderCard(<RecRow row={{ key: "popular", title: "Popular", items: [recItem({})] }} />);
+    expect(screen.getByTestId("fit")).toBeInTheDocument();
+  });
+
+  it("still hides the fit gauge on the continue-watching row", () => {
+    // Recency warmth ("how far in") is not a taste fit, so continue-watching keeps no gauge.
+    renderCard(
+      <RecRow
+        row={{ key: "continue_watching", title: "Continue watching", items: [recItem({})] }}
+      />,
+    );
     expect(screen.queryByTestId("fit")).toBeNull();
   });
 

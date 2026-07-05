@@ -1,8 +1,11 @@
-/** Maps a recommendation's confidence + swing flag to an honest, non-numeric fit label and a
- * coarse 3-step bar. Pure so it can be unit-tested and reused by card + detail views.
+/** Maps a recommendation's confidence + swing flag to an honest, non-numeric fit signal: a worded
+ * bucket label (accessibility + detail sheet) plus a continuous gauge fill for the card meter. Pure
+ * so it can be unit-tested and reused by card + detail views.
  *
  * Swings are never scored against the others — they're deliberate discovery picks, so they get
- * their own "a stretch" treatment regardless of confidence (design.md: honesty over engagement). */
+ * their own "a stretch" treatment regardless of confidence (design.md: honesty over engagement).
+ * A swing carries no gauge fill: its meaning is categorical (a reserved stretch pick), not a scalar
+ * on the same axis as the others, so the card renders its badge instead of the gauge. */
 
 export type FitTone = "success" | "neutral" | "swing";
 
@@ -10,7 +13,10 @@ export interface Fit {
   /** i18n key under the `common:fit` namespace; translated where rendered (no English here). */
   labelKey: string;
   tone: FitTone;
-  filled: 1 | 2 | 3;
+  /** Continuous gauge fill in [0, 1] — the confidence itself, proportional. `null` for a swing
+   * (rendered as a badge, not a gauge) and clamped to a neutral minimum so a real-but-tiny fit is
+   * still a visible sliver rather than an empty track. */
+  fill: number | null;
 }
 
 /** Fit-chip bucket thresholds. MIRROR of the canonical backend constants ``_FIT_STRONG`` /
@@ -26,22 +32,30 @@ export interface Fit {
 const STRONG_FIT = 0.72;
 const WORTH_A_TRY = 0.45;
 
+/** Smallest gauge fill we ever draw for a non-swing pick, so a genuine-but-low fit still reads as a
+ * thin sliver rather than an empty track (an empty gauge looks like "no data", which is a different
+ * state — that's `confidence === null`, the neutral "worth a look"). */
+const MIN_FILL = 0.08;
+
 /** ``degraded`` = retrieval is running on the local hash embedder (no embedding key), so similarity
- * is not semantically meaningful. In that mode the top "strong fit" bucket is never shown — an
- * approximate pick must not read as a confident one (review M2). */
+ * is not semantically meaningful. In that mode the top "strong fit" bucket is never shown and the
+ * gauge tone is capped to neutral — an approximate pick must not read as a confident one (review M2). */
 export function fitFor(confidence: number | null, isSwing: boolean, degraded = false): Fit {
   if (isSwing) {
-    return { labelKey: "fit.stretch", tone: "swing", filled: 1 };
+    // Categorical, not scalar — the card shows the swing badge, so no gauge fill.
+    return { labelKey: "fit.stretch", tone: "swing", fill: null };
   }
   if (confidence === null) {
-    return { labelKey: "fit.worthALook", tone: "neutral", filled: 1 };
+    // No opinion: the neutral "worth a look" at a minimal sliver (distinct from a real low fit).
+    return { labelKey: "fit.worthALook", tone: "neutral", fill: MIN_FILL };
   }
+  const fill = Math.max(MIN_FILL, Math.min(1, confidence));
   if (confidence >= STRONG_FIT && !degraded) {
-    return { labelKey: "fit.strong", tone: "success", filled: 3 };
+    return { labelKey: "fit.strong", tone: "success", fill };
   }
   if (confidence >= WORTH_A_TRY) {
     // Includes a would-be "strong" pick in degraded mode — capped to "worth a try", never the top.
-    return { labelKey: "fit.worthATry", tone: "neutral", filled: 2 };
+    return { labelKey: "fit.worthATry", tone: "neutral", fill };
   }
-  return { labelKey: "fit.longShot", tone: "neutral", filled: 1 };
+  return { labelKey: "fit.longShot", tone: "neutral", fill };
 }
