@@ -9,7 +9,7 @@ import uuid
 from typing import Any
 from unittest import mock
 
-from phare.recommend.reranker import rerank, score_candidate
+from phare.recommend.reranker import _FIT_STRONG, _FIT_TRY, rerank, score_candidate
 from phare.recommend.schema import Candidate
 
 
@@ -76,6 +76,40 @@ def test_affinity_distribution_has_nonzero_variance() -> None:
     ]
     recs = rerank(pool, taste, k=3, swing_slots=0)
     assert len({r.components["affinity"] for r in recs}) >= 2
+
+
+def test_affinity_is_graded_across_match_tiers() -> None:
+    # R1: affinity used to saturate at 1.0 for nearly every candidate (sum-of-matched-weights, then
+    # clamped to 1), so a 3-strong-match read the same as a 1-match and the fit meter went "strong"
+    # for the whole slate. Graded now: more/heavier matches score strictly higher, with real spread.
+    # A realistic broad profile (like the ones seen in prod) — a dozen positives plus a dislike.
+    taste: dict[str, Any] = {
+        "affinities": {
+            "Crime": 0.8,
+            "Drama": 0.5,
+            "Action": 0.9,
+            "Thriller": 0.8,
+            "Adventure": 0.6,
+            "Science Fiction": 0.7,
+            "Horror": -0.7,
+        }
+    }
+    three = _cand(title="Three", sim=0.4, genres=["Action", "Crime", "Thriller"])  # 3 strong hits
+    one = _cand(title="One", sim=0.4, genres=["Adventure"])  # 1 mid-weight hit
+    zero = _cand(title="Zero", sim=0.4, genres=["Documentary"])  # vocabulary silence
+    negative = _cand(title="Neg", sim=0.4, genres=["Horror"])  # a disliked genre
+    recs = {r.title: r for r in rerank([three, one, zero, negative], taste, k=4, swing_slots=0)}
+    a3 = recs["Three"].components["affinity"]
+    a1 = recs["One"].components["affinity"]
+    a0 = recs["Zero"].components["affinity"]
+    an = recs["Neg"].components["affinity"]
+    # Strict ordering: 3-match > 1-match > neutral(0-match) > negative.
+    assert a3 > a1 > a0 > an
+    assert a0 == 0.5  # nothing matched → neutral, never punished for silence (principle 4)
+    # Meaningful spread, not a hair's-width separation. 0.15 mirrors the eval harness's
+    # _MIN_SIM_REL_SPREAD guardrail — the smallest gap we treat as "genuinely discriminating"
+    # rather than saturation noise. Here the 3-vs-1 tier gap clears it comfortably (~0.26).
+    assert a3 - a1 >= 0.15
 
 
 def test_popularity_penalty_demotes_blockbuster() -> None:
@@ -159,16 +193,49 @@ def test_confidence_capped_by_thin_history() -> None:
 
 
 def test_confidence_distribution_spans_multiple_buckets() -> None:
-    # A8/H2: confidence used to read one label for the whole slate. With pool-relative similarity it
-    # spreads. Bucket by the frontend thresholds (fit.ts: >=0.66 strong, >=0.4 mid, else low).
+    # A8/H2/R2: confidence used to read one label for the whole slate. With pool-relative similarity
+    # (and, in R2, absolute pool-strength) it spreads. Bucket by the canonical fit thresholds
+    # (mirrored in fit.ts) rather than hardcoded numbers, so this can't drift from the chip.
     cands = [
         _cand(title=f"t{i}", sim=s, genres=["Drama"]) for i, s in enumerate([0.9, 0.6, 0.3, 0.1])
     ]
     recs = rerank(cands, {}, k=4, swing_slots=0)
     buckets = {
-        2 if (r.confidence or 0) >= 0.66 else 1 if (r.confidence or 0) >= 0.4 else 0 for r in recs
+        2 if (r.confidence or 0) >= _FIT_STRONG else 1 if (r.confidence or 0) >= _FIT_TRY else 0
+        for r in recs
     }
     assert len(buckets) >= 2
+
+
+def test_confidence_spreads_on_a_realistic_mixed_slate() -> None:
+    # R2: the fit badge must discriminate. Build a realistic slate — strong multi-affinity picks, a
+    # weak single-affinity pick, and neutral off-taste candidates, over a *varied* similarity band —
+    # and assert the displayed confidence genuinely spreads (a real range, not one flat label) AND
+    # occupies at least two frontend buckets. This is the anti-uniformity contract the owner asked
+    # for ("tout à 3/3 en forte affinité, c'est beaucoup trop vague"), proven hermetically.
+    taste: dict[str, Any] = {
+        "affinities": {"Science Fiction": 0.9, "Thriller": 0.6, "Western": -0.5},
+        "confidence": 0.9,  # well-evidenced: generous cap, so spread must come from the blend
+    }
+    pool = [
+        # Strong: top-of-pool similarity AND on two liked genres.
+        _cand(
+            title="bullseye1", sim=0.86, genres=["Science Fiction", "Thriller"], vote_count=5_000
+        ),
+        _cand(title="bullseye2", sim=0.83, genres=["Science Fiction"], vote_count=4_000),
+        # Mid: decent similarity, one liked genre.
+        _cand(title="ok1", sim=0.80, genres=["Thriller"], vote_count=3_000),
+        _cand(title="ok2", sim=0.79, genres=["Science Fiction"], vote_count=2_500),
+        # Weak/neutral: lower similarity, off-taste or disliked genres.
+        _cand(title="weak1", sim=0.77, genres=["Drama"], vote_count=2_000),
+        _cand(title="weak2", sim=0.76, genres=["Western"], vote_count=1_800),
+        _cand(title="weak3", sim=0.755, genres=["Comedy"], vote_count=1_500),
+    ]
+    recs = rerank(pool, taste, k=7, swing_slots=0)
+    confs = [r.confidence or 0.0 for r in recs]
+    assert max(confs) - min(confs) >= 0.15  # a real spread, not a flat wall of one label
+    buckets = {2 if c >= _FIT_STRONG else 1 if c >= _FIT_TRY else 0 for c in confs}
+    assert len(buckets) >= 2  # the chip lands in at least two fit buckets
 
 
 def test_swing_slots_clamped_to_available() -> None:

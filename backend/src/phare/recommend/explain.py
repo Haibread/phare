@@ -51,12 +51,14 @@ _REASON_MAX_TOKENS = 80
 # TTL is fine; the key carries correctness, the TTL only bounds memory.
 _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 
-# Bump when the explanation *prompt* changes. It's folded into the cache fingerprint so a wording
-# change invalidates every previously-cached blurb (in-process and the durable Postgres rows)
-# without a manual purge — otherwise a deploy keeps serving the old phrasing until taste happens to
-# change, since the key is otherwise only the taste summary. "2" = the personalised-prompt rewrite;
-# "3" = grounded in synopsis/keywords + honest weak-fit framing (review H4).
-_PROMPT_VERSION = "3"
+# Bump when the explanation *prompt* — or the acceptance contract on its output — changes. It's
+# folded into the cache fingerprint so a bump invalidates every previously-cached blurb (in-process
+# and the durable Postgres rows) without a manual purge — otherwise a deploy keeps serving the old
+# phrasing until taste happens to change, since the key is otherwise only the taste summary.
+# "2" = the personalised-prompt rewrite; "3" = grounded in synopsis/keywords + honest weak-fit
+# framing (review H4); "4" = the wrong-language guard (R5) — entries cached before it exist that
+# the guard would now reject (observed: Franglais on a French hero), so flush them.
+_PROMPT_VERSION = "4"
 
 
 def _taste_fingerprint(
@@ -97,6 +99,62 @@ def has_spoiler_markers(text: str) -> bool:
     """True if the text names a plot reveal. Marker-only (no length rule), so it suits a
     multi-sentence chat reply as well as a one-line blurb (review B7)."""
     return _SPOILER_MARKERS.search(text) is not None
+
+
+# Wrong-language guard (Lot R3). The cache key already splits on language (round 2), but nothing
+# checked the *content*: mistral-small answered a French-directive prompt in Franglais ("Since tu
+# aimes les thrillers scientifiques…") and that reply got cached permanently, then served to French
+# readers by both the eager row path and the lazy stream. Like the spoiler net, this is a cheap,
+# deterministic, no-LLM last line of defence on the model's output before we cache it.
+#
+# Heuristic: score the text by counting strong, unambiguous function words per language and require
+# the *requested* language to strictly win. Function words are the giveaway of the prose language,
+# and — unlike content words — a proper noun can't masquerade as one, so an English movie *title*
+# dropped inside a French sentence ("Comme vous aimez les thrillers, Blade Runner…") contributes
+# zero English signal and the French sentence still wins. A tie or a lead for the other language
+# rejects — which is exactly what catches the observed English-led Franglais on a French request.
+_LANGUAGE_SIGNALS: dict[Language, re.Pattern[str]] = {
+    "fr": re.compile(
+        r"\b(le|la|les|des|une|un|est|dans|avec|pour|vous|tu|vos|votre|qui|que|ce|cette|"
+        r"aime|aimez|goût|goûts)\b",
+        re.IGNORECASE,
+    ),
+    "en": re.compile(
+        r"\b(the|a|an|is|are|in|with|for|you|your|this|that|which|who|and|of|to|like|likes|"
+        r"taste|since)\b",
+        re.IGNORECASE,
+    ),
+}
+
+# Below this length there's too little prose to judge — a two-word blurb or a bare title has no
+# reliable function-word signal in either language, so we don't second-guess it (mirrors the
+# spoiler net's "don't over-reject" stance). Kept in sync with the ~40-char task threshold.
+_LANGUAGE_MIN_LEN = 40
+
+
+def is_plausible_language(text: str, language: Language) -> bool:
+    """True if ``text`` reads as ``language`` (or is too short to judge). Cheap and deterministic.
+
+    Counts strong function-word signals for the requested language and every *other* supported
+    language, and requires the requested one to strictly win. Short texts (< ~40 chars) always pass:
+    too little signal to call it. This is a plausibility net, not a language detector — it exists to
+    reject the clear cross-language leaks (a French reply to an English request, or English-led
+    Franglais to a French one) before they get cached, not to grade grammar."""
+    if len(text) < _LANGUAGE_MIN_LEN:
+        return True
+    requested = _LANGUAGE_SIGNALS.get(language)
+    if requested is None:  # a language with no signal table configured — don't gate it
+        return True
+    mine = len(requested.findall(text))
+    others = max(
+        (
+            len(pattern.findall(text))
+            for lang, pattern in _LANGUAGE_SIGNALS.items()
+            if lang != language
+        ),
+        default=0,
+    )
+    return mine > others
 
 
 def is_spoiler_safe(text: str) -> bool:
@@ -341,8 +399,8 @@ class Explainer:
         return text
 
     def _call_or_template(self, rec: Recommendation, taste: Mapping[str, Any]) -> tuple[str, str]:
-        """Return ``(text, outcome)`` where outcome is ``ok`` / ``spoiler_rejected`` / ``llm_error``
-        — the caller uses it to decide whether the result is worth caching."""
+        """Return ``(text, outcome)`` where outcome is ``ok`` / ``spoiler_rejected`` /
+        ``wrong_language`` / ``llm_error`` — the caller uses it to decide whether to cache."""
         try:
             candidate = self.llm.complete(  # type: ignore[union-attr]
                 _llm_prompt(rec, taste, self.language), max_tokens=_REASON_MAX_TOKENS
@@ -352,6 +410,14 @@ class Explainer:
             return _template(rec, taste, self.language), "llm_error"
         safe = coerce_safe(candidate) if candidate else None
         if safe:
+            if not is_plausible_language(safe, self.language):
+                # The model answered in (or drifted into) the wrong language for this request —
+                # a stable outcome for this (title, language), so cache the correct-language
+                # template rather than pin the Franglais blurb the cache key can't tell apart.
+                record_fallback(
+                    "explain", "wrong_language", title=rec.title, language=self.language
+                )
+                return _template(rec, taste, self.language), "wrong_language"
             return safe, "ok"
         if candidate:
             # A genuine plot-reveal marker — a stable outcome for this title; cache the template.
@@ -409,8 +475,16 @@ def stream_lazy_reason(
             yield _template(rec, taste, language)
         return
     full = "".join(chunks).strip()
-    if full and _SPOILER_MARKERS.search(full) is None and cache is not None:
-        cache.set(key, full)
+    if not full or cache is None:
+        return
+    if _SPOILER_MARKERS.search(full) is not None:
+        return  # a plot-reveal leaked through the stream — don't cache it (prompt is the defence)
+    if not is_plausible_language(full, language):
+        # Wrong-language completion (the streamed Franglais bug): the reader already saw it live,
+        # but don't pin it — leave the entry empty so the next open regenerates, same as spoiler.
+        record_fallback("explain_stream", "wrong_language", title=rec.title, language=language)
+        return
+    cache.set(key, full)
 
 
 def _reason_db_key(key: Hashable) -> tuple[uuid.UUID, str] | None:

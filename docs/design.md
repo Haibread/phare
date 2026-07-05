@@ -16,6 +16,22 @@ filters) → re-ranker → explanations (LLM)`.
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
   guarantee catalog coverage over time.
+  - **Graded affinity (review R1).** The affinity term measures *how much of a profile's taste a
+    candidate satisfies*, not just whether it hits anything. It used to sum the matched affinity
+    weights and clamp to 1, so a real profile (a dozen-plus positives weighted 0.3–0.9) saturated:
+    matching any two liked genres already read a flat 1.0, and the fit meter it feeds collapsed to
+    "strong" for the whole slate. Now each match contributes its weight against a **saturating
+    budget** — the sum of the profile's four strongest same-sign weights: `pos = min(1, Σ matched
+    positive weights ÷ budget)`, `neg = min(1, Σ |matched negative weights| ÷ budget)`, and
+    `affinity = pos − neg` in [−1, 1] (mapped to [0, 1] with 0.5 = neutral for scoring). The
+    budget is capped at the strongest few keys rather than the whole profile because a title carries
+    only a handful of genres/keywords and can realistically satisfy only a few affinities;
+    normalising against every key would crush every genuine match toward neutral. Consequences: a
+    candidate matching **three strong** positives scores visibly above one matching **a single
+    mid-weight** key (measured spread ≈ 0.26 on a real profile); a candidate matching **nothing**
+    stays at the neutral 0.5 — vocabulary silence is never punished (honesty, principle 4);
+    **negative** affinities pull the score down proportionally; and hard-avoids remain a **separate
+    upstream filter**, untouched by this term. Deterministic, cheap, no LLM.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
 - **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.
@@ -45,14 +61,31 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 
 Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
 chip (never a number — see *honesty over engagement*). Only `you_might_like` derives it from the
-taste-vector match — and from the pick's **pool-relative** similarity (where it sits among that
-query's candidates), not the raw cosine, which is compressed near the top and would read "strong
-fit" for everything (review H2/A8). A lightly-evidenced taste profile also *caps* the chip, so a
-thin history can't produce a blanket "strong fit"; and a title with almost no votes (a just-dropped
-release, no quality signal yet) is capped too, so it can surface as a discovery pick but never as a
-sure thing (review A9) — it graduates on its own as it accrues votes. The heuristic rows expose an
-honest signal of
-their *own* kind, not a fake taste score:
+taste-vector match. The chip **must discriminate** — a badge that reads "strong fit" for every card
+is not information (lot R2, owner complaint: every home-row item at 3/3). Confidence is a weighted
+blend of the per-title signals that actually vary across a slate:
+
+- **pool-relative similarity** (0.55) — where the pick sits among that query's candidates, *not*
+  the raw cosine, which is compressed near the top and would read "strong fit" for everything (H2/A8);
+- **absolute pool-strength** (0.20) — the pick's absolute similarity rescaled over the embedder's
+  observed band, so "top of a weak pool" reads lower than "top of a strong pool" (pool-relative
+  alone can't tell them apart — every pool has a #1);
+- **affinity** (0.25) — does it hit a genre they like (the steering signal); only counted when a
+  taste profile exists. With no taste, the two similarity terms carry it alone.
+
+Taste-confidence is **not** blended into the mean — a per-profile constant added to every card lifts
+the whole slate equally while informing nothing per-title (pure spread compression). It survives
+only as a **cap**: a lightly-evidenced profile can't produce a blanket "strong fit". A title with
+almost no votes (a just-dropped release, no quality signal yet) is capped too, so it can surface as
+a discovery pick but never as a sure thing (review A9) — it graduates on its own as it accrues votes.
+
+The frontend chip buckets that confidence into **strong fit** (≥ 0.72), **worth a try** (≥ 0.45),
+and **long shot** (below), plus swings' own "a stretch". Those cuts are calibrated so a realistic
+home-row slate lands in at least two buckets with no bucket above ~60% — the eval harness enforces
+this with an **anti-uniformity guardrail** (fails a slate whose displayed items all share one
+bucket, on the real embedder, skipped offline and for tiny slates). The thresholds live once in the
+reranker (`_FIT_STRONG` / `_FIT_TRY`) and are mirrored in `frontend/src/lib/fit.ts`. The heuristic
+rows expose an honest signal of their *own* kind, not a fake taste score:
 
 - `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally
   your top-rated titles, sorted best-first. A show you're partway through is **excluded** here —

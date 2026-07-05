@@ -60,7 +60,11 @@ if not os.environ.get("PHARE_LIVE_LLM"):
 _BASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://phare:phare@localhost:5432/phare"
 )
-_TEST_DB = "phare_test"
+# Overridable so concurrent suites (parallel worktrees, agents, CI shards) don't clobber each
+# other: the session fixture DROPs/CREATEs this database WITH (FORCE), so two runs sharing the
+# default name kill each other's connections mid-test. Default appends the PID for isolation;
+# set TEST_DB_NAME for a stable name (e.g. in CI).
+_TEST_DB = os.environ.get("TEST_DB_NAME", f"phare_test_{os.getpid()}")
 
 # Monotonic sequence for default account emails — see make_account. Keeps independent tests from
 # colliding on one login identity without threading a unique email through every call site.
