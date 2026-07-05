@@ -4,27 +4,24 @@ non-LLM rows live here. Every row degrades to empty rather than erroring at N=0.
 
 from __future__ import annotations
 
-import math
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import Float, cast, func, select, true
 from sqlalchemy.orm import Session
 
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
-from phare.db.models import EventType, Title, TitleKind, WatchEvent
+from phare.db.models import EventType, Title, TitleEmbedding, TitleKind, WatchEvent
 from phare.recommend.candidates import _is_hard_avoided
-from phare.recommend.schema import Recommendation, Row
+from phare.recommend.reranker import confidence_for_pool
+from phare.recommend.schema import Candidate, Recommendation, Row
 
 _MIN_DT = datetime(1, 1, 1, tzinfo=UTC)
 
 # "Continue watching" confidence decays with how long ago you last touched the show — a thread you
 # watched this week is warm, one you abandoned months ago has cooled off. Half-life ~6 weeks.
 _CONTINUE_HALF_LIFE_DAYS = 45.0
-# "Popular" confidence is the popularity magnitude on a log scale: TMDB popularity ~1000 reads as a
-# full bar, a mild ~100 as roughly two-thirds, so a runaway hit outranks a lukewarm one honestly.
-_POPULAR_LOG_FULL = 3.0
 
 
 def _recency_confidence(last: datetime | None, *, now: datetime) -> float:
@@ -37,11 +34,69 @@ def _recency_confidence(last: datetime | None, *, now: datetime) -> float:
     return round(0.5 ** (days / _CONTINUE_HALF_LIFE_DAYS), 4)
 
 
-def _popularity_confidence(popularity: float | None) -> float:
-    """Map an unbounded TMDB popularity to a [0, 1] confidence on a log scale."""
-    if not popularity or popularity <= 0:
-        return 0.0
-    return round(min(math.log10(popularity + 1.0) / _POPULAR_LOG_FULL, 1.0), 4)
+def _popular_confidences(
+    session: Session,
+    titles: Sequence[Title],
+    *,
+    centroid: Sequence[float] | None,
+    taste: dict[str, object],
+    model_version: str,
+) -> list[float | None]:
+    """Honest per-title taste fit for the *popularity-ordered* popular row (lot R6b).
+
+    The row is still selected and ordered by popularity — that's its identity — but its fit gauge
+    must read real taste, not popularity magnitude (the old ``_popularity_confidence`` mapped log
+    popularity into ``confidence``, so "Scary Movie" read 0.92 for a cerebral-sci-fi profile: lie).
+    So each popular title is scored against the profile's actual taste: cosine similarity of its
+    embedding to the taste centroid, folded with the graded affinity through the canonical
+    :func:`confidence_for_pool` blend (unproven cap included, since popular skews recent).
+
+    Degrades to ``None`` (→ UI's neutral "worth a look") for every title when there's no taste
+    centroid (cold start), and per-title when a specific title has no embedding in the active space
+    — never a fabricated score. Ordering is untouched; only ``confidence`` changes.
+    """
+    if centroid is None or not titles:
+        return [None] * len(titles)
+    distance = TitleEmbedding.embedding.cosine_distance(list(centroid))
+    sims = dict(
+        session.execute(
+            select(TitleEmbedding.title_id, distance).where(
+                TitleEmbedding.title_id.in_([t.id for t in titles]),
+                TitleEmbedding.model_version == model_version,
+            )
+        ).all()
+    )
+    # Build candidates only for titles that actually have an embedding; keep positional alignment by
+    # tracking which row index each scored candidate maps back to.
+    candidates: list[Candidate] = []
+    index_of: list[int] = []
+    for i, title in enumerate(titles):
+        dist = sims.get(title.id)
+        if dist is None:  # no embedding in this space yet — honest null, not a guess
+            continue
+        candidates.append(
+            Candidate(
+                title_id=title.id,
+                title=title.title,
+                kind=title.kind.value,
+                year=title.year,
+                genres=list(title.genres),
+                keywords=list(title.keywords),
+                runtime_minutes=title.runtime_minutes,
+                popularity=title.popularity,
+                vote_count=title.vote_count,
+                vote_average=title.vote_average,
+                overview=title.overview,
+                poster_path=title.poster_path,
+                similarity=1.0 - float(dist),
+            )
+        )
+        index_of.append(i)
+    scored = confidence_for_pool(candidates, taste)
+    out: list[float | None] = [None] * len(titles)
+    for row_index, confidence in zip(index_of, scored, strict=True):
+        out[row_index] = confidence
+    return out
 
 
 def loved_seed_titles(session: Session, profile_id: uuid.UUID, *, limit: int = 3) -> list[Title]:
@@ -160,14 +215,24 @@ def popular_row(
     limit: int = 12,
     language: Language = DEFAULT_LANGUAGE,
     hard_avoids: Collection[str] = (),
+    centroid: Sequence[float] | None = None,
+    taste: dict[str, object] | None = None,
+    model_version: str | None = None,
 ) -> Row:
     """Global popularity over the catalog, excluding what the profile has already seen.
 
-    The row stays deliberately off-taste (no taste sort, no fit gauge), but it never serves a title
-    that matches the profile's ``hard_avoids`` — "popular" should mean "popular *and* something
-    you'd actually watch" (decision M10.1). Reuses the shared hard-avoid matcher the taste-driven
-    rows use (:func:`phare.recommend.candidates._is_hard_avoided`); a profile with no
-    ``hard_avoids`` leaves the row strictly unchanged."""
+    Selection and ordering are by popularity — that's the row's identity — but the per-item fit
+    gauge reads *honest taste* (lot R6b): each popular title is scored against the profile's real
+    taste (similarity to the taste centroid + affinity, through the canonical confidence blend), not
+    the old popularity-magnitude ``confidence`` that made a blockbuster read as a confident fit.
+    Pass ``centroid`` + ``taste`` + ``model_version`` to enable this; omit them (or a cold-start
+    profile with no centroid) and every item's ``confidence`` is ``None`` — the UI's neutral "worth
+    a look", so the cold-start experience never regresses.
+
+    The row never serves a title matching the profile's ``hard_avoids`` — "popular" should mean
+    "popular *and* something you'd actually watch" (decision M10.1). Reuses the shared hard-avoid
+    matcher the taste-driven rows use (:func:`phare.recommend.candidates._is_hard_avoided`); a
+    profile with no ``hard_avoids`` leaves the *selection* strictly unchanged."""
     watched = (
         select(WatchEvent.title_id).where(WatchEvent.profile_id == profile_id).scalar_subquery()
     )
@@ -183,14 +248,21 @@ def popular_row(
     ).all()
     if avoids:
         rows = [title for title in rows if not _is_hard_avoided(title, avoids)][:limit]
+    confidences = _popular_confidences(
+        session,
+        rows,
+        centroid=centroid,
+        taste=taste or {},
+        model_version=model_version or "",
+    )
     items = [
         _rec(
             title,
             score=title.popularity or 0.0,
-            confidence=_popularity_confidence(title.popularity),
+            confidence=confidence,
             explanation=translate(language, "explain.popular"),
         )
-        for title in rows
+        for title, confidence in zip(rows, confidences, strict=True)
     ]
     return Row(key="popular", title=translate(language, "row.popular"), items=items)
 

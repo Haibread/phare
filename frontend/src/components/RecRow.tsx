@@ -6,9 +6,12 @@ import styles from "./components.module.css";
 // so the detail sheet can anchor the "why this" reason on that title. Other rows have no anchor.
 const BECAUSE_PREFIX = "because:";
 // Rows whose per-item confidence is NOT a taste-fit signal, so showing it as an affinity gauge would
-// misread: "continue_watching" is recency warmth, and "popular" is popularity magnitude ("well-known",
-// not "fits you") — the same meter meaning two different things is exactly review H8. Both hide it.
-const NO_FIT_ROWS = new Set(["continue_watching", "popular"]);
+// misread. "continue_watching" is the last member: its confidence is recency warmth ("how far into
+// the show you are"), a different axis from "how well it fits you" — the same gauge meaning two
+// things is exactly review H8. "popular" LEFT this set in R6b: its confidence is now a real taste
+// fit (similarity to the profile centroid + the standard blend), only ordered by popularity, so it
+// earns the same honest gauge as the taste-driven rows.
+const NO_FIT_ROWS = new Set(["continue_watching"]);
 
 export function RecRow({ row }: { row: RecommendationRow }): React.JSX.Element | null {
   if (row.items.length === 0) {

@@ -25,46 +25,35 @@
 /* Confidence meter ------------------------------------------------------- */
 
 .fit {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
+  display: block;
+  width: 100%;
 }
 
-.fitLabel {
-  font-size: 0.78rem;
-  font-weight: 500;
-}
-
-.fitLabel[data-tone="success"] {
-  color: var(--success);
-}
-.fitLabel[data-tone="neutral"] {
-  color: var(--text-muted);
-}
-.fitLabel[data-tone="swing"] {
-  color: var(--warning);
-}
-
-.bar {
-  display: inline-flex;
-  gap: 2px;
-}
-
-.seg {
-  width: 13px;
-  height: 5px;
-  border-radius: 1px;
+/* Continuous-fill gauge (R6a): a slim track whose fill width is proportional to the confidence and
+   whose colour is keyed to the fit bucket. Replaces the coarse 3-segment bar + inline text label —
+   more detail in the same footprint, no fake-precision number (owner request). */
+.gaugeTrack {
+  display: block;
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-pill);
   background: var(--border-strong);
+  overflow: hidden;
 }
 
-.seg[data-on="true"][data-tone="success"] {
+.gaugeFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+  transition: width 120ms ease-out;
+}
+
+.gaugeFill[data-tone="success"] {
   background: var(--success);
 }
-.seg[data-on="true"][data-tone="neutral"] {
+.gaugeFill[data-tone="neutral"] {
   background: var(--text-muted);
-}
-.seg[data-on="true"][data-tone="swing"] {
-  background: var(--warning);
 }
 
 /* Poster card ------------------------------------------------------------ */
@@ -411,6 +400,23 @@
 .detailMeta {
   margin: 0;
   font-size: 0.82rem;
+}
+
+/* Worded fit label in the detail sheet — the textual bucket wording the card gauge no longer shows
+   inline (R6a). Tone mirrors the gauge colour so a strong fit reads saffron. */
+.detailFit {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.detailFit[data-tone="success"] {
+  color: var(--success);
+}
+.detailFit[data-tone="neutral"] {
+  color: var(--text-muted);
+}
+.detailFit[data-tone="swing"] {
+  color: var(--warning);
 }
 
 .detailLabel {

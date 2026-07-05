@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type RecommendationItem, api } from "../api";
 import { useProfileId } from "../app/ProfileContext";
+import { useEmbeddingsDegraded } from "../lib/degraded";
+import { fitFor } from "../lib/fit";
 import { posterTint } from "../lib/poster";
 import {
   useRowRefreshOnClose,
@@ -22,14 +24,21 @@ export function TitleDetailSheet({
   open,
   onOpenChange,
   anchorTitleId = null,
+  showFit = true,
 }: {
   item: RecommendationItem;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   // Seed of a "because you watched X" row, when opened from one — sharpens the "why this" reason.
   anchorTitleId?: string | null;
+  // Whether this title's row carries a taste-fit signal. Mirrors the card's gauge visibility: the
+  // sheet is where the *worded* fit label lives now that the card meter dropped its inline text
+  // (R6a), so a row without a fit signal (e.g. continue-watching) shows no label here either.
+  showFit?: boolean;
 }): React.JSX.Element {
   const { t, i18n } = useTranslation("title");
+  const { t: tCommon } = useTranslation("common");
+  const degraded = useEmbeddingsDegraded();
   const profileId = useProfileId();
   const detail = useTitleDetail(item.titleId, open);
   const [streamedWhy, setStreamedWhy] = useState("");
@@ -125,6 +134,17 @@ export function TitleDetailSheet({
         </div>
         <div className={styles.detailBody}>
           {meta && <p className={`muted ${styles.detailMeta}`}>{meta}</p>}
+          {showFit && (
+            // The worded fit lives here now that the card gauge dropped its inline text (R6a). Tone
+            // mirrors the gauge so a strong fit reads saffron; swings keep their categorical wording.
+            <p
+              className={styles.detailFit}
+              data-testid="detail-fit"
+              data-tone={fitFor(item.confidence, item.isSwing, degraded).tone}
+            >
+              {tCommon(fitFor(item.confidence, item.isSwing, degraded).labelKey)}
+            </p>
+          )}
           {why && (
             <p className={styles.detailWhy} data-testid="detail-why">
               <span className={styles.detailLabel}>{t("detail.whyThis")}</span>
