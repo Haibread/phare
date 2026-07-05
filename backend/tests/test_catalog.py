@@ -61,6 +61,25 @@ def test_upsert_refreshes_popularity_without_duplicating(db_session: Session) ->
     assert row is not None and row.popularity == 9.0
 
 
+def test_upsert_persists_vote_average_on_insert(db_session: Session) -> None:
+    # A freshly-inserted title must carry vote_average, not just vote_count/popularity — the insert
+    # branch used to omit it, leaving ~98% of a broad-imported catalog with NULL vote_average, which
+    # silently disabled the re-ranker's quality floor (a poorly-rated title took no penalty).
+    meta = TitleMetadata(
+        kind=TitleKind.movie,
+        tmdb_id=999002,
+        title="Rated",
+        popularity=5.0,
+        vote_count=1_200,
+        vote_average=7.4,
+    )
+    assert upsert_titles(db_session, [meta]) == 1
+    row = db_session.scalar(select(Title).where(Title.tmdb_id == 999002))
+    assert row is not None
+    assert row.vote_average == 7.4
+    assert row.vote_count == 1_200
+
+
 class _FakeCatalogSource:
     """Returns canned popular lists per kind (the ``CatalogSource`` protocol)."""
 

@@ -53,6 +53,24 @@ execution → reply`
   ordered by **score (relevance), not by votes**, so the most relevant pick leads while the slate
   still spans a range of known-ness. (Ordering by votes buried the best match at the bottom of the
   strip; that was review finding A1.) Vote counts come from the catalog import.
+- **Relevance floor (a short honest slate beats a padded one).** The vote mix used to *pad* the
+  slate up to the target size from the candidate pool regardless of fit, so a request like "a
+  feel-good comedy" over a thin catalog ended with genuinely weak matches shown only to reach 12.
+  Candidates whose **pool-relative similarity** (`similarity_rel` — where a pick sits *within its
+  own candidate pool*, the same scale the confidence meter uses) falls below a floor are now
+  **dropped rather than padded**: the chat slate can come back shorter, which is the honest answer
+  (principle 4, honesty over engagement). The floor only bites when the pool is large enough to
+  measure a spread; a small or flat pool reads neutral for every candidate and nothing is trimmed
+  (degrade gracefully). A slate trimmed below the requested size records a
+  `reranker.chat_slate_trimmed` fallback, so a shorter slate is a visible, deliberate call.
+- **Runtime cap honesty.** "under 2 hours" (a `max_runtime` on the recommend tool) is a **hard
+  cap**. A candidate with a *known* runtime must fit it; a candidate with an **unknown** runtime is
+  a coin flip, so on a capped turn Phare first backfills the pool's missing runtimes from TMDB (see
+  the runtime backfill below), then **drops** any still-unknown-runtime candidate — a 167-minute
+  film with a NULL runtime no longer slips into an "under 2 hours" slate. If dropping the unknowns
+  would empty the slate (e.g. offline, no metadata provider to backfill with), the unknown-runtime
+  pool is kept instead and the loosened cap is flagged `intent_filter.runtime_cap_unenforced`
+  rather than returning nothing.
 - **Recent conversation** — the planner and the composer both receive the last few turns of the
   chat so a turn isn't a cold start: references resolve ("even shorter" knows what it's shortening)
   and the reply builds on what was said instead of re-pitching the same titles. It's **short-term,

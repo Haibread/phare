@@ -10,6 +10,7 @@ import {
   useUndoChatAction,
 } from "../lib/queries";
 import { translateGenre } from "../lib/tasteVocab";
+import { TitleAction } from "./Availability";
 import { Sheet } from "./Sheet";
 import styles from "./components.module.css";
 
@@ -165,6 +166,13 @@ export function TitleDetailSheet({
               )}
             </div>
           )}
+          {/* Request / availability — the constructive action, so it sits above the destructive
+              "not interested". Renders nothing when there's no availability provider in the tree
+              (Browse/chat) or the library integration is unconfigured, exactly as it did on the
+              card — a card's request button was only ever wired up under Search's provider. */}
+          <div className={styles.detailAction} data-testid="detail-action">
+            <TitleAction titleId={item.titleId} />
+          </div>
           {/* Secondary, deliberate "not interested" — full-width but visually quiet, kept apart from
               the primary content. After the tap it flips to a confirmation + undo in place. */}
           <div className={styles.detailFeedback}>

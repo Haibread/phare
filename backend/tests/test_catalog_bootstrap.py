@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from phare.catalog.bootstrap import (
     backfill_missing_on_full_pool,
     candidate_pool_size,
+    heal_missing_quality_signal,
+    rating_gap,
     run_seed,
     seed_catalog_if_empty,
 )
@@ -110,6 +112,48 @@ def test_backfill_on_full_pool_embeds_leftover_and_is_idempotent(db_session: Ses
 
     # Second pass finds nothing missing and no-ops (doesn't re-embed).
     assert backfill_missing_on_full_pool(db_session, provider, LOCAL_MODEL_VERSION) == 0
+
+
+def test_rating_heal_refreshes_missing_vote_average_and_is_idempotent(db_session: Session) -> None:
+    # The state the vote_average insert bug left behind: a full pool where almost every title has
+    # a vote_count but no vote_average — the re-ranker's quality floor has nothing to bite on.
+    for i in range(4):
+        db_session.add(
+            Title(
+                kind=TitleKind.movie,
+                tmdb_id=8100 + i,
+                title=f"Unrated {i}",
+                overview="Imported before ratings were persisted.",
+                vote_count=1000,
+            )
+        )
+    db_session.flush()
+    assert rating_gap(db_session) == 1.0
+
+    # The same discover pages, re-pulled: upsert refreshes the rating on the existing rows.
+    metas = [
+        TitleMetadata(
+            kind=TitleKind.movie,
+            tmdb_id=8100 + i,
+            title=f"Unrated {i}",
+            overview="Imported before ratings were persisted.",
+            vote_count=1000,
+            vote_average=6.5,
+        )
+        for i in range(4)
+    ]
+    created = heal_missing_quality_signal(db_session, get_settings(), _FakePopularSource(metas))
+    assert created == 0  # a metadata refresh, not an import
+    assert rating_gap(db_session) == 0.0
+    ratings = db_session.scalars(select(Title.vote_average)).all()
+    assert all(r == 6.5 for r in ratings)
+
+    # Coverage is healthy now — the next boot must not spend a single request.
+    class _Explodes:
+        def popular(self, *a: object, **k: object) -> list[TitleMetadata]:
+            raise AssertionError("healthy coverage must not re-pull")
+
+    assert heal_missing_quality_signal(db_session, get_settings(), _Explodes()) == 0
 
 
 def test_run_seed_imports_embeds_and_logs_without_raising(db_session: Session) -> None:

@@ -1,4 +1,5 @@
-"""The deterministic re-ranker — where steering happens. Pure: no DB, no LLM, no clock.
+"""The deterministic re-ranker — where steering happens. No DB, no LLM, no clock (it may emit a
+:func:`record_fallback` observability signal when it trims a slate, but reads no external state).
 
 Takes vector-similar candidates + the effective taste profile and produces an ordered slate:
 
@@ -17,6 +18,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from phare.core.fallback import record_fallback
 from phare.recommend import genres
 from phare.recommend.schema import Candidate, Recommendation
 
@@ -58,6 +60,17 @@ _POPULAR_VOTE_FLOOR = 2000  # at/above this a title is "well-known"
 _LOWVOTE_CEILING = 300  # below this it's "low-vote / discovery"
 _VOTE_MIX = (0.50, 0.35, 0.15)  # well-known, lesser-known, low-vote
 
+# Chat-slate relevance floor (honesty over engagement, principle 4). The chat path (``vote_mix``)
+# used to *pad* the slate up to ``k`` from the candidate pool regardless of fit, so a request like
+# "a feel-good comedy" ended with titles at pool-relative similarity ~0.27 — a genuinely weak match
+# shown only to reach 12. Instead, drop candidates whose pool-relative similarity is below this
+# floor and return a shorter, honest slate. Measured on ``similarity_rel`` (where a pick sits
+# *within its pool*), the same relative scale the confidence meter and the eval spread check use. It
+# only bites when the pool is large enough to normalise against (n>=3, real spread) — with a flat
+# pool every ``sim_rel`` is the neutral 0.5 and nothing is dropped, so we never trim what we can't
+# measure. A trimmed slate is surfaced via ``record_fallback`` so the erosion is never silent (G1).
+_CHAT_SIM_REL_FLOOR = 0.35
+
 
 def _vote_tier(candidate: Candidate) -> int:
     """0 = well-known, 1 = lesser-known, 2 = low-vote. Unknown vote counts read as low-vote."""
@@ -79,6 +92,17 @@ def _tier_targets(k: int) -> list[int]:
     return targets
 
 
+def _relevant_enough(item: tuple[float, Candidate, dict[str, float]]) -> bool:
+    """Whether a scored candidate clears the chat-slate relevance floor (``_CHAT_SIM_REL_FLOOR``).
+
+    Measured on the pool-relative ``similarity_rel`` — the same scale the confidence meter reads —
+    so the floor means "not among the weakest fits in this pool", not an absolute cosine. When the
+    pool is too small/flat to normalise, ``_relative_similarities`` hands back the neutral 0.5 for
+    everyone, which clears the floor: we never trim a slate we couldn't measure the spread of.
+    """
+    return item[2].get("similarity_rel", 0.5) >= _CHAT_SIM_REL_FLOOR
+
+
 def _select_vote_mix(
     scored: list[tuple[float, Candidate, dict[str, float]]], k: int
 ) -> list[tuple[float, Candidate, dict[str, float]]]:
@@ -87,7 +111,12 @@ def _select_vote_mix(
 
     The vote mix decides *membership* (a deliberate spread of known-ness); ordering is by score, so
     the most *relevant* pick leads — not the most-voted one (review A1: popularity was burying the
-    best match at the bottom of the strip)."""
+    best match at the bottom of the strip).
+
+    Candidates below the relevance floor (:func:`_relevant_enough`) are dropped *before* the
+    composition, so a thin pool yields a shorter, honest slate rather than one padded with weak fits
+    (principle 4). The caller records the trim as a fallback so it's never silent."""
+    scored = [item for item in scored if _relevant_enough(item)]
     buckets: dict[int, list[tuple[float, Candidate, dict[str, float]]]] = {0: [], 1: [], 2: []}
     for item in scored:  # scored is already sorted by score desc, so each bucket is too
         buckets[_vote_tier(item[1])].append(item)
@@ -276,9 +305,16 @@ def rerank(
     scored.sort(key=lambda item: item[0], reverse=True)
 
     if vote_mix:
+        chosen = _select_vote_mix(scored, k)
+        # A slate trimmed below k means the relevance floor dropped weak-fit tail candidates rather
+        # than padding to k (principle 4). Surface it so a shorter chat slate is a visible, honest
+        # call, never a silent quality erosion (G1). k is capped at the pool: asking for more than
+        # exists isn't a relevance trim.
+        if len(chosen) < min(k, len(scored)):
+            record_fallback("reranker", "chat_slate_trimmed", requested=k, returned=len(chosen))
         return [
             _to_rec(candidate, score, components, taste, is_swing=False)
-            for score, candidate, components in _select_vote_mix(scored, k)
+            for score, candidate, components in chosen
         ]
 
     swing_slots = max(0, min(swing_slots, k))

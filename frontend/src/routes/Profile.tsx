@@ -18,7 +18,7 @@ import {
   useTaste,
   useUpdateTaste,
 } from "../lib/queries";
-import { relativeTime } from "../lib/time";
+import { relativeTime, relativeTimeLocalized } from "../lib/time";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import { AccountCard } from "./AccountCard";
 import { Attributions } from "./Attributions";
@@ -43,7 +43,7 @@ function episodeLabel(item: HistoryItem): string {
 }
 
 export function Profile(): React.JSX.Element {
-  const { t } = useTranslation("profile");
+  const { t, i18n } = useTranslation("profile");
   const { t: tCommon } = useTranslation("common");
   const profileId = useProfileId();
   const qc = useQueryClient();
@@ -59,6 +59,9 @@ export function Profile(): React.JSX.Element {
   const deleteNote = useDeleteMemoryNote(profileId);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
+  // Infinite history pages flattened for the table; total comes with every page.
+  const historyItems = history.data?.pages.flatMap((p) => p.items) ?? [];
+  const historyTotal = history.data?.pages[0]?.total ?? 0;
 
   function submitNote() {
     const text = noteDraft.trim();
@@ -91,6 +94,20 @@ export function Profile(): React.JSX.Element {
             {t("taste.updatesAuto")}
           </span>
         </div>
+
+        {/* Freshness evidence for the "updates automatically" claim above. Null generatedAt means
+            the taste was never generated (fresh profile) — show nothing rather than a bogus time. */}
+        {taste.data?.generatedAt && (
+          <p
+            className="faint"
+            data-testid="taste-freshness"
+            style={{ fontSize: "0.75rem", marginTop: "calc(-1 * var(--sp-2))" }}
+          >
+            {t("taste.updatedAt", {
+              when: relativeTimeLocalized(taste.data.generatedAt, i18n.language),
+            })}
+          </p>
+        )}
 
         {taste.isPending ? (
           <CardSkeleton lines={4} />
@@ -313,32 +330,52 @@ export function Profile(): React.JSX.Element {
           <CardSkeleton lines={4} />
         ) : history.isError ? (
           <ErrorState error={history.error} onRetry={() => history.refetch()} />
-        ) : history.data.items.length === 0 ? (
+        ) : historyItems.length === 0 ? (
           <p className="muted">{t("history.empty")}</p>
         ) : (
-          <table className={styles.histTable} data-testid="history-table">
-            <thead>
-              <tr>
-                <th>{t("history.columns.title")}</th>
-                <th>{t("history.columns.event")}</th>
-                <th>{t("history.columns.rating")}</th>
-                <th>{t("history.columns.when")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.data.items.slice(0, 50).map((item) => (
-                <tr key={item.id} data-testid="history-row">
-                  <td>
-                    {item.title}
-                    {episodeLabel(item)}
-                  </td>
-                  <td>{item.type}</td>
-                  <td>{item.rating ?? "—"}</td>
-                  <td>{item.occurredAt ? item.occurredAt.slice(0, 10) : "—"}</td>
+          <>
+            <table className={styles.histTable} data-testid="history-table">
+              <thead>
+                <tr>
+                  <th>{t("history.columns.title")}</th>
+                  <th>{t("history.columns.event")}</th>
+                  <th>{t("history.columns.rating")}</th>
+                  <th>{t("history.columns.when")}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {historyItems.map((item) => (
+                  <tr key={item.id} data-testid="history-row">
+                    <td>
+                      {item.title}
+                      {episodeLabel(item)}
+                    </td>
+                    <td>{item.type}</td>
+                    <td>{item.rating ?? "—"}</td>
+                    <td>{item.occurredAt ? item.occurredAt.slice(0, 10) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {/* Honest footer: the table is paged, so say how much of the history is on screen —
+                a 5 900-event profile must not silently read as 50 rows. */}
+            <div className={styles.histFooter}>
+              <span className="muted" data-testid="history-count">
+                {t("history.showing", { shown: historyItems.length, total: historyTotal })}
+              </span>
+              {history.hasNextPage && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-testid="history-more"
+                  disabled={history.isFetchingNextPage}
+                  onClick={() => history.fetchNextPage()}
+                >
+                  {history.isFetchingNextPage ? t("history.loadingMore") : t("history.showMore")}
+                </button>
+              )}
+            </div>
+          </>
         )}
       </section>
 

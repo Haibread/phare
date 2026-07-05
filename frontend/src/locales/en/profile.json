@@ -16,6 +16,7 @@
   "taste": {
     "heading": "Your taste",
     "updatesAuto": "updates automatically",
+    "updatedAt": "updated {{when}}",
     "loading": "Loading taste…",
     "drawnTo": "Drawn to",
     "avoiding": "Avoiding",
@@ -61,7 +62,10 @@
       "event": "Event",
       "rating": "Rating",
       "when": "When"
-    }
+    },
+    "showing": "Showing {{shown}} of {{total}} events",
+    "showMore": "Show more",
+    "loadingMore": "Loading…"
   },
   "chips": {
     "add": "+ add",

@@ -16,6 +16,7 @@
   "taste": {
     "heading": "Vos goûts",
     "updatesAuto": "mise à jour automatique",
+    "updatedAt": "mis à jour {{when}}",
     "loading": "Chargement des goûts…",
     "drawnTo": "Attiré par",
     "avoiding": "À éviter",
@@ -61,7 +62,10 @@
       "event": "Événement",
       "rating": "Note",
       "when": "Quand"
-    }
+    },
+    "showing": "{{shown}} événements affichés sur {{total}}",
+    "showMore": "Voir plus",
+    "loadingMore": "Chargement…"
   },
   "chips": {
     "add": "+ ajouter",

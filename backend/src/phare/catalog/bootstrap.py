@@ -81,6 +81,57 @@ def backfill_missing_on_full_pool(
     return embedded
 
 
+# Above this share of rating-less titles the quality floor is inert for most of the pool, so the
+# boot path re-pulls the import as a metadata refresh. Discover pages carry ~20 titles per request,
+# so even a broad refresh is a few hundred requests — not a per-title fan-out.
+_MAX_RATING_GAP = 0.5
+
+
+def rating_gap(session: Session) -> float:
+    """Share of titles with no ``vote_average`` — the quality signal the re-ranker's floor needs."""
+    total = session.scalar(select(func.count()).select_from(Title)) or 0
+    if total == 0:
+        return 0.0
+    missing = (
+        session.scalar(select(func.count()).select_from(Title).where(Title.vote_average.is_(None)))
+        or 0
+    )
+    return missing / total
+
+
+def heal_missing_quality_signal(session: Session, settings: Settings, source: object) -> int:
+    """Re-run the (idempotent) catalog import as a metadata refresh when most titles lack a rating.
+
+    An import bug used to drop ``vote_average`` on insert, leaving the re-ranker's quality floor
+    with nothing to bite on for almost the whole pool — badly-rated titles rode pure similarity.
+    ``upsert_titles`` refreshes ratings on existing rows, so one re-pull of the same discover pages
+    heals the catalog in bulk at boot (principle 8: self-triggering, no operator command). No-ops
+    once coverage is healthy, so this fires once after the fix ships and then never again. Returns
+    the number of *new* titles the refresh happened to create (usually 0).
+    """
+    from phare.catalog.service import broad_import_from_tmdb, import_from_tmdb
+
+    gap = rating_gap(session)
+    if gap <= _MAX_RATING_GAP:
+        return 0
+    logger.info("catalog.autoseed.rating_heal_start", extra={"rating_gap": round(gap, 2)})
+    if autoseed_scope(settings) == "broad":
+        created = broad_import_from_tmdb(
+            session,
+            source,  # type: ignore[arg-type]
+            pages_per_genre=settings.catalog_broad_pages_per_genre,
+            min_vote_count=settings.catalog_broad_min_vote_count,
+        )
+    else:
+        created = import_from_tmdb(session, source, pages=_SEED_PAGES)  # type: ignore[arg-type]
+    session.commit()
+    logger.info(
+        "catalog.autoseed.rating_heal_done",
+        extra={"created_count": created, "rating_gap_after": round(rating_gap(session), 2)},
+    )
+    return created
+
+
 def autoseed_scope(settings: Settings) -> str:
     """Resolve the autoseed scope. ``auto`` means broad in production (so a prod box deep-seeds
     itself, no operator command) and popular elsewhere (so dev never fans out tens of thousands)."""
@@ -110,9 +161,19 @@ def seed_catalog_if_empty(settings: Settings) -> int:
             pool = candidate_pool_size(session)
             if pool >= _MIN_POOL:
                 logger.info("catalog.autoseed.skipped", extra={"reason": "pool ok", "pool": pool})
-                # A full pool isn't a *complete* one: an embed pass cut short by a restart, or an
-                # embedding-model change, leaves titles without a current-version vector. Heal them
-                # now (principle 8) rather than waiting for a read or the daily refresh.
+                # A full pool isn't a *complete* one. First heal a mostly rating-less catalog (a
+                # past import bug dropped vote_average, leaving the quality floor inert), THEN the
+                # embedding backlog — in that order, so any titles the refresh creates get their
+                # vectors in the same boot. Both no-op cheaply when nothing is missing.
+                heal_missing_quality_signal(
+                    session,
+                    settings,
+                    TMDBMetadataProvider(
+                        api_key=settings.tmdb_api_key,
+                        base_url=settings.tmdb_base_url,
+                        cache_ttl=settings.tmdb_cache_ttl_seconds,
+                    ),
+                )
                 backfill_missing_on_full_pool(
                     session,
                     get_embedding_provider(settings),

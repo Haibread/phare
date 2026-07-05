@@ -5,6 +5,7 @@ import { type RecommendationItem, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
 import enTitle from "../locales/en/title.json";
 import frTitle from "../locales/fr/title.json";
+import { AvailabilityProvider } from "./Availability";
 import { PosterCard } from "./PosterCard";
 import { RecRow } from "./RecRow";
 
@@ -106,6 +107,25 @@ describe("PosterCard", () => {
     );
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getAllByText("Moon").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("no longer renders the request action on the card (round 4)", () => {
+    // The request/availability control moved into the detail sheet. Even under a configured
+    // availability provider (as Search wraps its grid), the *card* body must not surface it —
+    // a card's only action is to open. It only appears once the sheet is opened.
+    renderCard(
+      <AvailabilityProvider
+        value={{
+          configured: true,
+          results: { t1: "requestable" },
+          requestingId: null,
+          onRequest: () => {},
+        }}
+      >
+        <PosterCard item={recItem({ titleId: "t1" })} />
+      </AvailabilityProvider>,
+    );
+    expect(screen.queryByTestId("title-request")).toBeNull();
   });
 });
 

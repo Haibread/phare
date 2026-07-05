@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from unittest import mock
 
 from sqlalchemy.orm import Session
 
@@ -256,6 +257,58 @@ def test_intent_filter_hard_filters_by_kind() -> None:
     assert [c.title for c in kept] == ["A Film"]
     # No constraint → both survive.
     assert len(intent_filter(ChatIntent())(pool)) == 2
+
+
+def _runtime_cand(title: str, runtime: int | None) -> Candidate:
+    return Candidate(
+        title_id=uuid.uuid4(),
+        title=title,
+        kind="movie",
+        year=2020,
+        genres=["Drama"],
+        keywords=[],
+        runtime_minutes=runtime,
+        popularity=None,
+        overview=None,
+        similarity=0.5,
+    )
+
+
+def test_intent_filter_drops_unknown_runtime_under_a_cap() -> None:
+    # A NULL-runtime candidate is a coin flip against "under N minutes" — a 167-min film with an
+    # unknown runtime used to pass a "under 2 hours" cap silently (the reported Solaris tail). With
+    # a cap active and known-fitting titles present, drop the unknowns rather than gamble.
+    pool = [
+        _runtime_cand("Fits", 100),
+        _runtime_cand("Too Long", 150),
+        _runtime_cand("Unknown", None),
+    ]
+    with mock.patch("phare.agent.service.record_fallback") as record:
+        kept = intent_filter(ChatIntent(max_runtime=120))(pool)
+    assert [c.title for c in kept] == ["Fits"]  # unknown + too-long both gone
+    record.assert_called_once()
+    assert record.call_args.args == ("intent_filter", "runtime_unknown_dropped")
+
+
+def test_intent_filter_keeps_unknown_runtimes_when_nothing_else_fits() -> None:
+    # Degrade gracefully (principle 5): when the runtimes never got backfilled (all NULL, e.g.
+    # offline with no metadata provider), dropping every unknown would empty the slate — a worse
+    # failure than a loose cap. Keep the unknown-runtime pool and flag the cap as unenforced.
+    pool = [_runtime_cand("Unknown A", None), _runtime_cand("Unknown B", None)]
+    with mock.patch("phare.agent.service.record_fallback") as record:
+        kept = intent_filter(ChatIntent(max_runtime=120))(pool)
+    assert {c.title for c in kept} == {"Unknown A", "Unknown B"}  # kept, not emptied
+    record.assert_called_once()
+    assert record.call_args.args == ("intent_filter", "runtime_cap_unenforced")
+
+
+def test_intent_filter_no_runtime_fallback_when_all_runtimes_known() -> None:
+    # A fully-backfilled pool under a cap needs no fallback (the common case once enriched).
+    pool = [_runtime_cand("Fits", 90), _runtime_cand("Too Long", 200)]
+    with mock.patch("phare.agent.service.record_fallback") as record:
+        kept = intent_filter(ChatIntent(max_runtime=120))(pool)
+    assert [c.title for c in kept] == ["Fits"]
+    record.assert_not_called()
 
 
 def test_strip_leading_think_drops_reasoning_block() -> None:

@@ -169,14 +169,40 @@ stays modest. The command embeds the new titles afterwards by default (`--embed`
 
 **Runtime is filled in lazily, not at import.** *discover* omits per-title runtime, so broad-imported
 titles start with `runtime_minutes = NULL` — which means a "something short" chat request has nothing
-to filter on. Rather than slow every import with a per-title detail fan-out, runtimes are **backfilled
-on the read path**, and only when needed: a chat turn that actually asks for a runtime cap fetches the
-missing runtimes **for that turn's candidate pool** from TMDB (in parallel — the provider's HTTP
-client is thread-safe) before filtering, and persists them. It enriches the exact titles being
-filtered, not a global batch, so the cap bites on the first such turn; each fetch is permanent, so the
-catalog heals as it's used — no command, no manual step. Without a `TMDB_API_KEY` (or offline), runtime
-filtering simply stays inert: length requests parse but don't constrain. Bounded by `READ_RUNTIME_CAP`
-(a code constant, mirroring the lazy embedding top-up).
+to filter on, and even a mainstream title's detail sheet would show no runtime. Rather than slow every
+import with a per-title detail fan-out, runtimes are **backfilled on the read path**, and only when
+needed, on two paths:
+
+- **Chat runtime cap.** A chat turn that actually asks for a length cap fetches the missing runtimes
+  **for that turn's candidate pool** from TMDB (in parallel — the provider's HTTP client is
+  thread-safe) before filtering, and persists them. It enriches the exact titles being filtered, not
+  a global batch, so the cap bites on the first such turn. The same per-title fetch also carries the
+  title's **rating** (`vote_average` / `vote_count`), so it **heals a missing quality signal** at the
+  same time (see below) when the row lacks one — one fetch, two repairs. Bounded by
+  `READ_RUNTIME_CAP` (a code constant, mirroring the lazy embedding top-up).
+- **Title detail open.** Opening a title's detail sheet backfills *that* title's runtime if it's
+  still NULL, so the sheet shows it. The synopsis localization on the same request already fills the
+  runtime from its own TMDB fetch (a first open is a single round-trip); the dedicated fetch is only
+  spent when localization served from its warm cache but the runtime is still missing.
+
+Each fetch is permanent, so the catalog heals as it's used — no command, no manual step. All of it is
+best-effort: a TMDB hiccup during a detail open leaves the runtime NULL and the sheet still renders.
+Without a `TMDB_API_KEY` (or offline), runtime stays NULL: chat length requests parse but don't
+constrain — a still-unknown-runtime pool is kept rather than emptied (flagged
+`intent_filter.runtime_cap_unenforced` — see [`agent.md`](agent.md)) — and the detail sheet simply
+omits the runtime line.
+
+**The quality floor needs a rating to bite.** The re-ranker demotes poorly-rated titles via a
+**quality floor** on TMDB's `vote_average` (a hold-back, never a boost). *discover* does return a
+rating, so a broad import records it — but a title with a **NULL** `vote_average` takes *no* penalty
+(we never guess a title is bad because TMDB is silent). That's the honest default, but it means a
+title with no rating on record rides pure similarity. Ratings are kept current three ways: a
+re-import or the background **freshness refresh** refreshes `vote_average` / `vote_count` on titles
+it touches; the read-path runtime backfill above heals a NULL rating for the titles it fetches; and
+**at boot**, if more than half the catalog lacks a rating (the state a past import bug left behind),
+the autoseed skip path re-pulls the import as a bulk metadata refresh
+(`catalog.autoseed.rating_heal_*` in the logs) — one-time, self-triggering, no operator command. So
+the quality signal fills in as the catalog is imported and used, without a manual pass.
 
 **Embeddings are backfilled off the read path.** A title has to be embedded before it can be
 recommended, but the read path never embeds a whole fresh import inline (that could freeze the first
