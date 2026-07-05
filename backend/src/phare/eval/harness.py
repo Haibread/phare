@@ -20,6 +20,7 @@ from phare.eval.personas import PERSONAS, Persona
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
 from phare.providers.types import LLMProvider
 from phare.recommend import genres
+from phare.recommend.reranker import _FIT_STRONG, _FIT_TRY
 from phare.recommend.schema import Recommendation
 from phare.recommend.service import RecommendationService
 
@@ -50,6 +51,30 @@ _MIN_SIM_REL_SPREAD = 0.15
 # yield tiny or empty slates — to assert a minimum spread without flaking; the pool-relative
 # similarity-spread guardrail already enforces "not flat" on the production embedder.)
 _NEUTRAL_AFFINITY = 0.5
+# Anti-uniformity (lot R2): the fit chip must *discriminate* — a slate where every displayed item
+# lands in the same confidence bucket is a badge carrying no information (the owner's complaint:
+# every home-row card at 3/3 "strong fit"). We bucket displayed confidences with the SAME thresholds
+# the frontend chip uses, imported from the canonical ``_FIT_STRONG`` / ``_FIT_TRY`` in the reranker
+# (no second copy of the numbers), and fail if all items collapse into one bucket.
+#
+# Robustness: skipped when the slate is too small to say anything about spread (< this many items —
+# a 3-item slate legitimately clustering is not a bug), and skipped on the offline local-hash
+# embedder for the same reason the similarity-spread check is (it's not the production embedding
+# space, so its confidence distribution is an embedder artifact, not an engine signal). Same gate
+# pattern as the spread + empty-slate checks.
+_MIN_BUCKET_SLATE = 6
+
+
+def _fit_bucket(confidence: float | None) -> int:
+    """0 = long-shot, 1 = worth-a-try, 2 = strong fit — the frontend chip's buckets (``fit.ts``),
+    keyed off the canonical reranker thresholds so the harness and the UI can never drift apart."""
+    if confidence is None:
+        return 0
+    if confidence >= _FIT_STRONG:
+        return 2
+    if confidence >= _FIT_TRY:
+        return 1
+    return 0
 
 
 @dataclass
@@ -80,9 +105,12 @@ def alignment_checks_summary(model_version: str) -> str:
     local-hash embedder leaves several personas with no neighbours) — flagged here for the same
     reason."""
     if model_version == LOCAL_MODEL_VERSION:
-        spread = "similarity-spread + empty-slate [skipped: offline local-hash embedder]"
+        spread = (
+            "similarity-spread + fit-uniformity + empty-slate "
+            "[skipped: offline local-hash embedder]"
+        )
     else:
-        spread = f"similarity-spread (>= {_MIN_SIM_REL_SPREAD})"
+        spread = f"similarity-spread (>= {_MIN_SIM_REL_SPREAD}) + fit-uniformity (>=2 buckets)"
     return f"hard-avoids, affinity-variance, score-order, {spread}"
 
 
@@ -141,6 +169,19 @@ def _alignment_failures(
             failures.append(
                 f"similarity_rel is flat (spread {spread:.3f} < {_MIN_SIM_REL_SPREAD}): "
                 "the slate reads 'strong fit' for everything"
+            )
+
+    # (e) Anti-uniformity (lot R2): the displayed fit chips must not all be the same bucket — a
+    # constant badge is not information. Skipped on the offline embedder (its confidence
+    # distribution is not the production one) and on slates too small to judge (_MIN_BUCKET_SLATE).
+    if model_version != LOCAL_MODEL_VERSION and len(recs) >= _MIN_BUCKET_SLATE:
+        buckets = {_fit_bucket(rec.confidence) for rec in recs}
+        if len(buckets) < 2:
+            only = next(iter(buckets))
+            name = {0: "long-shot", 1: "worth-a-try", 2: "strong fit"}[only]
+            failures.append(
+                f"fit chips are uniform: all {len(recs)} displayed items land in the "
+                f"'{name}' bucket — the badge carries no information"
             )
     return failures
 

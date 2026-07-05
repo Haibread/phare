@@ -61,14 +61,31 @@ costlier. It's good at reading fuzzy human signal — so that's all it does.
 
 Each item carries a per-item **confidence** [0,1] that the UI renders as a coarse, worded "fit"
 chip (never a number — see *honesty over engagement*). Only `you_might_like` derives it from the
-taste-vector match — and from the pick's **pool-relative** similarity (where it sits among that
-query's candidates), not the raw cosine, which is compressed near the top and would read "strong
-fit" for everything (review H2/A8). A lightly-evidenced taste profile also *caps* the chip, so a
-thin history can't produce a blanket "strong fit"; and a title with almost no votes (a just-dropped
-release, no quality signal yet) is capped too, so it can surface as a discovery pick but never as a
-sure thing (review A9) — it graduates on its own as it accrues votes. The heuristic rows expose an
-honest signal of
-their *own* kind, not a fake taste score:
+taste-vector match. The chip **must discriminate** — a badge that reads "strong fit" for every card
+is not information (lot R2, owner complaint: every home-row item at 3/3). Confidence is a weighted
+blend of the per-title signals that actually vary across a slate:
+
+- **pool-relative similarity** (0.55) — where the pick sits among that query's candidates, *not*
+  the raw cosine, which is compressed near the top and would read "strong fit" for everything (H2/A8);
+- **absolute pool-strength** (0.20) — the pick's absolute similarity rescaled over the embedder's
+  observed band, so "top of a weak pool" reads lower than "top of a strong pool" (pool-relative
+  alone can't tell them apart — every pool has a #1);
+- **affinity** (0.25) — does it hit a genre they like (the steering signal); only counted when a
+  taste profile exists. With no taste, the two similarity terms carry it alone.
+
+Taste-confidence is **not** blended into the mean — a per-profile constant added to every card lifts
+the whole slate equally while informing nothing per-title (pure spread compression). It survives
+only as a **cap**: a lightly-evidenced profile can't produce a blanket "strong fit". A title with
+almost no votes (a just-dropped release, no quality signal yet) is capped too, so it can surface as
+a discovery pick but never as a sure thing (review A9) — it graduates on its own as it accrues votes.
+
+The frontend chip buckets that confidence into **strong fit** (≥ 0.72), **worth a try** (≥ 0.45),
+and **long shot** (below), plus swings' own "a stretch". Those cuts are calibrated so a realistic
+home-row slate lands in at least two buckets with no bucket above ~60% — the eval harness enforces
+this with an **anti-uniformity guardrail** (fails a slate whose displayed items all share one
+bucket, on the real embedder, skipped offline and for tiny slates). The thresholds live once in the
+reranker (`_FIT_STRONG` / `_FIT_TRY`) and are mirrored in `frontend/src/lib/fit.ts`. The heuristic
+rows expose an honest signal of their *own* kind, not a fake taste score:
 
 - `watch_again` → your own rating (rating ÷ 10), so the row reads "strong" because it's literally
   your top-rated titles, sorted best-first. A show you're partway through is **excluded** here —

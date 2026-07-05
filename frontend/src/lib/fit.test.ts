@@ -18,6 +18,16 @@ describe("fitFor", () => {
     expect(fitFor(0.2, false).filled).toBe(1);
   });
 
+  it("applies the recalibrated bucket boundaries (lot R2: 0.72 strong, 0.45 worth-a-try)", () => {
+    // Just under "strong" is worth-a-try, not strong — the bar was lifted from 0.66 so the badge
+    // discriminates instead of reading 3/3 for everything.
+    expect(fitFor(0.71, false).labelKey).toBe("fit.worthATry");
+    expect(fitFor(0.72, false).labelKey).toBe("fit.strong");
+    // The worth-a-try / long-shot cut sits at 0.45.
+    expect(fitFor(0.44, false).labelKey).toBe("fit.longShot");
+    expect(fitFor(0.45, false).labelKey).toBe("fit.worthATry");
+  });
+
   it("handles a missing confidence without throwing", () => {
     expect(fitFor(null, false).tone).toBe("neutral");
   });
