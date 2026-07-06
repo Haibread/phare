@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -23,6 +24,7 @@ from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.backfill import schedule_embedding_backfill
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import is_local_space
+from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, MetadataProvider
 from phare.recommend import genres
 from phare.recommend import rows as row_builders
@@ -104,6 +106,21 @@ READ_EMBED_TIME_BUDGET_S = 2.0
 # catalog as it's used. The cap is a safety bound; the pool is already small (~k*4+10).
 READ_RUNTIME_CAP = 64
 
+# Cross-request facet cache. Extracting facets re-reads and clusters the whole watch history —
+# CPU-bound work that only changes when the profile's events or embeddings change, yet it used to
+# run on EVERY chat turn and home-rows request. The key carries a cheap change-stamp (non-excluded
+# event count + latest ``ingested_at``, one indexed query), so any event write — new sync, exclude
+# toggle — misses naturally; no explicit busting. The TTL bounds staleness from the one change the
+# stamp can't see: a background embedding backfill adding vectors for already-watched titles. Sized
+# for a handful of profiles (one account = one user; the app is a single process).
+_FACETS_CACHE = TTLCache(ttl=900.0, maxsize=8)
+
+
+def _ms(t0: float) -> float:
+    """Elapsed milliseconds since ``t0`` (a ``time.monotonic()`` mark), rounded for logging."""
+    return round((time.monotonic() - t0) * 1000.0, 1)
+
+
 # Adaptive constraint-aware re-fetch. ``generate_candidates`` retrieves the ~nearest-to-centroid
 # titles with no genre/runtime awareness, then a ``candidate_filter`` (chat intent, dynamic theme)
 # prunes them post-hoc. For a taste centred on, say, cerebral thrillers, almost none of those
@@ -178,8 +195,9 @@ class RecommendationService:
         # built per request (see api.deps), so this stays correct.
         self._centroid_cache: dict[uuid.UUID, list[float] | None] = {}
         # Facets (round 10) share the same per-request lifetime: extracting them re-reads and
-        # clusters the watch history, so cache it alongside the centroid. No persistent state — the
-        # split is cheap enough to recompute per request (mission constraint).
+        # clusters the watch history, so memoize alongside the centroid. A process-wide second
+        # layer (``_FACETS_CACHE``, change-stamp keyed) carries the result across requests; this
+        # request-scoped dict just avoids re-querying the stamp on every recommend() of a fan-out.
         self._facets_cache: dict[uuid.UUID, list[Facet]] = {}
 
     def ensure_embeddings(self) -> int:
@@ -285,16 +303,44 @@ class RecommendationService:
             )
         return self._centroid_cache[profile_id]
 
+    def _facets_stamp(self, profile_id: uuid.UUID) -> tuple[int, str]:
+        """A cheap change-stamp for the profile's taste signal: how many non-excluded watch events
+        it has and when the latest was ingested. One indexed query (``ix_watch_event_profile_title``
+        prefix); any event write — sync, feedback, exclude toggle — changes it, which is what makes
+        the cross-request facet cache invalidate naturally."""
+        count, latest = self.session.execute(
+            select(func.count(WatchEvent.id), func.max(WatchEvent.ingested_at)).where(
+                WatchEvent.profile_id == profile_id, WatchEvent.excluded.is_(False)
+            )
+        ).one()
+        return int(count), str(latest)
+
     def _facets(self, profile_id: uuid.UUID) -> list[Facet]:
-        """Memoized taste *facets* for this request — the profile's distinct taste modes, each a
-        query vector with a share of the retrieval budget (round 10). Falls back to a single facet
-        (== the centroid) for small/cohesive histories, so k=1 reproduces the historical behaviour.
-        Empty when there's no usable signal (same condition as ``_centroid`` returning ``None``)."""
+        """Memoized taste *facets* — the profile's distinct taste modes, each a query vector with a
+        share of the retrieval budget (round 10). Falls back to a single facet (== the centroid) for
+        small/cohesive histories, so k=1 reproduces the historical behaviour. Empty when there's no
+        usable signal (same condition as ``_centroid`` returning ``None``).
+
+        Two cache layers: the per-request memo (rows()/dynamic_rows fan out many recommend() calls)
+        and the process-wide ``_FACETS_CACHE`` keyed on (profile, embedding space, change-stamp) so
+        the extraction doesn't rerun on every request — it only changes when events or embeddings
+        do (see the cache comment above)."""
         if profile_id not in self._facets_cache:
-            contributions = taste_contributions(self.session, profile_id, self.embed_model_version)
-            facets = extract_facets(contributions)
-            if facets:
-                log_facets(str(profile_id), facets)
+            key = (profile_id, self.embed_model_version, *self._facets_stamp(profile_id))
+            facets = _FACETS_CACHE.get(key)
+            hit = facets is not None
+            if not hit:
+                contributions = taste_contributions(
+                    self.session, profile_id, self.embed_model_version
+                )
+                facets = extract_facets(contributions)
+                if facets:
+                    log_facets(str(profile_id), facets)
+                _FACETS_CACHE.set(key, facets)
+            logger.debug(
+                "taste.facets.cache",
+                extra={"profile_id": str(profile_id), "cache": "hit" if hit else "miss"},
+            )
             self._facets_cache[profile_id] = facets
         return self._facets_cache[profile_id]
 
@@ -353,6 +399,7 @@ class RecommendationService:
         fine-grained pruning (runtime-unknown handling, kind), the structured pair only steers
         retrieval.
         """
+        t_start = time.monotonic()
         if taste is None:
             taste = self._load_taste(profile_id)
         # Per-facet retrieval (round 10): the profile's taste is split into distinct modes, each a
@@ -360,7 +407,9 @@ class RecommendationService:
         # the historical centroid path exactly. ``rewatch`` keeps the single centroid — a comfort
         # rewatch draws from an already-narrow watched set, faceting it buys nothing and the pool is
         # tiny; and title-anchored rows never route through here.
+        t_stage = time.monotonic()
         facets = self._facets(profile_id)
+        facets_ms = _ms(t_stage)
         if not facets:
             return []
         if rewatch:
@@ -374,6 +423,7 @@ class RecommendationService:
 
         avoids = [*(taste.get("hard_avoids") or []), *extra_hard_avoids]
         k = k if k is not None else self.row_size
+        t_stage = time.monotonic()
         candidates = self._constrained_candidates(
             profile_id,
             query_vectors,
@@ -386,7 +436,9 @@ class RecommendationService:
             max_runtime=max_runtime,
             runtime_source=runtime_source,
         )
+        candidates_ms = _ms(t_stage)
         default_swings = 0 if rewatch else self.swing_slots
+        t_stage = time.monotonic()
         recs = rerank(
             candidates,
             taste,
@@ -396,8 +448,27 @@ class RecommendationService:
             # The facet-share guarantee: one dominant mode must not sweep the slate (round 10).
             facet_weights=[f.weight for f in facets] if len(facets) > 1 else None,
         )
+        rerank_ms = _ms(t_stage)
         exp = explainer or self._explainer(with_llm=explain_with_llm)
-        return exp.explain(recs, taste)
+        t_stage = time.monotonic()
+        explained = exp.explain(recs, taste)
+        # One line per pipeline run: where this recommend() spent its time. ``candidates_ms`` spans
+        # retrieval + runtime enrichment + the in-memory filter (and any re-fetch) — the pieces the
+        # candidate stage runs as one unit.
+        logger.info(
+            "recommend.timing",
+            extra={
+                "profile_id": str(profile_id),
+                "facets_ms": facets_ms,
+                "candidates_ms": candidates_ms,
+                "rerank_ms": rerank_ms,
+                "explain_ms": _ms(t_stage),
+                "total_ms": _ms(t_start),
+                "candidate_count": len(candidates),
+                "k": k,
+            },
+        )
+        return explained
 
     def _merge_facet_pools(
         self,

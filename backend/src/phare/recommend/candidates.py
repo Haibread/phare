@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import and_, or_, select, text, true
+from sqlalchemy import and_, func, not_, or_, select, text, true
 from sqlalchemy.orm import Session
 
 from phare.core.fallback import record_fallback
@@ -35,6 +35,20 @@ def _is_hard_avoided(title: Title, avoids: Sequence[str]) -> bool:
     return any(genres.matches_any((avoid,), tokens) for avoid in avoids if avoid.strip())
 
 
+def _avoided_genre_labels(session: Session, hard_avoids: Sequence[str]) -> list[str]:
+    """The catalog genre labels the hard-avoid terms resolve to — the SQL-enforceable slice of the
+    avoids (measured live: a mood query's entire ANN pool was genre-avoided and dropped in Python,
+    wasting the whole fetch). Resolved against the catalog vocabulary with the same alias/substring
+    rule the in-memory filter uses, so the SQL exclusion never drops more than ``_is_hard_avoided``
+    would. Free-form avoids matching no catalog label resolve to nothing and don't constrain SQL —
+    the Python backstop (which also matches title text and keywords) still catches them."""
+    terms = [a for a in hard_avoids if a.strip()]
+    if not terms:
+        return []
+    vocabulary = session.execute(select(func.distinct(func.unnest(Title.genres)))).scalars()
+    return genres.resolve_catalog_genres(terms, (g for g in vocabulary if g))
+
+
 def generate_candidates(
     session: Session,
     profile_id: uuid.UUID,
@@ -48,6 +62,11 @@ def generate_candidates(
     max_runtime: int | None = None,
 ) -> list[Candidate]:
     """Nearest titles to the centroid, hard-avoids removed.
+
+    Hard-avoids are enforced twice: the terms that resolve to catalog genre labels are excluded in
+    the ANN SQL (``NOT (genres && avoided_labels)``) so the fetched pool isn't spent on titles that
+    would be dropped wholesale, and the in-memory ``_is_hard_avoided`` backstop then catches the
+    title-text/keyword matches SQL can't express.
 
     Default: catalog titles the profile has *not* watched (find something new). With
     ``from_watched=True`` the source flips to titles the profile *has* watched — the candidate pool
@@ -76,6 +95,13 @@ def generate_candidates(
     else:
         scope = true()
     constraints = [scope]
+    # Hard-avoids that resolve to catalog genre labels are excluded in the ANN SQL itself, so the
+    # fetched pool isn't wasted on titles the avoid filter would drop wholesale (a genre-heavy avoid
+    # used to empty the entire pool post-hoc — ``hard_avoids_emptied``). The in-memory
+    # ``_is_hard_avoided`` check below stays as the backstop: it also matches title text and
+    # keywords, which SQL doesn't see.
+    if avoided_labels := _avoided_genre_labels(session, hard_avoids):
+        constraints.append(not_(Title.genres.op("&&")(avoided_labels)))
     if genre_constraints:
         # Array overlap (``&&``) per constraint, plus the origin-language equality when the
         # constraint carries one; OR across constraints. Labels are canonical, so this honours the
