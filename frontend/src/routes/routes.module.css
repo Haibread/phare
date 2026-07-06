@@ -379,6 +379,62 @@
   background: var(--accent);
 }
 
+/* Taste facets: one row per taste mode — label + weight bar left, exemplar thumbs right. Base
+   styles are the mobile layout (small thumbs keep the row on one line at 375px). */
+.facetRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.facetInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.facetLabelLine {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+  font-size: 0.88rem;
+}
+
+.facetLabel {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facetLabelLine > .faint {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.facetPosters {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-1);
+}
+
+.facetPoster {
+  width: 30px;
+  aspect-ratio: 2 / 3;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+@media (min-width: 640px) {
+  .facetPoster {
+    width: 38px;
+  }
+}
+
 .sourceLine {
   display: flex;
   align-items: center;

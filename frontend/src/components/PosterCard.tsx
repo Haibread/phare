@@ -13,6 +13,7 @@ export function PosterCard({
   item,
   showFit = true,
   hideNullFit = false,
+  showRating = false,
   anchorTitleId = null,
 }: {
   item: RecommendationItem;
@@ -21,6 +22,9 @@ export function PosterCard({
   // "worth a look" sliver). Search sets this so cards only show a gauge once the backend sends a real
   // confidence; home rows keep the default. See ConfidenceMeter for the rationale.
   hideNullFit?: boolean;
+  // Search cards show a compact TMDB rating ("★ 8.4 · 37k") so junk is tellable from the real film.
+  // Home rows keep the default (off): they carry the taste-fit gauge instead — one signal per row.
+  showRating?: boolean;
   // Seed title of a "because you watched X" row, when this card lives in one — passed to the detail
   // sheet so the "why this" reason can open from that concrete link.
   anchorTitleId?: string | null;
@@ -36,6 +40,25 @@ export function PosterCard({
   // against an older backend / a profile without taste) reads as "no fit" everywhere — gauge, aria
   // name, and detail label — so the three stay consistent.
   const fitVisible = showFit && !(hideNullFit && item.confidence === null && !item.isSwing);
+
+  // Compact locale-aware rating for search cards: score keeps one decimal, the vote count compacts
+  // (37000 → "37K" en / "37 k" fr). Same star convention as the detail sheet's fuller rating line.
+  const rating =
+    showRating && item.voteAverage !== null
+      ? t(item.voteCount !== null ? "card.rating" : "card.ratingNoCount", {
+          score: new Intl.NumberFormat(i18n.language, {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+          }).format(item.voteAverage),
+          count:
+            item.voteCount !== null
+              ? new Intl.NumberFormat(i18n.language, {
+                  notation: "compact",
+                  maximumFractionDigits: 0,
+                }).format(item.voteCount)
+              : "",
+        })
+      : null;
 
   // A card has exactly one action: open the detail sheet. The destructive "not interested" signal
   // (round 3) and the request/availability action (round 4) both moved into the sheet, off the
@@ -111,6 +134,12 @@ export function PosterCard({
           {item.year ?? "—"}
           {item.genres[0] !== undefined && ` · ${translateGenre(item.genres[0], i18n.language)}`}
         </div>
+        {rating !== null && (
+          // No voteAverage → no line at all (an unrated row shows nothing, not a dash).
+          <div className={styles.cardRating} data-testid="card-rating">
+            {rating}
+          </div>
+        )}
       </button>
       {showFit && (
         <ConfidenceMeter

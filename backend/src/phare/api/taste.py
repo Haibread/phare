@@ -1,8 +1,11 @@
-"""Taste profile: view, generate (LLM), and edit (sticky user overrides)."""
+"""Taste profile: view, generate (LLM), and edit (sticky user overrides) — plus the read-only
+facet view (the inspectable taste modes, principle 2)."""
 
 from __future__ import annotations
 
+import logging
 import uuid
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -11,23 +14,35 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.api.deps import get_language
-from phare.api.schemas import LLMUnavailable, TasteResponse, UpdateTasteRequest
+from phare.api.deps import Embedder, get_embedder, get_language
+from phare.api.recommend import _poster_url
+from phare.api.schemas import (
+    FacetExemplarResponse,
+    LLMUnavailable,
+    TasteFacetResponse,
+    TasteFacetsResponse,
+    TasteResponse,
+    UpdateTasteRequest,
+)
 from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import get_settings
 from phare.core.fallback import record_fallback
 from phare.core.i18n import Language
 from phare.core.llm_budget import LLMBudgetExceeded
 from phare.db.base import get_session
-from phare.db.models import TasteProfile, User
+from phare.db.models import TasteProfile, Title, User
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.types import LLMProvider
+from phare.recommend.taste_facets import extract_facets, rank_members_by_centrality
+from phare.recommend.taste_vector import taste_contributions
 from phare.taste.service import (
     TasteService,
     effective_profile,
-    localized_summary,
+    localized_display,
     optional_llm_provider,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Taste"])
 
@@ -48,11 +63,16 @@ def get_llm_provider() -> LLMProvider:
     )
 
 
-def _to_response(taste: TasteProfile, summary: str | None = None) -> TasteResponse:
+def _to_response(
+    taste: TasteProfile,
+    summary: str | None = None,
+    display_terms: dict[str, str] | None = None,
+) -> TasteResponse:
     return TasteResponse(
         profile_id=taste.profile_id,
         summary=summary if summary is not None else taste.summary_text,
         structured=effective_profile(taste),
+        display_terms=display_terms or {},
         user_overrides=taste.user_overrides,
         confidence=taste.confidence,
         model_version=taste.model_version,
@@ -76,10 +96,12 @@ def get_taste(
 ) -> TasteResponse:
     require_own_profile(user, profile_id)
     taste = _require_taste(session, profile_id)
-    # Serve the summary in the request's language, translating + caching on demand (review F1). The
-    # first request in a new language spends one workhorse call; offline serves the native summary.
-    summary = localized_summary(session, taste, language, optional_llm_provider())
-    return _to_response(taste, summary=summary)
+    # Serve the summary AND the free-form chips in the request's language, translating + caching on
+    # demand (review F1). The first request in a new language spends one workhorse call; offline
+    # serves the stored (canonical) strings. The canonical values in `structured` never change —
+    # `displayTerms` is a display-only canonical→display map the frontend looks chips up in.
+    display = localized_display(session, taste, language, optional_llm_provider())
+    return _to_response(taste, summary=display.summary, display_terms=display.terms)
 
 
 @router.post("/profiles/{profile_id}/taste/generate", response_model=TasteResponse)
@@ -129,6 +151,96 @@ def generate_taste(
         ) from exc
     session.commit()
     return _to_response(taste)
+
+
+# How many exemplar titles a facet carries on the wire — the 3 most centroid-central members.
+_FACET_EXEMPLARS = 3
+
+
+def _facet_label(member_titles: list[Title], fallback: str) -> str:
+    """Deterministic facet label from the dominant genres of its member titles.
+
+    Top genre by frequency, joined with a second one only when it's genuinely co-dominant (at least
+    half the top genre's count) — "Action · Science Fiction", not a laundry list. Ties break
+    alphabetically so the label never flickers between requests. Genres are the catalog's English
+    labels; the client localises them for display (it already owns the genre translation table).
+    ``fallback`` (the most central member's title) covers the no-genre-metadata edge."""
+    counts: Counter[str] = Counter()
+    for title in member_titles:
+        counts.update(title.genres or [])
+    if not counts:
+        return fallback
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    top_genre, top_count = ranked[0]
+    label = top_genre
+    if len(ranked) > 1:
+        second_genre, second_count = ranked[1]
+        if second_count * 2 >= top_count:
+            label = f"{top_genre} · {second_genre}"
+    return label
+
+
+@router.get("/profiles/{profile_id}/taste/facets", response_model=TasteFacetsResponse)
+def get_taste_facets(
+    profile_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
+    embedder: Annotated[Embedder, Depends(get_embedder)],
+) -> TasteFacetsResponse:
+    """The profile's taste facets — the distinct modes the recommender retrieves for (round 10),
+    surfaced so the taste stays inspectable (principle 2). Fully deterministic from the stored
+    embeddings: no LLM call, no persistence. A single-facet taste (small history, cohesive taste,
+    or no signal at all) returns an empty list — one blob facet carries no insight."""
+    require_own_profile(user, profile_id)
+    contributions = taste_contributions(session, profile_id, embedder.read_version)
+    facets = extract_facets(contributions)
+    if len(facets) <= 1:
+        logger.info(
+            "taste.facets.served",
+            extra={"profile_id": str(profile_id), "k": len(facets), "single_mode": True},
+        )
+        return TasteFacetsResponse(facets=[])
+
+    # One query for every member title across all facets (genres + exemplar metadata) — no N+1.
+    member_ids = {title_id for facet in facets for title_id in facet.member_title_ids}
+    titles: dict[uuid.UUID, Title] = {
+        title.id: title for title in session.scalars(select(Title).where(Title.id.in_(member_ids)))
+    }
+    items: list[TasteFacetResponse] = []
+    for facet in facets:  # extract_facets already orders by weight desc
+        ranked = [
+            title_id
+            for title_id in rank_members_by_centrality(facet, contributions)
+            if title_id in titles
+        ]
+        exemplars = [
+            FacetExemplarResponse(
+                title_id=title.id,
+                title=title.title,
+                year=title.year,
+                poster_url=_poster_url(title.poster_path),
+            )
+            for title in (titles[title_id] for title_id in ranked[:_FACET_EXEMPLARS])
+        ]
+        member_titles = [titles[title_id] for title_id in ranked]
+        items.append(
+            TasteFacetResponse(
+                label=_facet_label(member_titles, fallback=exemplars[0].title if exemplars else ""),
+                weight=facet.weight,
+                title_count=facet.size,
+                exemplars=exemplars,
+            )
+        )
+    logger.info(
+        "taste.facets.served",
+        extra={
+            "profile_id": str(profile_id),
+            "k": len(items),
+            "labels": [item.label for item in items],
+            "weights": [round(item.weight, 3) for item in items],
+        },
+    )
+    return TasteFacetsResponse(facets=items)
 
 
 @router.put("/profiles/{profile_id}/taste", response_model=TasteResponse)

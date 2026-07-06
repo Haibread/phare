@@ -98,3 +98,16 @@ export function translateTasteTerm(value: string, language: string): string {
 export function translateGenre(name: string, language: string): string {
   return translateTasteTerm(name, language);
 }
+
+/** Separator the backend joins a facet label's genres with (see `_facet_label` in the API). */
+const FACET_LABEL_SEPARATOR = " · ";
+
+/** Localize a taste-facet label for display. The backend composes it from English catalog genres
+ * joined with " · " ("Action · Science Fiction"), so we translate each part and re-join; a part
+ * outside the genre table (e.g. the no-genre title fallback) renders as stored. */
+export function translateFacetLabel(label: string, language: string): string {
+  return label
+    .split(FACET_LABEL_SEPARATOR)
+    .map((part) => translateGenre(part, language))
+    .join(FACET_LABEL_SEPARATOR);
+}

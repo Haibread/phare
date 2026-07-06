@@ -33,6 +33,8 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
     posterUrl: null,
     components: { score: 0.9 },
     watched: false,
+    voteAverage: null,
+    voteCount: null,
     ...overrides,
   };
 }
@@ -173,6 +175,42 @@ describe("PosterCard", () => {
       const label = screen.getByTestId("rec-card-open").getAttribute("aria-label") ?? "";
       expect(label).toContain("Moon");
       expect(label).not.toContain("fit");
+    });
+  });
+
+  describe("compact rating (search cards)", () => {
+    it("shows a compact star rating when opted in and the backend sends votes", () => {
+      renderCard(
+        <PosterCard item={recItem({ voteAverage: 8.4, voteCount: 37000 })} showRating={true} />,
+      );
+      const rating = screen.getByTestId("card-rating");
+      // English locale (jsdom default): one-decimal score, compact thousands.
+      expect(rating).toHaveTextContent("★ 8.4 · 37K");
+    });
+
+    it("formats the count with the active locale's compact notation", () => {
+      // 1,234,567 votes must compact ("1M"), not render as a full grouped number.
+      renderCard(
+        <PosterCard item={recItem({ voteAverage: 7.1, voteCount: 1234567 })} showRating={true} />,
+      );
+      expect(screen.getByTestId("card-rating")).toHaveTextContent("★ 7.1 · 1M");
+    });
+
+    it("shows the score alone when the vote count is unknown", () => {
+      renderCard(<PosterCard item={recItem({ voteAverage: 6.0 })} showRating={true} />);
+      expect(screen.getByTestId("card-rating")).toHaveTextContent("★ 6.0");
+    });
+
+    it("hides the rating line entirely when voteAverage is null", () => {
+      renderCard(
+        <PosterCard item={recItem({ voteAverage: null, voteCount: 12 })} showRating={true} />,
+      );
+      expect(screen.queryByTestId("card-rating")).toBeNull();
+    });
+
+    it("never shows a rating on home-row cards (default off, even with values)", () => {
+      renderCard(<PosterCard item={recItem({ voteAverage: 8.4, voteCount: 37000 })} />);
+      expect(screen.queryByTestId("card-rating")).toBeNull();
     });
   });
 

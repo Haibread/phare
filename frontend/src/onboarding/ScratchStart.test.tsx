@@ -32,6 +32,8 @@ function result(over: Partial<RecommendationItem>): RecommendationItem {
     posterUrl: null,
     components: {},
     watched: false,
+    voteAverage: null,
+    voteCount: null,
     ...over,
   };
 }
@@ -89,6 +91,7 @@ describe("ScratchStart", () => {
       profileId: "p1",
       summary: null,
       structured: {},
+      displayTerms: {},
       userOverrides: {},
       confidence: null,
       modelVersion: null,

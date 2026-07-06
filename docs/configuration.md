@@ -158,8 +158,9 @@ the engine's SQL-side runtime filter) then filters on a ghost catalog, and the d
 "who made it" line. The rating re-pull above can't fix this: these fields need a per-title TMDB
 **detail** call (which bundles runtime, votes, credits *and* language in one request via
 `append_to_response`), not a discover page. So on the same boot skip path, if more than half the
-catalog has a **metadata gap** (`runtime_minutes IS NULL OR original_language IS NULL` — one fetch
-fills both, plus credits/votes), Phare schedules a **background** bulk heal that walks the gapped
+catalog has a **metadata gap** (`runtime_minutes IS NULL OR original_language IS NULL` or an empty
+`genres` array — one fetch fills them all, plus credits/votes), Phare schedules a **background**
+bulk heal that walks the gapped
 rows in batches behind a keyset cursor, fetches each title's detail (bounded concurrency, capped at
 ~30 req/s so the fan-out can't rate-limit TMDB), and fills whatever the row was missing. The gap
 predicate deliberately includes language, not just runtime: movies whose runtime was already healed
@@ -169,6 +170,11 @@ ever fills holes — a NULL scalar or an empty credit array, never clobbers), fi
 seed and then no-ops as coverage stays healthy, and is a strict no-op without a TMDB key. The
 read-path enrichment (a detail sheet opening, or the chat candidate pool on a runtime-capped turn)
 remains as a backstop that heals whatever the bulk pass hasn't reached yet — no command either way.
+When a heal fills a field that feeds the embedding document (genres, credits, language), the
+title's stale vector is dropped and lazily re-embedded on the next recommendation pass — a vector
+computed from a skeletal document sits in a meaningless neighbourhood, so between drop and re-embed
+the title simply doesn't match semantic queries (strictly better than matching everything). For the
+same reason, semantic search fill skips genre-less rows until the heal has enriched them.
 
 **Staying fresh — new movies & TV.** Seeding is a point-in-time snapshot; new releases keep coming,
 and nothing on the read path can surface a title that isn't imported yet. So a background pass runs
@@ -299,18 +305,22 @@ a French sentence reads "Science-Fiction", not the stored English "Science Ficti
 labels stay English — they key affinity/genre matching against the catalog — so only the _displayed_
 string is translated. An unmapped genre falls back to English and emits a `phare.fallback` signal.
 
-The **taste summary** is served in the request's language: the first read in a new language spends
-one workhorse LLM call to translate it, cached per language on the profile (`summary_by_lang`) so
-each language costs at most one call per (re)generation. Offline (no `LLM_API_KEY`) it serves the
-stored summary unchanged.
+The **taste summary and free-form taste chips** are served in the request's language: the first read
+in a new language spends **one** workhorse LLM call that translates the summary plus every free-form
+chip (`likes` / `dislikes` / off-vocabulary `hard_avoids` / `comfort_axis`) in a single JSON payload,
+cached per language on the profile (`summary_by_lang`) so each language costs at most one call per
+(re)generation. The cache maps each canonical chip to its display form, so removing a chip never
+re-spends a call, and chips the user typed as overrides are shown exactly as typed — they're never
+machine-translated. Reading in the language the profile was generated in costs nothing. Offline (no
+`LLM_API_KEY`) the stored canonical strings are served unchanged. Profiles translated before chips
+localized (summary-only cache) keep their cached summary and spend one call on the chips alone.
 
-The **taste chips** on the profile (the "Drawn to" / "Avoiding" pills) display in the UI language for
-terms in the closed vocabulary — TMDB genres + the controlled affinity descriptors — via a static
-front-side table (mirrored from the backend's `recommend/genres.py`). Only the _displayed_ label is
-translated: the stored value stays the canonical English key, so overrides survive a language switch
-and every edit still writes the English key to the backend. Free-form chips (the LLM's natural-language
-`likes`, outside the vocabulary) render exactly as stored — they're never machine-translated (no LLM
-call is spent on chips).
+The **closed-vocabulary taste chips** (TMDB genres + the controlled affinity descriptors) display in
+the UI language via a static front-side table (mirrored from the backend's `recommend/genres.py`);
+they're excluded from the LLM translation call, so no chip is ever translated twice. In every case
+only the _displayed_ label localises: the stored value stays the canonical key, so overrides survive
+a language switch and every edit still writes the canonical key to the backend (the API returns the
+canonical values in `structured` and the display forms in a separate `displayTerms` map).
 
 What does **not** localise:
 

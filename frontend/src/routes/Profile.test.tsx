@@ -19,6 +19,8 @@ vi.mock("../api", async (importActual) => {
         .fn()
         .mockRejectedValue(new actual.ApiError(404, "No taste profile yet; generate one first")),
       history: vi.fn().mockResolvedValue({ items: [], page: 1, perPage: 50, total: 0 }),
+      // Default: single-mode taste — the backend sends no facets and the section stays hidden.
+      getTasteFacets: vi.fn().mockResolvedValue({ facets: [] }),
       conversion: vi.fn().mockResolvedValue({ rate: null, shown: 0, topK: 10, withinDays: 30 }),
       listSources: vi.fn().mockResolvedValue([]),
       listCommitments: vi.fn().mockResolvedValue({ items: [] }),
@@ -173,6 +175,70 @@ describe("Profile taste generation", () => {
     expect(await screen.findByTestId("taste-summary")).toBeInTheDocument();
     const button = await screen.findByTestId("taste-generate");
     expect(button).toHaveTextContent("Regenerate");
+  });
+});
+
+describe("Profile taste facets", () => {
+  const facet = (label: string, weight: number, seed: string) => ({
+    label,
+    weight,
+    titleCount: 6,
+    exemplars: [
+      {
+        titleId: `${seed}-1`,
+        title: `${label} One`,
+        year: 2010,
+        posterUrl: `https://img.example/${seed}-1.jpg`,
+      },
+      { titleId: `${seed}-2`, title: `${label} Two`, year: 2012, posterUrl: null },
+      {
+        titleId: `${seed}-3`,
+        title: `${label} Three`,
+        year: 2014,
+        posterUrl: `https://img.example/${seed}-3.jpg`,
+      },
+    ],
+  });
+
+  it("renders a row per facet with label, share, weight bar and exemplar posters", async () => {
+    mocked.getTasteFacets.mockResolvedValueOnce({
+      facets: [facet("Science Fiction", 0.7, "sf"), facet("Comedy", 0.3, "co")],
+    });
+
+    renderProfile();
+
+    expect(await screen.findByTestId("taste-facets")).toBeInTheDocument();
+    expect(screen.getByText("Facets of your taste")).toBeInTheDocument();
+    const rows = screen.getAllByTestId("facet-row");
+    expect(rows).toHaveLength(2);
+    // Weight-descending from the backend, rendered in order with an honest share line.
+    const labels = screen.getAllByTestId("facet-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Science Fiction", "Comedy"]);
+    const shares = screen.getAllByTestId("facet-share").map((el) => el.textContent);
+    expect(shares).toEqual(["70% · 6 titles", "30% · 6 titles"]);
+    // The three exemplars render: real posters as images, the null-poster one as a tinted tile
+    // carrying the title as its accessible name.
+    const first = rows[0] as HTMLElement;
+    expect(first.querySelectorAll("img")).toHaveLength(2);
+    expect(screen.getByLabelText("Science Fiction Two")).toBeInTheDocument();
+  });
+
+  it("hides the section entirely when the backend returns no facets", async () => {
+    // (getTasteFacets already resolves { facets: [] } in the default mock.)
+    renderProfile();
+
+    // Wait for another card to settle so the absence is a real render, not a pending state.
+    await screen.findByTestId("taste-generate");
+    expect(screen.queryByTestId("taste-facets")).toBeNull();
+  });
+
+  it("hides the section when the facets request fails (insight panel, not an alarm)", async () => {
+    mocked.getTasteFacets.mockRejectedValueOnce(new ApiError(500, "Internal Server Error"));
+
+    renderProfile();
+
+    await screen.findByTestId("taste-generate");
+    expect(screen.queryByTestId("taste-facets")).toBeNull();
   });
 });
 

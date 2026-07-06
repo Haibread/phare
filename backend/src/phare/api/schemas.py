@@ -159,6 +159,12 @@ class TasteResponse(ApiModel):
     profile_id: uuid.UUID
     summary: str | None = None
     structured: dict[str, Any]
+    # Display-only localization of the free-form chips in `structured`: canonical value → label in
+    # the request's language. The canonical values never change (overrides key on them, review F1);
+    # the frontend prefers this map, then its static closed-vocab table, then the canonical string.
+    # Empty when nothing needed translating (same language, offline, or write endpoints — the
+    # subsequent GET refetch carries the map).
+    display_terms: dict[str, str] = Field(default_factory=dict)
     user_overrides: dict[str, Any]
     confidence: float | None = None
     model_version: str | None = None
@@ -167,6 +173,32 @@ class TasteResponse(ApiModel):
 
 class UpdateTasteRequest(ApiModel):
     user_overrides: dict[str, Any]
+
+
+class FacetExemplarResponse(ApiModel):
+    """A member title most central to a taste facet — shown as the facet's face on the Profile."""
+
+    title_id: uuid.UUID
+    title: str
+    year: int | None = None
+    poster_url: str | None = None
+
+
+class TasteFacetResponse(ApiModel):
+    """One taste mode, made inspectable (principle 2): a deterministic genre label, its share of
+    the positive event mass (``weight``, facets sum to 1), how many titles seeded it, and the 3
+    most central member titles. No LLM anywhere — pure clustering + genre counting."""
+
+    label: str
+    weight: float
+    title_count: int
+    exemplars: list[FacetExemplarResponse]
+
+
+class TasteFacetsResponse(ApiModel):
+    """Weight-descending facets; empty when the taste has a single mode (no insight to show)."""
+
+    facets: list[TasteFacetResponse]
 
 
 class CatalogSummary(ApiModel):
@@ -190,6 +222,10 @@ class RecommendationItem(ApiModel):
     poster_url: str | None = None
     components: dict[str, float]
     watched: bool = False  # the profile has already seen this — the card shows a "Watched" badge
+    # TMDB known-ness/quality signals — filled by search results so the cards can show a compact
+    # "★ 8.4 · 37k" rating; null (and hidden) on home rows, which carry the fit gauge instead.
+    vote_average: float | None = None
+    vote_count: int | None = None
 
 
 class TitleDetail(ApiModel):

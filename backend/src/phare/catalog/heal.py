@@ -21,7 +21,10 @@ import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 
-from phare.db.models import Title
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
+
+from phare.db.models import Title, TitleEmbedding
 from phare.providers.types import MetadataProvider, TitleMetadata
 
 logger = logging.getLogger(__name__)
@@ -70,14 +73,22 @@ class RateLimiter:
 
 
 def apply_metadata_heal(row: Title, meta: TitleMetadata) -> bool:
-    """Copy missing metadata (runtime, votes, credits, original language) from ``meta`` to ``row``.
+    """Copy missing metadata (runtime, votes, genres, credits, original language) from ``meta``.
 
     Never clobbers an existing value (idempotent — only fills holes: a NULL scalar or an *empty*
-    credit array). Returns True when *anything* was filled — the signal the gap gauge and the caller
+    array). Returns True when *anything* was filled — the signal the gap gauge and the caller
     use to count progress; a title whose runtime was already present but whose credits/language were
     healed still counts. The caller owns the commit.
+
+    Filling a field that feeds the embedding document (genres, credits, language — see
+    :func:`phare.embeddings.service.build_embedding_text`) also drops the title's stale embeddings:
+    a vector computed from a skeletal document ("title + overview" only) lands in a meaningless
+    neighbourhood — measured live, one genre-less show surfaced as a semantic search neighbour for
+    both "inception" and "ghibli". The read-path embedding backfill re-embeds the enriched document
+    on the next recommendation pass, so the heal stays self-contained and self-correcting.
     """
     filled = False
+    doc_enriched = False
     if row.runtime_minutes is None and meta.runtime_minutes is not None:
         row.runtime_minutes = meta.runtime_minutes
         filled = True
@@ -85,18 +96,41 @@ def apply_metadata_heal(row: Title, meta: TitleMetadata) -> bool:
         row.vote_average = meta.vote_average
     if row.vote_count is None and meta.vote_count is not None:
         row.vote_count = meta.vote_count
-    # Credits are empty-by-default arrays, so "missing" is empty, not NULL. Fill only when we have
+    # Arrays are empty-by-default, so "missing" is empty, not NULL. Fill only when we have
     # something to write, so an unfillable fetch doesn't flip the progress signal for nothing.
+    if not row.genres and meta.genres:
+        row.genres = list(meta.genres)
+        filled = True
+        doc_enriched = True
     if not row.directors and meta.directors:
         row.directors = list(meta.directors)
         filled = True
+        doc_enriched = True
     if not row.top_cast and meta.top_cast:
         row.top_cast = list(meta.top_cast)
         filled = True
+        doc_enriched = True
     if row.original_language is None and meta.original_language is not None:
         row.original_language = meta.original_language
         filled = True
+        doc_enriched = True
+    if doc_enriched:
+        _drop_stale_embeddings(row)
     return filled
+
+
+def _drop_stale_embeddings(row: Title) -> None:
+    """Delete ``row``'s embeddings (all spaces) after its document-relevant metadata was enriched.
+
+    All spaces, not just the write target: the old vector encodes the skeletal document wherever it
+    lives, and a transitional (pre-cutover) space is on its way out anyway. Between the drop and the
+    lazy re-embed the title simply doesn't ANN-match — strictly better than matching everything.
+    """
+    session = Session.object_session(row)
+    if session is None:  # detached test fixture — nothing persisted to invalidate
+        return
+    session.execute(delete(TitleEmbedding).where(TitleEmbedding.title_id == row.id))
+    logger.info("catalog.heal.embeddings_dropped", extra={"title_id": str(row.id)})
 
 
 def fetch_metadata_parallel(

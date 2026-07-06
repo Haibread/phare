@@ -13,13 +13,20 @@ import uuid
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, not_, or_, select, text
 from sqlalchemy.orm import Session
 
-from phare.db.models import Title, TitleKind
-from phare.providers.types import MetadataProvider, TitleMetadata
+from phare.core.fallback import record_fallback
+from phare.db.models import Title, TitleEmbedding, TitleKind
+from phare.providers.embeddings_local import is_local_space
+from phare.providers.types import LLMProvider, MetadataProvider, TitleMetadata
 
 logger = logging.getLogger(__name__)
+
+# Below this vote count (or with none at all) a non-exact lexical match is treated as junk: still
+# returned, but only after every above-floor match — and a semantic ANN neighbour must clear the
+# same bar. Mirrors the broad-import quality floor (``broad_import_from_tmdb``'s default).
+SEARCH_VOTE_FLOOR = 50
 
 
 class CatalogSource(Protocol):
@@ -65,15 +72,76 @@ class CatalogDiscoverSource(Protocol):
     ) -> list[TitleMetadata]: ...
 
 
+def _below_floor(title: Title) -> bool:
+    """The Python twin of the SQL vote-floor predicate, for rows merged outside the ranked query."""
+    return title.vote_count is None or title.vote_count < SEARCH_VOTE_FLOOR
+
+
+def _semantic_fill(
+    session: Session,
+    query: str,
+    embedder: LLMProvider,
+    embedding_version: str,
+    *,
+    exclude: set[uuid.UUID],
+    slots: int,
+) -> list[Title]:
+    """Embedding-nearest catalog titles for the raw query text — the "ghibli" tier.
+
+    One embedding call; ANN over the request's *served* space, above-floor only (a 3-vote
+    neighbour is as much junk as a 3-vote substring match), excluding titles the lexical pass
+    already returned. Any embed failure degrades to no fill — search never breaks on it."""
+    try:
+        query_vec = [float(x) for x in embedder.embed([query])[0]]
+    except Exception:  # noqa: BLE001 - a query-embed hiccup must not sink the search request
+        record_fallback("search", "semantic_embed_error")
+        return []
+    distance = TitleEmbedding.embedding.cosine_distance(query_vec)
+    # Same determinism guard as ``recommend.candidates``: the HNSW index is approximate, so widen
+    # the beam and break exact-distance ties on the stable catalog id, or results flicker.
+    session.execute(text("SET LOCAL hnsw.ef_search = 1000"))
+    stmt = (
+        select(Title)
+        .join(TitleEmbedding, TitleEmbedding.title_id == Title.id)
+        .where(
+            TitleEmbedding.model_version == embedding_version,
+            Title.vote_count >= SEARCH_VOTE_FLOOR,
+            # A genre-less row was embedded from a skeletal document (discovery upsert the heal
+            # hasn't visited yet) — its vector sits in a meaningless neighbourhood and matches
+            # *everything* (measured live: one such show filled for both "inception" and "ghibli").
+            # The heal enriches + re-embeds it, and then it competes here like any other title.
+            func.coalesce(func.cardinality(Title.genres), 0) > 0,
+        )
+        .order_by(distance.asc(), Title.tmdb_id.asc().nulls_last(), Title.id)
+        .limit(slots + len(exclude))  # over-fetch: the exclusion filter may eat into the top
+    )
+    if exclude:
+        stmt = stmt.where(Title.id.notin_(exclude))
+    fills = list(session.scalars(stmt).all())[:slots]
+    logger.info(
+        "catalog.search.semantic_fill",
+        extra={"query": query, "weak_slots": slots, "filled": len(fills)},
+    )
+    return fills
+
+
 def search_titles(
     session: Session,
     query: str,
     metadata: CatalogSearchSource | None = None,
     *,
     limit: int = 12,
+    embedder: LLMProvider | None = None,
+    embedding_version: str | None = None,
 ) -> list[Title]:
     """Search the catalog by title. With a TMDB provider, pull live matches in first (upserting
-    them so they become recommendable + requestable); always fall back to local substring match."""
+    them so they become recommendable + requestable); always fall back to local substring match.
+
+    With an ``embedder`` + ``embedding_version`` (the request's *served* space tag), weak lexical
+    results are topped up with embedding-nearest titles for the query text — so "ghibli" surfaces
+    Spirited Away, not just obscure documentaries whose title contains the word. Skipped entirely
+    offline (no embedder, or the meaningless local hash space): exact lexical-only behaviour.
+    """
     query = query.strip()
     if not query:
         return []
@@ -94,7 +162,6 @@ def search_titles(
             )
             if title is not None:
                 tmdb_matches.append(title)
-    results: list[Title] = []
     seen: set[uuid.UUID] = set()
     # Escape LIKE wildcards in the user's query so "%" / "_" match literally, not as patterns.
     like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -107,33 +174,64 @@ def search_titles(
     #   1. exact title match (the whole title equals the query)
     #   2. word-start match (title begins with the query, or a word inside it does)
     #   3. mid-word substring (the fallback the WHERE clause allows)
+    # Within the non-exact tiers, sub-floor matches ("Bikini Inception", 0-vote concert films) are
+    # *demoted* below every above-floor match of BOTH tiers — still findable, never on top. The
+    # exact tier is deliberately floor-exempt: typing an exact obscure title must still find it.
     exact = func.lower(Title.title) == query.lower()
     word_start = or_(
         Title.title.ilike(f"{like}%", escape="\\"),
         Title.title.ilike(f"% {like}%", escape="\\"),
     )
-    local = session.scalars(
-        select(Title)
+    demoted = and_(
+        not_(exact),
+        or_(Title.vote_count.is_(None), Title.vote_count < SEARCH_VOTE_FLOOR),
+    )
+    rows = session.execute(
+        select(Title, demoted.label("demoted"))
         .where(Title.title.ilike(f"%{like}%", escape="\\"))
         .order_by(
             exact.desc(),
+            demoted.asc(),  # above-floor (of both non-exact tiers) before any sub-floor match
             word_start.desc(),
             Title.vote_count.desc().nulls_last(),
             Title.tmdb_id.asc().nulls_last(),  # stable final tie-break
         )
         .limit(limit)
     ).all()
-    for title in local:
-        if title.id not in seen:
-            seen.add(title.id)
-            results.append(title)
+    lead: list[Title] = []  # exact matches + above-floor lexical matches, in ranked order
+    junk: list[Title] = []  # sub-floor non-exact matches, demoted behind everything better
+    for title, is_demoted in rows:
+        if title.id in seen:
+            continue
+        seen.add(title.id)
+        (junk if is_demoted else lead).append(title)
     # Fuzzy TMDB matches whose stored title doesn't literally contain the query (translations,
-    # alternate titles) aren't in the ranked query above — append them after every lexical match.
+    # alternate titles) aren't in the ranked query above — append them after every lexical match
+    # of their group, the same floor deciding which group they land in.
     for title in tmdb_matches:
-        if title.id not in seen:
-            seen.add(title.id)
-            results.append(title)
-    return results[:limit]
+        if title.id in seen:
+            continue
+        seen.add(title.id)
+        (junk if _below_floor(title) else lead).append(title)
+    # Semantic fill tier: when the above-floor lexical yield leaves slots open, fill them with
+    # embedding-nearest titles for the query text — after the good lexical matches, *before* the
+    # demoted junk (a real ANN neighbour beats a 3-vote substring match). Deterministic trigger:
+    # count above-floor results; anything short of ``limit`` is a weak slot.
+    fills: list[Title] = []
+    strong = sum(1 for title in lead if not _below_floor(title))
+    weak_slots = limit - strong
+    if (
+        weak_slots > 0
+        and embedder is not None
+        and embedding_version is not None
+        # The local hash space carries no semantic meaning — a hashed query vector would only pull
+        # in noise, so offline search stays purely lexical (degrade gracefully, principle 5).
+        and not is_local_space(embedding_version)
+    ):
+        fills = _semantic_fill(
+            session, query, embedder, embedding_version, exclude=seen, slots=weak_slots
+        )
+    return [*lead, *fills, *junk][:limit]
 
 
 def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:

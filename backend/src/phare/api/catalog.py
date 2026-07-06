@@ -19,7 +19,6 @@ from phare.core.i18n import Language
 from phare.db.base import get_session
 from phare.db.models import Profile, TasteProfile, Title
 from phare.embeddings.service import EmbeddingService
-from phare.embeddings.version import active_embedding_version
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.recommend.rows import confidences_for_ordered_titles
 from phare.recommend.taste_vector import compute_taste_centroid, watched_title_ids
@@ -52,6 +51,9 @@ def _to_search_item(
         poster_url=_poster_url(title.poster_path),
         components={},
         watched=watched,
+        # Known-ness/quality straight off the Title row, so search cards can show a compact rating.
+        vote_average=title.vote_average,
+        vote_count=title.vote_count,
     )
 
 
@@ -61,6 +63,7 @@ def search_catalog(
     body: SearchRequest,
     session: Annotated[Session, Depends(get_session)],
     language: Annotated[Language, Depends(get_language)],
+    embedder: Annotated[Embedder, Depends(get_embedder)],
 ) -> SearchResponse:
     """Search the catalog (and live TMDB when configured) so a title can be found + requested."""
     if session.get(Profile, profile_id) is None:
@@ -76,7 +79,16 @@ def search_catalog(
         if settings.tmdb_api_key
         else None
     )
-    titles = search_titles(session, body.q, tmdb, limit=12)
+    # The embedder powers the semantic fill tier ("ghibli" → Spirited Away) when lexical results
+    # are weak; ``read_version`` is the *served* space, the same one the fit stamping queries.
+    titles = search_titles(
+        session,
+        body.q,
+        tmdb,
+        limit=12,
+        embedder=embedder.provider,
+        embedding_version=embedder.read_version,
+    )
     session.commit()  # persist any titles upserted from TMDB
     watched = watched_title_ids(session, profile_id)  # badge the ones you've already seen (A11)
     # Stamp honest taste-fit on the results, same blend as the popular row — search order is lexical
@@ -84,7 +96,7 @@ def search_catalog(
     # taste profile / no embeddings. Small pool (~12), no per-item LLM, one embedding query.
     # Score search fit in the *served* space (coverage-resolved), so the gauge and the home rows
     # read the same vectors — never the write-target space that may still be building.
-    model_version = active_embedding_version(session, get_settings())
+    model_version = embedder.read_version
     centroid = compute_taste_centroid(session, profile_id, model_version)
     taste_row = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
     taste = effective_profile(taste_row) if taste_row is not None else {}

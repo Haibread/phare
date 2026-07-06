@@ -115,12 +115,37 @@ export const tasteSchema = z.object({
   profileId: z.string(),
   summary: z.string().nullable(),
   structured: z.record(z.unknown()),
+  // Display-only localization of free-form chips: canonical value -> label in the UI language. The
+  // canonical values in `structured` never change (overrides key on them); chips missing from the
+  // map fall back to the static vocab table, then the canonical string. Defaulted so an older
+  // backend that doesn't send it yet still parses.
+  displayTerms: z.record(z.string()).default({}),
   userOverrides: z.record(z.unknown()),
   confidence: z.number().nullable(),
   modelVersion: z.string().nullable(),
   generatedAt: z.string().nullable(),
 });
 export type Taste = z.infer<typeof tasteSchema>;
+
+export const facetExemplarSchema = z.object({
+  titleId: z.string(),
+  title: z.string(),
+  year: z.number().nullable(),
+  posterUrl: z.string().nullable(),
+});
+export type FacetExemplar = z.infer<typeof facetExemplarSchema>;
+
+export const tasteFacetSchema = z.object({
+  // English catalog genre label ("Action · Science Fiction") — localised at display time via the
+  // genre translation table (see lib/tasteVocab).
+  label: z.string(),
+  weight: z.number(),
+  titleCount: z.number(),
+  exemplars: z.array(facetExemplarSchema),
+});
+export type TasteFacet = z.infer<typeof tasteFacetSchema>;
+
+const tasteFacetsSchema = z.object({ facets: z.array(tasteFacetSchema) });
 
 export const recommendationItemSchema = z.object({
   titleId: z.string(),
@@ -135,6 +160,10 @@ export const recommendationItemSchema = z.object({
   posterUrl: z.string().nullable(),
   components: z.record(z.number()),
   watched: z.boolean(),
+  // TMDB rating, filled on search results so the cards can show "★ 8.4 · 37k". Defaults tolerate
+  // an older backend that doesn't send them; null hides the rating line.
+  voteAverage: z.number().nullable().default(null),
+  voteCount: z.number().nullable().default(null),
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 
@@ -397,7 +426,13 @@ export function setApiLanguage(language: string): void {
   apiLanguage = language;
 }
 
-async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+// Generic over the schema (not a bare T) so zod's input/output types stay distinct: a `.default()`
+// field is optional on the wire (older backend tolerated) but non-optional on the parsed value.
+async function request<S extends z.ZodTypeAny>(
+  path: string,
+  schema: S,
+  init?: RequestInit,
+): Promise<z.output<S>> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -617,6 +652,8 @@ export const api = {
       body: JSON.stringify({ profileId, deviceCode }),
     }),
   getTaste: (profileId: string) => request(`/profiles/${profileId}/taste`, tasteSchema),
+  getTasteFacets: (profileId: string) =>
+    request(`/profiles/${profileId}/taste/facets`, tasteFacetsSchema),
   generateTaste: (profileId: string) =>
     request(`/profiles/${profileId}/taste/generate`, tasteSchema, { method: "POST" }),
   updateTaste: (profileId: string, userOverrides: Record<string, unknown>) =>

@@ -5,6 +5,7 @@ import { type HistoryItem, isLLMUnavailable, isNotFound } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
 import { CardSkeleton, ErrorState, errorMessage } from "../components/states";
+import { posterTint } from "../lib/poster";
 import {
   keys,
   useAddMemoryNote,
@@ -16,9 +17,11 @@ import {
   useHistory,
   useMemory,
   useTaste,
+  useTasteFacets,
   useUpdateTaste,
 } from "../lib/queries";
 import { RichText } from "../lib/richText";
+import { translateFacetLabel } from "../lib/tasteVocab";
 import { relativeTime, relativeTimeLocalized } from "../lib/time";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import { AccountCard } from "./AccountCard";
@@ -49,6 +52,7 @@ export function Profile(): React.JSX.Element {
   const profileId = useProfileId();
   const qc = useQueryClient();
   const taste = useTaste(profileId);
+  const facets = useTasteFacets(profileId);
   const history = useHistory(profileId);
   const conversion = useConversion(profileId);
   const sources = useConnectedSources(profileId);
@@ -128,6 +132,7 @@ export function Profile(): React.JSX.Element {
                 tone="like"
                 items={likes}
                 busy={updateTaste.isPending}
+                display={taste.data.displayTerms}
                 onAdd={(v) => setOverride("likes", [...likes, v])}
                 onRemove={(v) =>
                   setOverride(
@@ -142,6 +147,7 @@ export function Profile(): React.JSX.Element {
               tone="avoid"
               items={avoids}
               busy={updateTaste.isPending}
+              display={taste.data.displayTerms}
               onAdd={(v) => setOverride("hard_avoids", [...avoids, v])}
               onRemove={(v) =>
                 setOverride(
@@ -195,6 +201,80 @@ export function Profile(): React.JSX.Element {
           </div>
         )}
       </section>
+
+      {/* Taste facets ---------------------------------------------------
+          The distinct taste modes the recommender actually retrieves for (round 10), surfaced so
+          the taste stays inspectable. Hidden entirely when the backend returns none — a single-mode
+          taste (or a fresh profile) has no split worth showing. Errors hide it too: this is an
+          insight panel, not a critical path, so it degrades to absence rather than an alarm. */}
+      {facets.data && facets.data.facets.length > 0 && (
+        <section className={styles.card} data-testid="taste-facets">
+          <h2 style={{ fontSize: "1.05rem" }}>{t("facets.heading")}</h2>
+          <p className="faint" style={{ fontSize: "0.78rem", marginBottom: "var(--sp-2)" }}>
+            {t("facets.subtitle")}
+          </p>
+          {facets.data.facets.map((facet) => (
+            <div
+              key={facet.exemplars[0]?.titleId ?? facet.label}
+              className={styles.facetRow}
+              data-testid="facet-row"
+            >
+              <div className={styles.facetInfo}>
+                <div className={styles.facetLabelLine}>
+                  <span className={styles.facetLabel} data-testid="facet-label">
+                    {translateFacetLabel(facet.label, i18n.language)}
+                  </span>
+                  <span className="faint" data-testid="facet-share">
+                    {t("facets.share", {
+                      pct: Math.round(facet.weight * 100),
+                      count: facet.titleCount,
+                    })}
+                  </span>
+                </div>
+                <div
+                  className={styles.meterTrack}
+                  role="meter"
+                  aria-valuenow={Math.round(facet.weight * 100)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={t("facets.weightLabel", {
+                    label: translateFacetLabel(facet.label, i18n.language),
+                  })}
+                >
+                  <div
+                    className={styles.meterFill}
+                    style={{ width: `${Math.round(facet.weight * 100)}%` }}
+                  />
+                </div>
+              </div>
+              <div className={styles.facetPosters}>
+                {facet.exemplars.map((exemplar) =>
+                  exemplar.posterUrl !== null ? (
+                    <img
+                      key={exemplar.titleId}
+                      className={styles.facetPoster}
+                      src={exemplar.posterUrl}
+                      alt={exemplar.title}
+                      title={exemplar.title}
+                      loading="lazy"
+                    />
+                  ) : (
+                    // No artwork: the deterministic tinted tile the poster cards use, with the
+                    // title as tooltip — never a broken-image icon.
+                    <span
+                      key={exemplar.titleId}
+                      className={styles.facetPoster}
+                      style={{ background: posterTint(exemplar.titleId) }}
+                      title={exemplar.title}
+                      aria-label={exemplar.title}
+                    />
+                  ),
+                )}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* Sources ------------------------------------------------------- */}
       <section className={styles.card}>
