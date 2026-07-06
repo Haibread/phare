@@ -28,6 +28,7 @@ from phare.api.deps import (
 )
 from phare.api.recommend import _poster_url, require_profile
 from phare.api.schemas import TitleDetail
+from phare.catalog.heal import apply_metadata_heal
 from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.fallback import record_fallback
@@ -98,10 +99,10 @@ def _localized_overview_genres(
         return (*(_from_cache() if cached is not None else stored), False)
     if meta is None:
         return (*(_from_cache() if cached is not None else stored), True)
-    # We already have the full metadata in hand — opportunistically heal a missing runtime from the
-    # same fetch (see `_backfill_runtime`), so a detail open never costs a second TMDB round-trip.
-    if title.runtime_minutes is None and meta.runtime_minutes is not None:
-        title.runtime_minutes = meta.runtime_minutes
+    # We already have the full metadata in hand — opportunistically heal missing metadata (runtime,
+    # votes, credits, original language) from the same fetch via the shared heal primitive, so a
+    # detail open never costs a second TMDB round-trip and fills whatever the row was missing.
+    apply_metadata_heal(title, meta)
     _upsert_localization(session, title.id, language, meta.overview, list(meta.genres), now)
     return (meta.overview or title.overview, list(meta.genres) or list(title.genres), True)
 
@@ -155,11 +156,14 @@ def _backfill_runtime(
         logger.warning("titles.runtime_backfill_failed", extra={"title_id": str(title.id)})
         record_fallback("titles", "runtime_unavailable", title_id=str(title.id))
         return None
-    if meta is None or meta.runtime_minutes is None:
+    if meta is None:
         return None
-    title.runtime_minutes = meta.runtime_minutes
-    logger.info("titles.runtime_backfilled", extra={"title_id": str(title.id)})
-    return meta.runtime_minutes
+    # Heal everything this fetch carries (runtime, votes, credits, language), not only runtime — the
+    # dedicated fetch is the fallback for a warm localization cache that left the row gapped.
+    apply_metadata_heal(title, meta)
+    if title.runtime_minutes is not None:
+        logger.info("titles.runtime_backfilled", extra={"title_id": str(title.id)})
+    return title.runtime_minutes
 
 
 def _tmdb_url(title: Title) -> str | None:
@@ -195,6 +199,11 @@ def get_title(
         poster_url=_poster_url(title.poster_path),
         tmdb_url=_tmdb_url(title),
         imdb_url=f"https://www.imdb.com/title/{title.imdb_id}/" if title.imdb_id else None,
+        directors=list(title.directors),
+        top_cast=list(title.top_cast),
+        vote_average=title.vote_average,
+        vote_count=title.vote_count,
+        original_language=title.original_language,
     )
 
 

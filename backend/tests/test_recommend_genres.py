@@ -57,6 +57,15 @@ def test_french_localized_vocabulary_still_steers_against_english_catalog() -> N
     assert genres.in_vocabulary("Téléréalité")
 
 
+def test_anime_alias_resolves_to_animation() -> None:
+    # First-step anime handling (round 8, item 4): "anime" and its French/accented forms resolve to
+    # the Animation catalog label. True anime (Animation + Japanese origin) is a later round.
+    for word in ("anime", "animé", "animés", "animes"):
+        assert genres.canonical(word) == "animation"
+        assert genres.term_matches(word, "Animation")
+    assert genres.matches_any(["anime"], ["Animation"])
+
+
 def test_short_terms_require_equality_not_substring() -> None:
     # "war" (< 4 chars) must not match "wardrobe"; it still matches the genre "War" by equality.
     assert not genres.term_matches("war", "wardrobe")

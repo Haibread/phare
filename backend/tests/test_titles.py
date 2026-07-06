@@ -217,6 +217,77 @@ def test_detail_runtime_stays_null_without_a_tmdb_key(db_session: Session) -> No
     assert body["runtimeMinutes"] is None  # offline: no backfill, no crash
 
 
+def test_detail_surfaces_credits_language_and_votes(db_session: Session) -> None:
+    # Round-8 camelCase fields the frontend expects: directors, topCast, voteAverage, voteCount,
+    # originalLanguage. Stored on the row → surfaced verbatim.
+    title = Title(
+        kind=TitleKind.movie,
+        title="Dune",
+        year=2021,
+        tmdb_id=99,
+        genres=["Sci-Fi"],
+        keywords=["desert"],
+        overview=_BASE_OVERVIEW,
+        runtime_minutes=155,
+        directors=["Denis Villeneuve"],
+        top_cast=["Timothée Chalamet", "Zendaya"],
+        vote_average=8.1,
+        vote_count=9000,
+        original_language="en",
+    )
+    db_session.add(title)
+    db_session.flush()
+
+    body = _client(db_session, None).get(f"/titles/{title.id}").json()
+
+    assert body["directors"] == ["Denis Villeneuve"]
+    assert body["topCast"] == ["Timothée Chalamet", "Zendaya"]
+    assert body["voteAverage"] == 8.1
+    assert body["voteCount"] == 9000
+    assert body["originalLanguage"] == "en"
+
+
+def test_detail_open_heals_missing_credits_and_language(db_session: Session) -> None:
+    # A discover-seeded row has no credits/language; opening it must heal them from the same TMDB
+    # fetch that localizes, and persist — the read-path heal now covers credits, not just runtime.
+    title = _seed_title(db_session, runtime_minutes=None)
+    provider = _CountingProvider(
+        TitleMetadata(
+            kind=TitleKind.movie,
+            tmdb_id=42,
+            title="Dune",
+            overview=_LOCALIZED_OVERVIEW,
+            genres=["Science-Fiction"],
+            runtime_minutes=148,
+            directors=["Denis Villeneuve"],
+            top_cast=["Timothée Chalamet"],
+            original_language="en",
+        )
+    )
+
+    body = _client(db_session, provider).get(f"/titles/{title.id}").json()
+
+    assert body["directors"] == ["Denis Villeneuve"]
+    assert body["originalLanguage"] == "en"
+    db_session.expire(title)
+    healed = db_session.get(Title, title.id)
+    assert healed.directors == ["Denis Villeneuve"]
+    assert healed.top_cast == ["Timothée Chalamet"]
+    assert healed.original_language == "en"
+
+
+def test_title_model_credits_language_round_trip(db_session: Session) -> None:
+    # The new columns persist and read back (default empty arrays, nullable language).
+    empty = Title(kind=TitleKind.movie, title="Bare", tmdb_id=1)
+    db_session.add(empty)
+    db_session.flush()
+    db_session.expire(empty)
+    reloaded = db_session.get(Title, empty.id)
+    assert reloaded.directors == []
+    assert reloaded.top_cast == []
+    assert reloaded.original_language is None
+
+
 def test_unknown_title_is_404(db_session: Session) -> None:
     import uuid
 

@@ -94,10 +94,17 @@ class TMDBMetadataProvider:
         return self._cache.get_or_set(key, lambda: self._fetch(path, params))
 
     def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata | None:
+        # ``append_to_response`` bundles the sub-resources into the *same* HTTP request, so credits
+        # cost no extra round-trip. Movie credits are a flat cast/crew list; TV has none at the
+        # series level, so we append ``aggregate_credits`` (cross-season billing) for cast and take
+        # the directors slot from the base payload's ``created_by`` (the show's creators) — no
+        # separate call either way.
         if kind is TitleKind.movie:
-            data = self._get(f"/movie/{tmdb_id}", append_to_response="keywords")
+            data = self._get(f"/movie/{tmdb_id}", append_to_response="keywords,credits")
             return self._parse_movie(data)
-        data = self._get(f"/tv/{tmdb_id}", append_to_response="keywords,external_ids")
+        data = self._get(
+            f"/tv/{tmdb_id}", append_to_response="keywords,external_ids,aggregate_credits"
+        )
         return self._parse_show(data)
 
     def _resolve_listing(self, kind: TitleKind, data: dict[str, Any]) -> list[TitleMetadata]:
@@ -236,6 +243,9 @@ class TMDBMetadataProvider:
             overview=result.get("overview"),
             poster_path=result.get("poster_path"),
             genres=genres,
+            # discover carries original_language even in the shallow list parse — wire it through so
+            # the broad seed populates it for free (no per-title fetch needed for language).
+            original_language=result.get("original_language"),
             popularity=result.get("popularity"),
             vote_count=result.get("vote_count"),
             vote_average=result.get("vote_average"),
@@ -253,9 +263,32 @@ class TMDBMetadataProvider:
     def _genres(data: dict[str, Any]) -> list[str]:
         return [g["name"] for g in data.get("genres", []) if g.get("name")]
 
+    # How many billed cast names to keep — the "top_cast" the detail sheet shows. Order is TMDB's
+    # billing order, so the first N are the leads.
+    _TOP_CAST = 5
+
+    @staticmethod
+    def _movie_directors(credits: dict[str, Any]) -> list[str]:
+        """Director name(s) from a movie's ``credits.crew``, filtered to job=Director, in order."""
+        return [
+            name
+            for member in credits.get("crew", [])
+            if member.get("job") == "Director" and (name := member.get("name"))
+        ]
+
+    @staticmethod
+    def _top_cast(credits: dict[str, Any]) -> list[str]:
+        """First ``_TOP_CAST`` billed cast names from a ``credits``/``aggregate_credits`` block."""
+        return [
+            name
+            for member in credits.get("cast", [])[: TMDBMetadataProvider._TOP_CAST]
+            if (name := member.get("name"))
+        ]
+
     @staticmethod
     def _parse_movie(data: dict[str, Any]) -> TitleMetadata:
         keywords = data.get("keywords", {}).get("keywords", [])
+        credits = data.get("credits", {})
         return TitleMetadata(
             kind=TitleKind.movie,
             tmdb_id=data["id"],
@@ -267,6 +300,9 @@ class TMDBMetadataProvider:
             poster_path=data.get("poster_path"),
             genres=TMDBMetadataProvider._genres(data),
             keywords=[k["name"] for k in keywords if k.get("name")],
+            directors=TMDBMetadataProvider._movie_directors(credits),
+            top_cast=TMDBMetadataProvider._top_cast(credits),
+            original_language=data.get("original_language"),
             popularity=data.get("popularity"),
             vote_count=data.get("vote_count"),
             vote_average=data.get("vote_average"),
@@ -276,6 +312,10 @@ class TMDBMetadataProvider:
     def _parse_show(data: dict[str, Any]) -> TitleMetadata:
         keywords = data.get("keywords", {}).get("results", [])
         runtimes = data.get("episode_run_time") or []
+        # TV has no series-level crew, so the "directors" slot uses the show's creators
+        # (``created_by``); cast comes from ``aggregate_credits`` (cross-season billing) — both in
+        # the one appended fetch.
+        creators = [c["name"] for c in data.get("created_by", []) if c.get("name")]
         return TitleMetadata(
             kind=TitleKind.show,
             tmdb_id=data["id"],
@@ -287,6 +327,9 @@ class TMDBMetadataProvider:
             poster_path=data.get("poster_path"),
             genres=TMDBMetadataProvider._genres(data),
             keywords=[k["name"] for k in keywords if k.get("name")],
+            directors=creators,
+            top_cast=TMDBMetadataProvider._top_cast(data.get("aggregate_credits", {})),
+            original_language=data.get("original_language"),
             popularity=data.get("popularity"),
             vote_count=data.get("vote_count"),
             vote_average=data.get("vote_average"),

@@ -68,6 +68,15 @@ _ALIASES.update(
         "action & aventure": "action & adventure",
         # extra English variants not in the mood map
         "scifi": "science fiction",
+        # "anime" (and its French plural/accented forms) → Animation, so a request for anime at
+        # least lands on the animation catalog. This is only the first step: *true* anime filtering
+        # is Animation + Japanese origin (original_language == "ja"), which becomes possible once
+        # the original_language backfill (round 8, item 1) has coverage. Not built yet — the data
+        # isn't there — so for now anime is treated as a plain Animation alias.
+        "anime": "animation",
+        "animé": "animation",
+        "animés": "animation",
+        "animes": "animation",
     }
 )
 

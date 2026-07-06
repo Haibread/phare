@@ -118,6 +118,16 @@ rows expose an honest signal of their *own* kind, not a fake taste score:
 Items the profile has already watched carry a `watched` flag, so the UI badges them "Watched" — most
 visibly in **search**, where a title you've seen can turn up and should say so (review A11).
 
+**Search relevance + fit.** Catalog search ranks by *lexical* relevance first — an exact title
+match, then a word-start match, then a mid-word substring — and only **within a lexical tier** does
+it break ties by `vote_count` (NULLS LAST). So an obscure exact title still leads over a far
+better-known title that merely starts with the query, while the junk tail (soundtrack albums,
+"Bikini Inception") that shares a word-start but has ~no votes sinks below the real match. Search
+results also carry an **honest taste-fit confidence** — the *same* blend as the popular row
+(similarity to the taste centroid + graded affinity, unproven-vote cap included), stamped without
+re-ordering — so the UI shows the fit gauge on search too. It degrades to `null` (gauge hidden) with
+no taste centroid (cold start) or no embedding for a given title; never a fabricated score.
+
 Because `continue_watching`'s confidence is recency warmth ("how far into the show you are") and not
 a *taste-fit* signal, the UI **doesn't render the fit gauge** on that row — the same gauge meaning
 "how far in" on one row and "how well it fits you" on another would make one control mean two things

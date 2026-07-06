@@ -62,6 +62,12 @@ class TitleMetadata(_Frozen):
     poster_path: str | None = None
     genres: list[str] = []
     keywords: list[str] = []
+    # Plain names — directors (movie) / creators (show), and the first ~5 billed cast. Populated
+    # only by the deep ``get_title`` fetch (append_to_response=credits); the shallow list/discover
+    # parses leave them empty.
+    directors: list[str] = []
+    top_cast: list[str] = []
+    original_language: str | None = None  # TMDB ISO-639-1 origin code (e.g. "en", "ja")
     popularity: float | None = None
     vote_count: int | None = None  # TMDB rating count — a proxy for how well-known a title is
     vote_average: float | None = None  # TMDB mean rating in [0, 10] — a crude quality floor

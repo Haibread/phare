@@ -151,15 +151,22 @@ path, if any titles lack a current-version vector, Phare kicks off a background 
 the whole backlog at boot — no command, no waiting for traffic. It's the same idempotent, best-effort
 embed as the seed paths; the read-path top-up and daily refresh remain as backstops.
 
-**Self-healing missing runtimes.** The broad *discover* import omits runtime, so a freshly-seeded
-catalog is almost entirely `runtime_minutes = NULL` — and a "something under 90 minutes" request (or
-the engine's SQL-side runtime filter) then filters on a ghost catalog. The rating re-pull above can't
-fix this: runtime needs a per-title TMDB **detail** call, not a discover page. So on the same boot
-skip path, if more than half the catalog lacks a runtime, Phare schedules a **background** bulk heal
-that walks the NULL-runtime rows in batches, fetches each title's detail (bounded concurrency), and
-persists runtime plus any still-missing `vote_average` / `vote_count`. It's off the boot path (so
-readiness isn't gated on it), idempotent (only ever fills NULLs, never clobbers), fires once after a
-broad seed and then no-ops as coverage stays healthy, and is a strict no-op without a TMDB key. The
+**Self-healing missing metadata (runtime, credits, language).** The broad *discover* import carries
+only shallow records, so a freshly-seeded catalog is almost entirely `runtime_minutes = NULL` with
+no credits and — for older rows — no `original_language`. A "something under 90 minutes" request (or
+the engine's SQL-side runtime filter) then filters on a ghost catalog, and the detail sheet has no
+"who made it" line. The rating re-pull above can't fix this: these fields need a per-title TMDB
+**detail** call (which bundles runtime, votes, credits *and* language in one request via
+`append_to_response`), not a discover page. So on the same boot skip path, if more than half the
+catalog has a **metadata gap** (`runtime_minutes IS NULL OR original_language IS NULL` — one fetch
+fills both, plus credits/votes), Phare schedules a **background** bulk heal that walks the gapped
+rows in batches behind a keyset cursor, fetches each title's detail (bounded concurrency, capped at
+~30 req/s so the fan-out can't rate-limit TMDB), and fills whatever the row was missing. The gap
+predicate deliberately includes language, not just runtime: movies whose runtime was already healed
+live would otherwise be skipped and never get credits — a catalog fully runtimed but 0% credits
+still triggers one pass. It's off the boot path (so readiness isn't gated on it), idempotent (only
+ever fills holes — a NULL scalar or an empty credit array, never clobbers), fires once after a broad
+seed and then no-ops as coverage stays healthy, and is a strict no-op without a TMDB key. The
 read-path enrichment (a detail sheet opening, or the chat candidate pool on a runtime-capped turn)
 remains as a backstop that heals whatever the bulk pass hasn't reached yet — no command either way.
 

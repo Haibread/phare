@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.catalog.sample import seed_sample_catalog
@@ -518,6 +519,58 @@ def test_popular_row_unproven_title_confidence_is_capped(db_session: Session) ->
     fresh_conf = next(it.confidence for it in row.items if it.title == "Fresh Drop")
     assert fresh_conf is not None
     assert fresh_conf <= _UNPROVEN_CONF_CAP  # the unproven cap bites regardless of similarity
+
+
+def _account_with_history(session: Session):
+    """A full account whose profile has sample watch history + an embedded catalog — enough for a
+    real taste centroid. Returns the User."""
+    from tests.conftest import make_account
+
+    user = make_account(session)
+    seed_sample_data(session, user.profile.id)
+    seed_sample_catalog(session)
+    session.flush()
+    _embed_all(session)
+    return user
+
+
+def test_search_endpoint_stamps_taste_fit_when_taste_present(db_session: Session) -> None:
+    # Round-8 item 2: search results carry an honest taste-fit confidence (same blend as the
+    # popular row), so the UI can show a fit gauge. A profile with history + embeddings has a
+    # centroid, so at least one result lands a real [0, 1] confidence — not the old hard-coded null.
+    from tests.conftest import authed_client
+
+    user = _account_with_history(db_session)
+    target = db_session.scalars(select(Title)).first()
+    assert target is not None
+
+    body = (
+        authed_client(db_session, user)
+        .post(f"/profiles/{user.profile.id}/catalog/search", json={"q": target.title})
+        .json()
+    )
+    confidences = [item["confidence"] for item in body["results"]]
+    assert any(c is not None and 0.0 <= c <= 1.0 for c in confidences)
+
+
+def test_search_endpoint_confidence_null_without_taste(db_session: Session) -> None:
+    # Cold start: a profile with no history → no centroid → search fit stays null (UI hides the
+    # gauge). Degrade gracefully, never fabricate a score.
+    from tests.conftest import authed_client, make_account
+
+    user = make_account(db_session)
+    seed_sample_catalog(db_session)  # catalog to find, but no watch history for this profile
+    db_session.flush()
+    target = db_session.scalars(select(Title)).first()
+    assert target is not None
+
+    body = (
+        authed_client(db_session, user)
+        .post(f"/profiles/{user.profile.id}/catalog/search", json={"q": target.title})
+        .json()
+    )
+    assert body["results"]
+    assert all(item["confidence"] is None for item in body["results"])
 
 
 def test_because_you_watched_rows_anchor_on_loved_titles(db_session: Session) -> None:

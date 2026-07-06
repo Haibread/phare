@@ -205,6 +205,13 @@ class TitleDetail(ApiModel):
     poster_url: str | None = None
     tmdb_url: str | None = None
     imdb_url: str | None = None
+    # Richer credits/quality metadata (round 8). Empty arrays / null until the metadata heal has
+    # visited the title; the frontend hides an empty section rather than showing a blank line.
+    directors: list[str] = []
+    top_cast: list[str] = []
+    vote_average: float | None = None
+    vote_count: int | None = None
+    original_language: str | None = None
 
 
 class RecommendationRow(ApiModel):
