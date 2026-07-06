@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleKind
@@ -94,9 +94,16 @@ def search_titles(
                 results.append(title)
     # Escape LIKE wildcards in the user's query so "%" / "_" match literally, not as patterns.
     like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    # Rank a word-start match (the title begins with the query, or a word inside it does) above a
-    # mid-word substring match, then by popularity — so typing "tenet" leads with *Tenet*, not with
-    # an obscure title that merely contains the letters mid-word. Boolean desc puts True first.
+    # Rank lexical relevance FIRST, then break ties by known-ness (vote_count) — so an obscure exact
+    # title still leads its lexical tier, and only *within* a tier does the better-known title win
+    # (kills the junk tail: "Bikini Inception" / soundtrack albums that share a word-start with the
+    # good match but have ~no votes). Popularity is dropped as the tiebreak: vote_count is the
+    # honest known-ness signal and the one the chat title-resolver already trusts; popularity is a
+    # transient TMDB trending number. Tiers, highest first (booleans → desc puts True first):
+    #   1. exact title match (the whole title equals the query)
+    #   2. word-start match (title begins with the query, or a word inside it does)
+    #   3. mid-word substring (the fallback the WHERE clause allows)
+    exact = func.lower(Title.title) == query.lower()
     word_start = or_(
         Title.title.ilike(f"{like}%", escape="\\"),
         Title.title.ilike(f"% {like}%", escape="\\"),
@@ -104,7 +111,12 @@ def search_titles(
     local = session.scalars(
         select(Title)
         .where(Title.title.ilike(f"%{like}%", escape="\\"))
-        .order_by(word_start.desc(), Title.popularity.desc().nulls_last())
+        .order_by(
+            exact.desc(),
+            word_start.desc(),
+            Title.vote_count.desc().nulls_last(),
+            Title.tmdb_id.asc().nulls_last(),  # stable final tie-break
+        )
         .limit(limit)
     ).all()
     for title in local:
