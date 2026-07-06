@@ -284,15 +284,20 @@ def test_generate_propagates_when_llm_call_raises(db_session: Session) -> None:
         TasteService(db_session, _Boom(), "test-model").generate(profile_id)
 
 
-def test_generate_localises_only_the_summary(db_session: Session) -> None:
+def test_generate_localises_summary_and_affinity_keys(db_session: Session) -> None:
+    # R7: on a French profile the affinity/avoid chips came out in English ("cerebral sci-fi") under
+    # a French summary. Now every user-visible string localises — the prompt asks for French keys
+    # AND presents the controlled vocabulary in French so the model draws French genre names.
     profile_id = _profile_with_history(db_session)
     llm = FakeLLMProvider(completion=CANNED)
 
     TasteService(db_session, llm, "test-model", language="fr").generate(profile_id)
 
     prompt = llm.prompts[0]
-    assert "summary` field in French" in prompt  # the human-readable summary localises
-    assert "in English" in prompt  # structured keys stay English so affinity matching holds
+    assert "in French" in prompt  # every string value localises, keys included
+    assert "affinity keys" in prompt  # the keys are named as localising too, not just the summary
+    assert "Science-Fiction" in prompt  # the controlled vocabulary itself is presented in French
+    assert 'polite "vous"' in prompt  # register discipline reaches the extractor (vouvoiement)
 
 
 def test_maybe_refresh_taste_threads_request_language(db_session: Session) -> None:
@@ -303,7 +308,7 @@ def test_maybe_refresh_taste_threads_request_language(db_session: Session) -> No
     llm = FakeLLMProvider(completion=CANNED)
 
     assert maybe_refresh_taste(db_session, profile_id, llm, "fr") is True
-    assert any("summary` field in French" in prompt for prompt in llm.prompts)
+    assert any("in French" in prompt for prompt in llm.prompts)
 
 
 def test_generate_preserves_user_overrides(db_session: Session) -> None:

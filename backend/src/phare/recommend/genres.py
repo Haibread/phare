@@ -55,6 +55,17 @@ _ALIASES.update(
         "guerre": "war",
         "science fiction": "science fiction",
         "science-fiction": "science fiction",
+        # French forms of the TV-flavoured / compound TMDB genres, so a French affinity key drawn
+        # verbatim from the localised controlled vocabulary (review R7) still alias-resolves to the
+        # catalog's English label instead of going inert.
+        "enfants": "kids",
+        "téléréalité": "reality",
+        "telerealite": "reality",
+        # Keys are looked up after ``_normalize`` (which flattens ``-`` to a space), so spell the
+        # compound forms with spaces, matching the normalized lookup — a hyphenated key is dead.
+        "science fiction & fantastique": "sci fi & fantasy",
+        "guerre & politique": "war & politics",
+        "action & aventure": "action & adventure",
         # extra English variants not in the mood map
         "scifi": "science fiction",
     }
