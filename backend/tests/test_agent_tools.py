@@ -271,6 +271,75 @@ def test_undo_ignores_a_malformed_ref_instead_of_targeting_the_zero_uuid(
     assert undo_action(db_session, profile_id, "event:garbage") is False  # clean no-op, no crash
 
 
+def test_set_commitment_prefers_a_recently_recommended_title(db_session: Session) -> None:
+    # R7 live failure: the agent recommended "Kiss Kiss Bang Bang" (2005); "add it to my list"
+    # committed the obscure lexical near-match "Kiss kiss (Bang Bang)" (2001). Conversation context
+    # must win — the commitment lands on the title actually recommended in this chat.
+    profile_id = _seed(db_session)
+    recced = Title(
+        kind=TitleKind.movie,
+        tmdb_id=601,
+        title="Kiss Kiss Bang Bang",
+        year=2005,
+        vote_count=1800,
+    )
+    decoy = Title(
+        kind=TitleKind.movie,
+        tmdb_id=602,
+        title="Kiss kiss (Bang Bang)",
+        year=2001,
+        vote_count=20,
+    )
+    db_session.add_all([recced, decoy])
+    db_session.flush()
+    db_session.add(
+        RecommendationLog(
+            profile_id=profile_id, title_id=recced.id, row_key="chat", rank=0, source="chat"
+        )
+    )
+    db_session.flush()
+
+    result = _run(db_session, profile_id, "set_commitment", {"title": "Kiss Kiss Bang Bang"})
+
+    pending = db_session.scalars(
+        select(WatchCommitment).where(WatchCommitment.status == CommitmentStatus.pending)
+    ).all()
+    assert len(pending) == 1 and pending[0].title_id == recced.id  # the 2005, not the 2001 decoy
+    assert result.actions and result.actions[0].kind == "commitment"
+
+
+def test_set_commitment_ambiguous_asks_instead_of_writing(db_session: Session) -> None:
+    # Two same-name titles of similar popularity and no conversation context: the tool must NOT
+    # guess a watch plan — it writes nothing and asks which one (mirrors the log_signal guard).
+    profile_id = _seed(db_session)
+    db_session.add_all(
+        [
+            Title(kind=TitleKind.movie, tmdb_id=701, title="The Thing", year=1982, vote_count=3000),
+            Title(kind=TitleKind.movie, tmdb_id=702, title="The Thing", year=2011, vote_count=2900),
+        ]
+    )
+    db_session.flush()
+
+    result = _run(db_session, profile_id, "set_commitment", {"title": "The Thing"})
+
+    assert db_session.scalars(select(WatchCommitment)).all() == []  # nothing committed
+    assert result.actions == []
+    assert any("The Thing" in n for n in result.notes)  # asked which one
+
+
+def test_set_commitment_unambiguous_search_still_writes(db_session: Session) -> None:
+    # No conversation context, but a clear single match → the guard still commits (the confident
+    # path isn't over-tightened: an ordinary "add Sicario to my list" must land).
+    profile_id = _seed(db_session)
+    _run(db_session, profile_id, "set_commitment", {"title": "Sicario"})
+
+    pending = db_session.scalars(
+        select(WatchCommitment).where(WatchCommitment.status == CommitmentStatus.pending)
+    ).all()
+    sicario = db_session.scalar(select(Title).where(Title.title == "Sicario"))
+    assert len(pending) == 1 and sicario is not None and pending[0].title_id == sicario.id
+
+
 def test_commitment_and_resolution_flow(db_session: Session) -> None:
     profile_id = _seed(db_session)
     _run(db_session, profile_id, "set_commitment", {"title": "Sicario"})
