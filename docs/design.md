@@ -218,9 +218,24 @@ visibly in **search**, where a title you've seen can turn up and should say so (
 **Search relevance + fit.** Catalog search ranks by *lexical* relevance first — an exact title
 match, then a word-start match, then a mid-word substring — and only **within a lexical tier** does
 it break ties by `vote_count` (NULLS LAST). So an obscure exact title still leads over a far
-better-known title that merely starts with the query, while the junk tail (soundtrack albums,
-"Bikini Inception") that shares a word-start but has ~no votes sinks below the real match. Search
-results also carry an **honest taste-fit confidence** — the *same* blend as the popular row
+better-known title that merely starts with the query. Two guards keep the junk tail down:
+
+- **Vote-floor demotion.** Within the word-start and substring tiers, matches under 50 votes (or
+  with none) are *demoted* below every above-floor match of both tiers — still findable, never on
+  top (kills "Bikini Inception" ranking beside the real film). The **exact tier is floor-exempt**:
+  typing an exact obscure title always finds it first.
+- **Semantic fill.** When the above-floor lexical yield falls short of the result limit, the raw
+  query text is embedded (one call, in the request's *served* space) and the remaining slots fill
+  with the embedding-nearest catalog titles — so "ghibli" surfaces *Spirited Away*, not only
+  documentaries whose title contains the word. Fills sit after the good lexical matches but before
+  the demoted junk, clear the same vote floor, and use the same wide-`ef_search` deterministic ANN
+  as candidate generation. Offline (no embedding key → the local hash space) the tier is skipped
+  entirely and search stays purely lexical.
+
+Search cards show a compact **TMDB rating** (`★ 8.4 · 37k`, locale-aware compact count; hidden when
+a row has no rating) so a junk namesake is tellable from the real film at a glance — home rows don't
+carry it, their signal is the fit gauge. Search results also carry an **honest taste-fit
+confidence** — the *same* blend as the popular row
 (similarity to the taste centroid + graded affinity, unproven-vote cap included), stamped without
 re-ordering — so the UI shows the fit gauge on search too. It degrades to `null` (gauge hidden) with
 no taste centroid (cold start) or no embedding for a given title; never a fabricated score.

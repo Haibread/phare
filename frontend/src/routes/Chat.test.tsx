@@ -50,6 +50,8 @@ function item(overrides: Partial<RecommendationItem> = {}): RecommendationItem {
     posterUrl: null,
     components: {},
     watched: false,
+    voteAverage: null,
+    voteCount: null,
     ...overrides,
   };
 }
@@ -393,6 +395,8 @@ describe("Chat write actions", () => {
               posterUrl: null,
               components: {},
               watched: false,
+              voteAverage: null,
+              voteCount: null,
             },
           ],
           actions: [],

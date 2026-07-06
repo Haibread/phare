@@ -222,6 +222,10 @@ class RecommendationItem(ApiModel):
     poster_url: str | None = None
     components: dict[str, float]
     watched: bool = False  # the profile has already seen this — the card shows a "Watched" badge
+    # TMDB known-ness/quality signals — filled by search results so the cards can show a compact
+    # "★ 8.4 · 37k" rating; null (and hidden) on home rows, which carry the fit gauge instead.
+    vote_average: float | None = None
+    vote_count: int | None = None
 
 
 class TitleDetail(ApiModel):

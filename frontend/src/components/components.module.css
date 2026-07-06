@@ -212,6 +212,11 @@
   color: var(--text-muted);
 }
 
+.cardRating {
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
 .availTag {
   align-self: flex-start;
   font-size: 0.72rem;

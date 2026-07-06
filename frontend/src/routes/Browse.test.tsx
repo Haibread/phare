@@ -18,6 +18,8 @@ function item(titleId: string, isSwing: boolean): RecommendationItem {
     posterUrl: null,
     components: { score: 0.9 },
     watched: false,
+    voteAverage: null,
+    voteCount: null,
   };
 }
 

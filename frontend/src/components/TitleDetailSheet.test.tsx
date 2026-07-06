@@ -53,6 +53,8 @@ function recItem(overrides: Partial<RecommendationItem> = {}): RecommendationIte
     posterUrl: null,
     components: { score: 0.9 },
     watched: false,
+    voteAverage: null,
+    voteCount: null,
     ...overrides,
   };
 }
@@ -66,18 +68,7 @@ describe("TitleDetailSheet", () => {
       handlers.onDelta?.("Because you loved tense, cerebral sci-fi.");
       handlers.onDone?.();
     });
-    vi.spyOn(api, "titleDetail").mockResolvedValue({
-      titleId: "t1",
-      title: "Arrival",
-      kind: "movie",
-      year: 2016,
-      runtimeMinutes: 116,
-      genres: ["Science Fiction"],
-      overview: "A linguist makes first contact.",
-      posterUrl: null,
-      tmdbUrl: null,
-      imdbUrl: null,
-    });
+    vi.spyOn(api, "titleDetail").mockResolvedValue(titleDetail());
 
     renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
 
@@ -202,18 +193,9 @@ describe("TitleDetailSheet", () => {
   describe("request / availability action (moved from the card, round 4)", () => {
     function stubDetail() {
       vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
-      vi.spyOn(api, "titleDetail").mockResolvedValue({
-        titleId: "t1",
-        title: "Arrival",
-        kind: "movie",
-        year: 2016,
-        runtimeMinutes: null,
-        genres: [],
-        overview: null,
-        posterUrl: null,
-        tmdbUrl: null,
-        imdbUrl: null,
-      });
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ runtimeMinutes: null, genres: [], overview: null }),
+      );
     }
 
     function renderWithAvailability(ctx: Partial<AvailabilityCtx>): void {
@@ -251,18 +233,9 @@ describe("TitleDetailSheet", () => {
   describe("not interested (moved from the card, round 3)", () => {
     it("sends the signal, confirms in-sheet, and restores on undo", async () => {
       vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
-      vi.spyOn(api, "titleDetail").mockResolvedValue({
-        titleId: "t1",
-        title: "Arrival",
-        kind: "movie",
-        year: 2016,
-        runtimeMinutes: null,
-        genres: [],
-        overview: null,
-        posterUrl: null,
-        tmdbUrl: null,
-        imdbUrl: null,
-      });
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ runtimeMinutes: null, genres: [], overview: null }),
+      );
       const send = vi.spyOn(api, "sendTitleFeedback").mockResolvedValue({
         titleId: "t1",
         signal: "not_interested",
@@ -293,18 +266,9 @@ describe("TitleDetailSheet", () => {
       // as soon as the feedback lands refetches the rows, drops the title, unmounts the card —
       // and takes the sheet's undo affordance down with it. The refresh must wait for close.
       vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
-      vi.spyOn(api, "titleDetail").mockResolvedValue({
-        titleId: "t1",
-        title: "Arrival",
-        kind: "movie",
-        year: 2016,
-        runtimeMinutes: null,
-        genres: [],
-        overview: null,
-        posterUrl: null,
-        tmdbUrl: null,
-        imdbUrl: null,
-      });
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ runtimeMinutes: null, genres: [], overview: null }),
+      );
       const send = vi.spyOn(api, "sendTitleFeedback").mockResolvedValue({
         titleId: "t1",
         signal: "not_interested",
