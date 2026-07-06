@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from phare.catalog.sample import seed_sample_catalog
@@ -354,6 +354,12 @@ def test_hard_avoids_are_excluded_in_the_ann_sql(db_session: Session) -> None:
         add(6000 + i, f"Funny {i}", "Comedy", far)
     db_session.flush()
 
+    # Force an exact (sequential) scan: this test asserts the SQL WHERE clause, not HNSW recall.
+    # The suite's hundreds of rolled-back embedding inserts leave dead tuples in the shared HNSW
+    # graph (cleaned only by vacuum), and traversing them can exhaust ef_search before reaching
+    # the far comedy cluster — the pool then came back empty depending on how many embedding
+    # tests ran first (flaked ~1 run in 3 on the full suite, never in isolation).
+    db_session.execute(text("SET LOCAL enable_indexscan = off"))
     candidates = generate_candidates(
         db_session, profile.id, near, LOCAL_MODEL_VERSION, limit=5, hard_avoids=["horror"]
     )
