@@ -140,15 +140,15 @@ def _schedule_runtime_heal_if_gapped(session: Session, settings: Settings) -> bo
     concurrent starts, so this only gates on the gap (cheap count) to avoid spinning up a thread
     when there's nothing to heal. Returns True when a heal was scheduled."""
     from phare.catalog.runtime_backfill import (
-        _MAX_RUNTIME_GAP,
-        runtime_gap,
+        _MAX_METADATA_GAP,
+        metadata_gap,
         schedule_runtime_backfill,
     )
 
-    gap = runtime_gap(session)
-    if gap <= _MAX_RUNTIME_GAP:
+    gap = metadata_gap(session)
+    if gap <= _MAX_METADATA_GAP:
         return False
-    logger.info("catalog.autoseed.runtime_heal_scheduled", extra={"runtime_gap": round(gap, 2)})
+    logger.info("catalog.autoseed.metadata_heal_scheduled", extra={"metadata_gap": round(gap, 2)})
     return schedule_runtime_backfill(settings)
 
 

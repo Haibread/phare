@@ -139,6 +139,10 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
             # Backfill a poster when we didn't have one; it doesn't affect embeddings.
             if existing.poster_path is None and meta.poster_path is not None:
                 existing.poster_path = meta.poster_path
+            # Backfill original language when missing — a re-import (discover carries it) fills the
+            # column for free without a heal fetch. Never clobber a known value.
+            if existing.original_language is None and meta.original_language is not None:
+                existing.original_language = meta.original_language
             continue
         session.add(
             Title(
@@ -152,6 +156,9 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
                 poster_path=meta.poster_path,
                 genres=meta.genres,
                 keywords=meta.keywords,
+                directors=meta.directors,
+                top_cast=meta.top_cast,
+                original_language=meta.original_language,
                 popularity=meta.popularity,
                 vote_count=meta.vote_count,
                 vote_average=meta.vote_average,
