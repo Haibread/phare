@@ -12,18 +12,19 @@ import math
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from phare.catalog.heal import apply_metadata_heal, fetch_metadata_parallel
 from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.backfill import schedule_embedding_backfill
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
-from phare.providers.types import LLMProvider, MetadataProvider, TitleMetadata
+from phare.providers.types import LLMProvider, MetadataProvider
+from phare.recommend import genres
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
 from phare.recommend.explain import _EXPLANATION_CACHE, Explainer
@@ -93,7 +94,17 @@ READ_EMBED_TIME_BUDGET_S = 2.0
 # in parallel (httpx is thread-safe), and persist each — a one-time cost per title that heals the
 # catalog as it's used. The cap is a safety bound; the pool is already small (~k*4+10).
 READ_RUNTIME_CAP = 64
-_RUNTIME_FETCH_WORKERS = 8
+
+# Adaptive constraint-aware re-fetch. ``generate_candidates`` retrieves the ~nearest-to-centroid
+# titles with no genre/runtime awareness, then a ``candidate_filter`` (chat intent, dynamic theme)
+# prunes them post-hoc. For a taste centred on, say, cerebral thrillers, almost none of those
+# nearest neighbours are comedies, so a "light comedy" turn is left with a handful — the runtime cap
+# and relevance floor then reduce it to ~1 (round-7 finding 1). When the filtered pool falls below
+# what the reranker needs, we re-run the query with the constraint pushed into SQL (array-overlap on
+# resolved genre labels + a runtime ceiling), searching the *right* subspace instead of hoping the
+# taste-nearest slice happens to contain matches. It still ranks by distance to the centroid within
+# that subspace, and the honest relevance floor is untouched — a genuinely thin catalog stays thin.
+_REFETCH_POOL_FLOOR_MULT = 1  # re-fetch when the filtered pool has fewer than this * k candidates
 
 
 class RecommendationService:
@@ -147,16 +158,11 @@ class RecommendationService:
         self, candidates: list[Candidate], source: MetadataProvider
     ) -> list[Candidate]:
         """Fill the candidate pool's missing runtimes from the metadata provider, so a runtime cap
-        can actually filter. Fetches in parallel (the provider's httpx client is thread-safe; the
-        worker threads do *only* HTTP, never touch the session), persists each runtime permanently,
-        and returns the pool with the fetched values applied. Best-effort: a failed fetch is logged
-        and skipped. The caller owns the commit.
-
-        The same per-title fetch already carries the title's ``vote_average`` / ``vote_count``, so
-        while we're here we heal those too when the row is missing them — the broad discover import
-        (and, historically, a bug in the insert path) left most titles with a NULL ``vote_average``,
-        which silently disabled the re-ranker's quality floor. Backfilling on the read path repairs
-        the quality signal for the titles being ranked, as the catalog is used (principle 8).
+        can actually filter. Fetches in parallel and persists each runtime permanently, returning
+        the pool with the fetched values applied. The per-title fetch + heal is the shared helper in
+        :mod:`phare.catalog.heal` (it also heals a missing ``vote_average`` / ``vote_count``, left
+        NULL by the broad discover import, which silently disabled the re-ranker's quality floor).
+        Best-effort per title; the caller owns the commit.
         """
         missing = [c for c in candidates if c.runtime_minutes is None][:READ_RUNTIME_CAP]
         if not missing:  # pool already fully runtime'd (the common case once enriched) — no DB hit
@@ -167,33 +173,11 @@ class RecommendationService:
             .all()
         )
         by_id = {row.id: row for row in rows}
-        fetchable = [(row.id, row.tmdb_id, row.kind) for row in rows if row.tmdb_id is not None]
-        if not fetchable:
-            return candidates
-
-        def fetch(item: tuple[uuid.UUID, int, object]) -> tuple[uuid.UUID, TitleMetadata | None]:
-            title_id, tmdb_id, kind = item
-            try:
-                meta = source.get_title(tmdb_id, kind)  # type: ignore[arg-type]
-            except Exception:  # noqa: BLE001 - a flaky fetch must not sink the turn
-                logger.warning("recommend.runtime_fetch_failed", extra={"title_id": str(title_id)})
-                return title_id, None
-            return title_id, meta
-
         runtimes: dict[uuid.UUID, int] = {}
-        with ThreadPoolExecutor(max_workers=_RUNTIME_FETCH_WORKERS) as pool:
-            for title_id, meta in pool.map(fetch, fetchable):
-                if meta is None:
-                    continue
-                row = by_id[title_id]  # main thread → safe to write
-                if meta.runtime_minutes is not None:
-                    row.runtime_minutes = meta.runtime_minutes
-                    runtimes[title_id] = meta.runtime_minutes
-                # Heal the quality signal too, only when the row is missing it (never clobber).
-                if row.vote_average is None and meta.vote_average is not None:
-                    row.vote_average = meta.vote_average
-                if row.vote_count is None and meta.vote_count is not None:
-                    row.vote_count = meta.vote_count
+        for title_id, meta in fetch_metadata_parallel(source, rows).items():
+            row = by_id[title_id]  # main thread → safe to write
+            if apply_metadata_heal(row, meta) and row.runtime_minutes is not None:
+                runtimes[title_id] = row.runtime_minutes
         if not runtimes:
             return candidates
         logger.info("recommend.runtimes_enriched", extra={"enriched_count": len(runtimes)})
@@ -272,6 +256,8 @@ class RecommendationService:
         taste: dict[str, object] | None = None,
         extra_hard_avoids: Sequence[str] = (),
         candidate_filter: CandidateFilter | None = None,
+        include_genres: Sequence[str] = (),
+        max_runtime: int | None = None,
         k: int | None = None,
         swing_slots: int | None = None,
         rewatch: bool = False,
@@ -288,6 +274,13 @@ class RecommendationService:
         discovery pick. ``explain_with_llm=False`` uses the deterministic template explanations
         (no per-item LLM call) — the chat agent does this since its natural-language reply already
         frames the picks. Pass a shared ``explainer`` to pool the LLM-call budget across rows.
+
+        ``include_genres`` / ``max_runtime`` are the *structured* form of the constraint the
+        ``candidate_filter`` applies in memory. They're what lets the adaptive re-fetch push the
+        constraint into SQL when the post-hoc filter starves the pool (see
+        :meth:`_constrained_candidates`); the caller passes both — the filter still does the honest
+        fine-grained pruning (runtime-unknown handling, kind), the structured pair only steers
+        retrieval.
         """
         if taste is None:
             taste = self._load_taste(profile_id)
@@ -299,21 +292,17 @@ class RecommendationService:
 
         avoids = [*(taste.get("hard_avoids") or []), *extra_hard_avoids]
         k = k if k is not None else self.row_size
-        candidates = generate_candidates(
-            self.session,
+        candidates = self._constrained_candidates(
             profile_id,
             centroid,
-            self.embed_model_version,
-            limit=k * 4 + 10,
-            hard_avoids=avoids,
-            from_watched=rewatch,
+            k=k,
+            avoids=avoids,
+            rewatch=rewatch,
+            candidate_filter=candidate_filter,
+            include_genres=include_genres,
+            max_runtime=max_runtime,
+            runtime_source=runtime_source,
         )
-        # Backfill the pool's missing runtimes before filtering, so a runtime cap has data to bite
-        # on (the broad import omits runtime). Only passed on a runtime turn — see tool_recommend.
-        if runtime_source is not None:
-            candidates = self._enrich_runtimes(candidates, runtime_source)
-        if candidate_filter is not None:
-            candidates = candidate_filter(candidates)
         default_swings = 0 if rewatch else self.swing_slots
         recs = rerank(
             candidates,
@@ -324,6 +313,83 @@ class RecommendationService:
         )
         exp = explainer or self._explainer(with_llm=explain_with_llm)
         return exp.explain(recs, taste)
+
+    def _constrained_candidates(
+        self,
+        profile_id: uuid.UUID,
+        centroid: list[float],
+        *,
+        k: int,
+        avoids: Sequence[str],
+        rewatch: bool,
+        candidate_filter: CandidateFilter | None,
+        include_genres: Sequence[str],
+        max_runtime: int | None,
+        runtime_source: MetadataProvider | None,
+    ) -> list[Candidate]:
+        """Retrieve + filter the candidate pool, adaptively re-searching the constrained subspace
+        when the post-hoc filter starves it (round-7 finding 1).
+
+        First pass is the historical one: pull the ~nearest-to-centroid titles, backfill missing
+        runtimes, then apply the opaque ``candidate_filter``. If that leaves fewer than ``k`` — a
+        taste centred elsewhere than the requested genre yields almost no matches in the nearest
+        slice — and there's a structured constraint to push down, re-run the ANN with the genre /
+        runtime constraint in SQL, so it ranks the nearest titles *within the matching subspace*
+        rather than hoping the global-nearest slice contained matches. The re-fetched pool goes
+        through the same runtime enrichment + filter, and we keep whichever pool the filter left
+        larger — never padding with weak matches, so a genuinely thin catalog stays honestly thin.
+        """
+
+        def retrieve(genre_labels: Sequence[str], runtime_cap: int | None) -> list[Candidate]:
+            pool = generate_candidates(
+                self.session,
+                profile_id,
+                centroid,
+                self.embed_model_version,
+                limit=k * 4 + 10,
+                hard_avoids=avoids,
+                from_watched=rewatch,
+                genre_labels=genre_labels,
+                max_runtime=runtime_cap,
+            )
+            # Backfill the pool's missing runtimes before filtering, so a runtime cap has data to
+            # bite on (the broad import omits runtime). Only on a runtime turn — see tool_recommend.
+            if runtime_source is not None:
+                pool = self._enrich_runtimes(pool, runtime_source)
+            return candidate_filter(pool) if candidate_filter is not None else pool
+
+        filtered = retrieve((), None)
+        if len(filtered) >= k * _REFETCH_POOL_FLOOR_MULT:
+            return filtered
+        # Resolve the intent genres to literal catalog labels so the SQL overlap honours the same
+        # alias semantics as the in-memory match (an empty result means the words match no catalog
+        # genre — no point re-searching for a label that isn't there).
+        genre_labels = (
+            genres.resolve_catalog_genres(include_genres, self._catalog_genre_vocabulary())
+            if include_genres
+            else []
+        )
+        if not genre_labels and max_runtime is None:
+            return filtered  # nothing structured to push into SQL — the thin pool is honest
+        refetched = retrieve(genre_labels, max_runtime)
+        logger.info(
+            "recommend.candidates_refetched",
+            extra={
+                "profile_id": str(profile_id),
+                "first_pass": len(filtered),
+                "refetched": len(refetched),
+                "genre_labels": genre_labels,
+                "max_runtime": max_runtime,
+            },
+        )
+        return refetched if len(refetched) > len(filtered) else filtered
+
+    def _catalog_genre_vocabulary(self) -> list[str]:
+        """The distinct genre labels present in the catalog — the vocabulary the intent genres are
+        resolved against for the SQL-side filter. Unnest the ``genres`` arrays and dedup in SQL so
+        it stays one cheap query, not a full-table scan into Python."""
+        rows = self.session.execute(select(func.distinct(func.unnest(Title.genres)))).scalars()
+        return [g for g in rows if g]
 
     def you_might_like(self, profile_id: uuid.UUID, *, explainer: Explainer | None = None) -> Row:
         """The full pipeline. This is the product."""
