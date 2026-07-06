@@ -5,6 +5,7 @@ import { type HistoryItem, isLLMUnavailable, isNotFound } from "../api";
 import { useProfileId } from "../app/ProfileContext";
 import { EditableChips } from "../components/EditableChips";
 import { CardSkeleton, ErrorState, errorMessage } from "../components/states";
+import { posterTint } from "../lib/poster";
 import {
   keys,
   useAddMemoryNote,
@@ -19,7 +20,6 @@ import {
   useTasteFacets,
   useUpdateTaste,
 } from "../lib/queries";
-import { posterTint } from "../lib/poster";
 import { RichText } from "../lib/richText";
 import { translateFacetLabel } from "../lib/tasteVocab";
 import { relativeTime, relativeTimeLocalized } from "../lib/time";

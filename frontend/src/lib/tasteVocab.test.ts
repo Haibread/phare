@@ -38,9 +38,7 @@ describe("translateTasteTerm", () => {
 
 describe("translateFacetLabel", () => {
   it("translates each genre of a composite facet label", () => {
-    expect(translateFacetLabel("Action · Science Fiction", "fr")).toBe(
-      "Action · Science-Fiction",
-    );
+    expect(translateFacetLabel("Action · Science Fiction", "fr")).toBe("Action · Science-Fiction");
   });
 
   it("translates a single-genre label", () => {
@@ -52,8 +50,6 @@ describe("translateFacetLabel", () => {
   });
 
   it("is the identity for English", () => {
-    expect(translateFacetLabel("Action · Science Fiction", "en")).toBe(
-      "Action · Science Fiction",
-    );
+    expect(translateFacetLabel("Action · Science Fiction", "en")).toBe("Action · Science Fiction");
   });
 });
