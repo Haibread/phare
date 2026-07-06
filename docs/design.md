@@ -63,6 +63,44 @@ filters) → re-ranker → explanations (LLM)`.
 Why not LLM-as-ranker: it can't recall a large catalog, hallucinates titles, and is slower and
 costlier. It's good at reading fuzzy human signal — so that's all it does.
 
+### Embedding document + versioned space cutover
+
+Every title is embedded from a small **document** built in `embeddings/service.py`
+(`build_embedding_text`). **Document v2** composes it as, in order: title, year, genres, keywords,
+`Directed by:` (director(s) for a movie / creator(s) for a show), `Cast:` (top billed actors),
+`Language:` (the ISO original-language code), then the free-text overview **last**. Ordering is
+deliberate — short high-signal facets lead so a long overview can't dilute them when the model
+averages tokens; the credit + language lines are what separate an auteur's films, an ensemble, and
+**anime ("ja" Animation) from western animation** in vector space. This is the round-9 lever against
+the observed compression (production cosine similarities bunching into a ~0.82–0.87 band, barely
+separable).
+
+Changing the document must re-embed the catalog, but a re-embed can't stall or degrade live reads.
+So the document version is folded into the **space tag** (`embeddings/version.py`): historical
+vectors carry the bare model tag (`text-embedding-3-small`) which *is* document v1; new vectors are
+written under `f"{model}#d{DOC_VERSION}"` (`…#d2`). The version-tag mismatch is the existing
+re-embed trigger — nothing else changes on the write side.
+
+Two tags per request, resolved once (one COUNT, in `api/deps.get_embedder`) and threaded everywhere:
+
+- **Write tag** — always the current-document tag. The inline read-path micro-batch, the background
+  backfill, and every import/refresh/CLI embed target it, filling the new space in the background at
+  the existing backfill pace.
+- **Served (read) tag** — `active_embedding_version()`. Serves the **previous** (bare, doc-v1) tag
+  until the new space's coverage (embedded ÷ total titles) reaches **`CUTOVER_COVERAGE = 0.95`**,
+  then flips to the write tag and logs `embeddings.space_cutover`. First boot after a document
+  change: coverage 0% → reads are byte-identical to before while v2 builds; once ≥95% they flip
+  automatically. The centroid, the candidate ANN query, and any live free-text query embedding all
+  use this one resolved tag, so **a request never mixes spaces**. The offline `embeddings_degraded`
+  / `profile_building` UI state derives from the *served* tag — so while a real-model v2 space
+  builds, reads still serve the real-model v1 space and the UI shows nothing degraded.
+
+Once the served tag is the write tag (cutover complete), the superseded space's vectors (~126 MB per
+space) are deleted in the background (`embeddings/cleanup.py`, `embeddings.space_cleanup`), guarded
+so it never deletes the tag currently being served and never leaves the app with no servable space.
+`CUTOVER_COVERAGE` is an internal constant, not a config knob — high enough that the flip is
+invisible, low enough that a few permanently-unembeddable rows can't wedge it forever.
+
 ## Two layers
 
 - **Stable taste** (who you are) → **UI rows**, precomputed/cached.

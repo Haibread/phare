@@ -21,6 +21,16 @@ logger = logging.getLogger(__name__)
 LOCAL_MODEL_VERSION = "local-hash-v1"
 
 
+def is_local_space(model_version: str) -> bool:
+    """True when a resolved space tag is the local hash space, document version aside.
+
+    Space tags now carry a document suffix (``local-hash-v1#d2`` for the current doc, bare for the
+    historical one — see :mod:`phare.embeddings.version`), so an exact ``== LOCAL_MODEL_VERSION``
+    would miss the suffixed form. The offline degrade / mood-blind guards key on "is this the local
+    embedder", not on which document version, so they compare the base tag."""
+    return model_version.split("#", 1)[0] == LOCAL_MODEL_VERSION
+
+
 class LocalHashEmbeddingProvider:
     """Deterministic hash-based embeddings. Satisfies the ``embed`` half of ``LLMProvider``."""
 

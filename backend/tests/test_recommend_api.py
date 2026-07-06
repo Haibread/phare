@@ -22,7 +22,9 @@ from tests.conftest import authed_client, make_account
 def _offline_overrides() -> dict:
     return {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: None,
     }
@@ -139,7 +141,9 @@ def test_title_explanation_streams_the_workhorse_when_available(db_session: Sess
     user = make_account(db_session)
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: FakeLLMProvider(
             completion="Because its cerebral mood is squarely your taste."
@@ -171,7 +175,9 @@ def test_title_explanation_anchors_on_a_because_you_watched_seed(db_session: Ses
     fake = FakeLLMProvider(completion="Because it shares that film's epic scope, it's your kind.")
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: fake,
     }
@@ -222,7 +228,9 @@ def test_chat_replays_conversation_history_into_the_planner(db_session: Session)
     fake = FakeLLMProvider(completion='{"calls":[{"tool":"recommend","args":{}}]}')
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: fake,
         get_optional_agent_llm: lambda: FakeLLMProvider(completion="A few shorter ideas."),
@@ -259,7 +267,9 @@ def test_chat_clarify_surfaces_suggestions(db_session: Session) -> None:
     )
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: FakeLLMProvider(completion=clarify),  # workhorse plans
         # An agent model must be present for the tool-using path; never called on a clarify turn.
@@ -315,7 +325,9 @@ def test_chat_stream_status_labels_are_localised(db_session: Session) -> None:
     user = make_account(db_session)
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         # Workhorse plans a recommend; the agent model streams the natural reply word-by-word.
         get_optional_chat_llm: lambda: FakeLLMProvider(

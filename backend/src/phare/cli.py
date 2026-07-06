@@ -53,7 +53,7 @@ def import_catalog(
     from phare.catalog.service import broad_import_from_tmdb, import_from_tmdb
     from phare.db.base import get_session_factory
     from phare.embeddings.service import EmbeddingService
-    from phare.embeddings.version import embedding_model_version, get_embedding_provider
+    from phare.embeddings.version import embedding_write_version, get_embedding_provider
     from phare.providers.tmdb import TMDBMetadataProvider
 
     settings = get_settings()
@@ -84,7 +84,7 @@ def import_catalog(
         typer.echo(f"Imported {created} new titles.")
         if embed:
             embedded = EmbeddingService(
-                session, get_embedding_provider(settings), embedding_model_version(settings)
+                session, get_embedding_provider(settings), embedding_write_version(settings)
             ).embed_missing()
             session.commit()
             typer.echo(f"Embedded {embedded} titles.")

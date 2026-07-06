@@ -35,7 +35,9 @@ def _reset_taste_running() -> None:
 def _client(session: Session, user: User) -> TestClient:
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: None,
     }
