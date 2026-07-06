@@ -10,6 +10,7 @@ export const keys = {
   profiles: ["profiles"] as const,
   history: (id: string) => ["history", id] as const,
   taste: (id: string) => ["taste", id] as const,
+  tasteFacets: (id: string) => ["tasteFacets", id] as const,
   recommendations: (id: string) => ["recommendations", id] as const,
   dynamic: (id: string) => ["dynamic", id] as const,
   conversion: (id: string) => ["conversion", id] as const,
@@ -62,6 +63,16 @@ export function useTaste(profileId: string | null) {
     enabled: profileId !== null,
     // A profile with no taste yet returns 404; treat that as "no data", not an error to retry.
     retry: false,
+  });
+}
+
+/** The profile's taste facets (distinct taste modes). Empty list = single-mode taste (nothing to
+ * show). Deterministic server-side (no LLM), so it's cheap to keep fresh alongside taste. */
+export function useTasteFacets(profileId: string | null) {
+  return useQuery({
+    queryKey: keys.tasteFacets(profileId ?? ""),
+    queryFn: () => api.getTasteFacets(profileId as string),
+    enabled: profileId !== null,
   });
 }
 
@@ -122,6 +133,9 @@ export function useConversion(profileId: string | null) {
 function invalidateProfileData(qc: ReturnType<typeof useQueryClient>, profileId: string) {
   qc.invalidateQueries({ queryKey: keys.history(profileId) });
   qc.invalidateQueries({ queryKey: keys.taste(profileId) });
+  // Facets derive from watch events + embeddings, so they move with history, not with the LLM
+  // taste text — refresh them whenever events may have changed.
+  qc.invalidateQueries({ queryKey: keys.tasteFacets(profileId) });
   qc.invalidateQueries({ queryKey: keys.recommendations(profileId) });
   qc.invalidateQueries({ queryKey: keys.dynamic(profileId) });
 }
@@ -154,6 +168,7 @@ export function useSendTitleFeedback(profileId: string) {
       // itself once it closes un-undone (see useRowRefreshOnClose).
       qc.invalidateQueries({ queryKey: keys.history(profileId) });
       qc.invalidateQueries({ queryKey: keys.taste(profileId) });
+      qc.invalidateQueries({ queryKey: keys.tasteFacets(profileId) });
     },
   });
 }

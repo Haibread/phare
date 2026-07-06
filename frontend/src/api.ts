@@ -122,6 +122,26 @@ export const tasteSchema = z.object({
 });
 export type Taste = z.infer<typeof tasteSchema>;
 
+export const facetExemplarSchema = z.object({
+  titleId: z.string(),
+  title: z.string(),
+  year: z.number().nullable(),
+  posterUrl: z.string().nullable(),
+});
+export type FacetExemplar = z.infer<typeof facetExemplarSchema>;
+
+export const tasteFacetSchema = z.object({
+  // English catalog genre label ("Action · Science Fiction") — localised at display time via the
+  // genre translation table (see lib/tasteVocab).
+  label: z.string(),
+  weight: z.number(),
+  titleCount: z.number(),
+  exemplars: z.array(facetExemplarSchema),
+});
+export type TasteFacet = z.infer<typeof tasteFacetSchema>;
+
+const tasteFacetsSchema = z.object({ facets: z.array(tasteFacetSchema) });
+
 export const recommendationItemSchema = z.object({
   titleId: z.string(),
   title: z.string(),
@@ -617,6 +637,8 @@ export const api = {
       body: JSON.stringify({ profileId, deviceCode }),
     }),
   getTaste: (profileId: string) => request(`/profiles/${profileId}/taste`, tasteSchema),
+  getTasteFacets: (profileId: string) =>
+    request(`/profiles/${profileId}/taste/facets`, tasteFacetsSchema),
   generateTaste: (profileId: string) =>
     request(`/profiles/${profileId}/taste/generate`, tasteSchema, { method: "POST" }),
   updateTaste: (profileId: string, userOverrides: Record<string, unknown>) =>

@@ -28,6 +28,12 @@
     "generateError": "Couldn't generate taste: {{message}}",
     "generateUnavailable": "Couldn't reach the AI to regenerate your taste right now. Your existing profile is unchanged — try again in a moment."
   },
+  "facets": {
+    "heading": "Facets of your taste",
+    "subtitle": "The broad families in your watch history — each one steers your recommendations in proportion to its weight.",
+    "share": "{{pct}}% · {{count}} titles",
+    "weightLabel": "Weight of the {{label}} facet"
+  },
   "sources": {
     "heading": "Connected sources",
     "add": "Add",
