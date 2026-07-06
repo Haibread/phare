@@ -178,7 +178,9 @@ def test_dynamic_endpoint(db_session: Session) -> None:
     user = make_account(db_session)
     overrides = {
         get_embedder: lambda: Embedder(
-            provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+            provider=LocalHashEmbeddingProvider(),
+            read_version=LOCAL_MODEL_VERSION,
+            write_version=LOCAL_MODEL_VERSION,
         ),
         get_optional_chat_llm: lambda: None,
     }

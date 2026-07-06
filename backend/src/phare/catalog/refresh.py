@@ -64,7 +64,7 @@ def run_refresh_once(settings: Settings) -> int:
     if not settings.tmdb_api_key:
         return 0
     from phare.db.base import get_session_factory
-    from phare.embeddings.version import embedding_model_version, get_embedding_provider
+    from phare.embeddings.version import embedding_write_version, get_embedding_provider
     from phare.providers.tmdb import TMDBMetadataProvider
 
     try:
@@ -78,7 +78,7 @@ def run_refresh_once(settings: Settings) -> int:
                 session,
                 provider,
                 get_embedding_provider(settings),
-                embedding_model_version(settings),
+                embedding_write_version(settings),
                 pages=settings.catalog_refresh_pages,
             )
             return created

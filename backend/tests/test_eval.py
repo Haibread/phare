@@ -61,7 +61,9 @@ def test_degenerate_slate_is_flagged_by_metrics() -> None:
 
 def test_all_personas_pass_guardrails(db_session: Session) -> None:
     results = evaluate_all(
-        db_session, embed_provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        model_version=LOCAL_MODEL_VERSION,
     )
     assert len(results) == len(PERSONAS)
     for result in results:
@@ -76,7 +78,9 @@ def test_all_personas_pass_alignment_checks(db_session: Session) -> None:
     # M10.2: the harness now also asserts taste alignment (hard-avoids, affinity variance, score
     # order, similarity spread). With the offline embedder every persona must still clear them.
     results = evaluate_all(
-        db_session, embed_provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        db_session,
+        embed_provider=LocalHashEmbeddingProvider(),
+        model_version=LOCAL_MODEL_VERSION,
     )
     for result in results:
         assert result.alignment_failures == [], (

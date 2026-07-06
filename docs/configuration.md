@@ -23,7 +23,7 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `LLM_TIMEOUT_SECONDS` | `120` | HTTP timeout (seconds) for every LLM request. Generous on purpose: taste extraction over a long history on a **reasoning** workhorse can take well over a minute, and a tighter timeout turns a slow-but-fine call into a spurious 503 `llm_unreachable` the user can't get past. Raise it further for very slow local models. |
 | `LLM_CHAT_MODEL` | `gpt-4o-mini` | Workhorse chat/completion model: taste extraction, explanations, dynamic rows. |
 | `LLM_AGENT_MODEL` | _(falls back to `LLM_CHAT_MODEL`)_ | Optional stronger model used for **one thing only**: the chat agent's natural-language reply. Everything else (planning, explanations, taste) stays on `LLM_CHAT_MODEL`, so a chat turn makes at most one big-model call. |
-| `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Doubles as the embedding-space version tag. |
+| `LLM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. Base of the embedding-space version tag; the current embed-document version is folded in as a `#d<n>` suffix on the write tag (see [Embedding document + versioned space cutover](design.md#embedding-document--versioned-space-cutover)). |
 | `LLM_EMBEDDING_DIM` | `1536` | Vector dimension. Fixed by the DB schema — changing it needs a migration + full re-embed. |
 | `LLM_EMBEDDING_REQUEST_DIMENSIONS` | `false` | Send `LLM_EMBEDDING_DIM` as the `dimensions` request param. Enable for models with configurable (Matryoshka) embeddings so they fit the schema without a re-embed; leave off for models that reject the param. |
 | `LLM_REASONING_MODEL` | `false` | Set when the chat/agent model is a **reasoning** model (emits `<think>…</think>` before answering, e.g. Qwen3, DeepSeek-R1). Adds `LLM_REASONING_HEADROOM` tokens to every bounded completion so reasoning doesn't eat the budget and return empty JSON, and strips a leading think block from the streamed reply. See [When a configured model misbehaves](#when-a-configured-model-misbehaves). |
@@ -349,7 +349,10 @@ pseudo-random picks with the same confidence as real ones (review M2).
 
 The two spaces never mix: local and real vectors carry different model-version tags
 ([`embeddings/version.py`](../backend/src/phare/embeddings/version.py)) and retrieval only queries
-the active one. So you can run offline first, then add a key later.
+the active one. So you can run offline first, then add a key later. The same tag machinery handles
+an embed-**document** change: new vectors are written under a `#d<n>`-suffixed tag while reads keep
+serving the previous space until the new one is ≥95% built, then flip automatically — no downtime,
+no manual step (see the design doc section linked above).
 
 ### When a configured model misbehaves
 
@@ -492,11 +495,13 @@ to their first sentence, and caches every outcome — but it costs LLM calls on 
 
 1. Set `LLM_API_KEY` (and `LLM_BASE_URL` / `LLM_CHAT_MODEL` / `LLM_EMBEDDING_MODEL` as needed).
 2. Re-embed the catalog into the new model's space: `POST /catalog/embed` (or `phare` CLI). The
-   active embedding-version tag changes with the model, so existing local vectors are simply left
-   behind, not reused. This endpoint is the **authoritative, unbounded** embed pass — run it after
-   any catalog import. The recommendation read path only tops up a bounded batch per request (so a
-   fresh import can't make the first page load embed the whole catalog inline) and logs
-   `embeddings.deferred` when more remain.
+   embedding-version tag changes with the model, so existing local vectors are simply left behind,
+   not reused. This endpoint is the **authoritative, unbounded** embed pass — but it is *optional*:
+   the read path heals itself, topping up a bounded batch per request and handing the rest to a
+   background backfill, so a fresh import can't make the first page load embed the whole catalog
+   inline. While the new space builds, reads keep serving the previous space and flip once it is
+   ≥95% embedded (then the old space is reclaimed in the background) — the endpoint just makes it
+   finish sooner.
 3. If you change `LLM_EMBEDDING_DIM` (different-dimension model), that needs a schema migration in
    addition to the re-embed.
 
