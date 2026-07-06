@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.50b0",
     "opentelemetry-instrumentation-sqlalchemy>=0.50b0",
     "httpx>=0.28.1",
+    "numpy>=2.4",
     "pgvector>=0.4.2",
     "cryptography>=49.0.0",
     "argon2-cffi>=25.1.0",
