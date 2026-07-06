@@ -6,6 +6,7 @@ validated structured profile. User edits live in ``user_overrides`` and always w
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections import Counter
@@ -250,11 +251,19 @@ class TasteService:
             taste = TasteProfile(profile_id=profile_id)
             self.session.add(taste)
 
+        structured = data.model_dump(mode="json")
         taste.summary_text = data.summary
-        # The freshly generated summary is in this run's language; seed the per-language cache with
-        # it and drop any stale translations from the previous version (review F1).
-        taste.summary_by_lang = {self.language: data.summary}
-        taste.structured = data.model_dump(mode="json")
+        # The freshly generated profile is in this run's language; seed the per-language display
+        # cache with it (summary + identity chip map — nothing to translate for the language the
+        # profile was generated in) and drop any stale translations of the previous version
+        # (review F1). Every other language re-translates on demand, one workhorse call each.
+        taste.summary_by_lang = {
+            self.language: {
+                "summary": data.summary,
+                "terms": {term: term for term in _freeform_terms(structured)},
+            }
+        }
+        taste.structured = structured
         taste.confidence = data.confidence
         taste.model_version = self.model_version
         taste.generated_at = datetime.now(UTC)
@@ -266,48 +275,168 @@ class TasteService:
         return taste
 
 
-# Cap the on-demand summary translation — it's one short paragraph, so a small budget is plenty and
-# keeps a chatty model from running up the bill on a read-path call.
-_TRANSLATE_MAX_TOKENS = 400
+# Cap the on-demand display translation — one short paragraph plus a handful of chip strings, so a
+# small budget is plenty and keeps a chatty model from running up the bill on a read-path call.
+_TRANSLATE_MAX_TOKENS = 900
+
+# The frontend display-translates closed-vocabulary terms (genres + controlled descriptors) from
+# its static table (frontend/src/lib/tasteVocab.ts), keyed by exact case-insensitive match. Skip
+# exactly those server-side so a chip is never translated twice — everything else is free-form and
+# only the LLM can localize it. Deliberately NOT genres.in_vocabulary: its fuzzy substring rule
+# would also skip "cerebral sci-fi" (matches "cerebral"), which the static table can't translate.
+_CLOSED_VOCAB_LC = frozenset(term.lower() for term in genres.CLOSED_VOCABULARY)
 
 
-def localized_summary(
+def _freeform_terms(structured: dict[str, Any]) -> list[str]:
+    """The free-form display strings of a structured profile, deduped, order preserved.
+
+    Covers the chip lists (``likes``/``dislikes``/``hard_avoids``) plus ``comfort_axis``.
+    Closed-vocabulary terms are excluded — the frontend translates those client-side."""
+    terms: list[str] = []
+    for key in ("likes", "dislikes", "hard_avoids"):
+        value = structured.get(key)
+        if isinstance(value, list):
+            terms.extend(item for item in value if isinstance(item, str) and item.strip())
+    comfort = structured.get("comfort_axis")
+    if isinstance(comfort, str) and comfort.strip():
+        terms.append(comfort)
+    return [t for t in dict.fromkeys(terms) if t.strip().lower() not in _CLOSED_VOCAB_LC]
+
+
+@dataclass
+class TasteDisplay:
+    """Display-only localization of a taste profile: the summary in the request's language plus a
+    canonical→display map for the free-form chips. Canonical values never change — overrides and
+    edits key on them (review F1) — so this is pure presentation."""
+
+    summary: str
+    terms: dict[str, str] = field(default_factory=dict)
+
+
+def _entry_display(
+    entry: Any, native_summary: str, native_terms: list[str]
+) -> tuple[str | None, dict[str, str]]:
+    """Normalize one per-language cache value into ``(summary, canonical→display terms)``.
+
+    Handles both formats living in ``summary_by_lang``: the current object
+    (``{"summary": …, "terms": {…}}``) and the legacy bare string (summary-only, pre-chips). A
+    legacy string equal to the stored native summary is the generation seed — the profile *is*
+    that language, so its chips display as-is (identity map). Any other legacy string is an old
+    summary translation: keep it, and leave the chips for a translation call to fill."""
+    if isinstance(entry, str):
+        if entry == native_summary:
+            return entry, {term: term for term in native_terms}
+        return entry, {}
+    if isinstance(entry, dict):
+        summary = entry.get("summary")
+        raw_terms = entry.get("terms")
+        terms = (
+            {k: v for k, v in raw_terms.items() if isinstance(k, str) and isinstance(v, str)}
+            if isinstance(raw_terms, dict)
+            else {}
+        )
+        return summary if isinstance(summary, str) else None, terms
+    return None, {}
+
+
+def localized_display(
     session: Session,
     taste: TasteProfile,
     language: Language,
     llm: LLMProvider | None,
-) -> str:
-    """The taste summary in ``language``, translating on demand and caching the result so each
-    language costs at most one workhorse call per generation (review F1).
+) -> TasteDisplay:
+    """The taste profile's display strings in ``language``: summary + free-form chip labels.
 
-    Returns the stored summary unchanged when it's already cached in the target language, when
-    there's nothing to translate, or when offline (no LLM) — the profile stays readable, just not
-    re-localized. Legacy profiles with no cache are assumed to be in the default language."""
+    Generalizes the summary translation (review F1) to the whole displayed profile, so a profile
+    generated before chips localized at extraction time still reads fully in the UI language. One
+    workhorse call translates summary and chips in a single JSON payload, cached per language on
+    ``summary_by_lang``. The cache maps canonical→display *per entry*: removing a chip just stops
+    serving its entry (no re-call), re-adding it is a cache hit, and chips present only via user
+    overrides were typed by the user — their own display form, never translated. Offline (no LLM)
+    serves canonical values unchanged; the request language equal to the generation language never
+    spends a call (the generation seeds an identity map)."""
     native = taste.summary_text or ""
+    generated_terms = _freeform_terms(taste.structured or {})
     cache = dict(taste.summary_by_lang or {})
     if not cache and native:
+        # Legacy profile with no cache at all: assume it was generated in the default language.
         cache = {DEFAULT_LANGUAGE: native}
-    if language in cache:
-        return cache[language]
-    if not native or llm is None:
-        return native
+    summary, terms = _entry_display(cache.get(language), native, generated_terms)
+
+    # Translate only strings the extractor generated and that are still displayed: a chip present
+    # only in user_overrides was typed by the user in their own words, and a removed chip costs
+    # nothing (its cache entry simply isn't served).
+    displayed = _freeform_terms(effective_profile(taste))
+    generated = set(generated_terms)
+    missing = [t for t in displayed if t in generated and t not in terms]
+    need_summary = summary is None and bool(native)
+    if llm is None or (not missing and not need_summary):
+        return TasteDisplay(summary=summary or native, terms=terms)
+
+    wants = []
+    payload: dict[str, Any] = {}
+    if need_summary:
+        wants.append(
+            '- "summary": the summary translated — keep it warm, concise, and addressed directly '
+            "to the user in the second person"
+        )
+        payload["summary"] = native
+    if missing:
+        wants.append(
+            '- "terms": an object mapping every input term (each key EXACTLY as given) to its '
+            "translation — short, chip-style labels; keep proper nouns as-is"
+        )
+        payload["terms"] = missing
     prompt = (
-        f"Translate the following taste summary into {LANGUAGE_NAMES[language]}. Keep it warm, "
-        "concise, and addressed directly to the user in the second person. Output only the "
-        f"translation, with no preamble.\n\n{native}"
+        f"Translate this viewer taste data into {LANGUAGE_NAMES[language]}. "
+        "Output ONLY a JSON object with:\n"
+        + "\n".join(wants)
+        + "\n\nInput:\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    logger.info(
+        "taste.localize_display",
+        extra={
+            "profile_id": str(taste.profile_id),
+            "language": language,
+            "terms": len(missing),
+            "summary": need_summary,
+        },
     )
     try:
-        translated = llm.complete(prompt, max_tokens=_TRANSLATE_MAX_TOKENS, temperature=0.0).strip()
+        raw = llm.complete(prompt, max_tokens=_TRANSLATE_MAX_TOKENS, temperature=0.0)
     except Exception:  # noqa: BLE001 - a flaky provider must not break viewing the profile
-        record_fallback("taste_summary_localization", "llm_error", language=language)
-        return native
-    if not translated:
-        record_fallback("taste_summary_localization", "empty_completion", language=language)
-        return native
-    cache[language] = translated
+        record_fallback("taste_localization", "llm_error", language=language)
+        return TasteDisplay(summary=summary or native, terms=terms)
+    try:
+        data = extract_json(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        record_fallback("taste_localization", "unparseable_completion", language=language)
+        return TasteDisplay(summary=summary or native, terms=terms)
+
+    if need_summary:
+        translated_summary = data.get("summary")
+        if isinstance(translated_summary, str) and translated_summary.strip():
+            summary = translated_summary.strip()
+        else:
+            # Leave the cached summary unset so the next read retries it; chips may still land.
+            record_fallback("taste_localization", "empty_summary", language=language)
+    raw_terms = data.get("terms")
+    if isinstance(raw_terms, dict):
+        wanted = set(missing)
+        for key, value in raw_terms.items():
+            if key in wanted and isinstance(value, str) and value.strip():
+                terms[key] = value.strip()
+    # Cache identity for anything the model skipped — displaying canonical is the honest fallback,
+    # and pinning it stops a stubborn model from costing one call per read.
+    for term in missing:
+        terms.setdefault(term, term)
+    cache[language] = {"summary": summary, "terms": terms}
     taste.summary_by_lang = cache
     session.commit()
-    return translated
+    return TasteDisplay(summary=summary or native, terms=terms)
 
 
 def optional_llm_provider() -> LLMProvider | None:

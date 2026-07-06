@@ -405,9 +405,13 @@ class TasteProfile(Base):
     model_version: Mapped[str | None] = mapped_column(String(100))
     summary_text: Mapped[str | None] = mapped_column(Text)
     # ``summary_text`` in the language it was generated in; ``summary_by_lang`` caches on-demand
-    # translations keyed by language so the profile reads in the UI's language, not the ingestion
-    # language (review F1). Reset on regeneration; each language costs one workhorse call once.
-    summary_by_lang: Mapped[dict[str, str]] = mapped_column(
+    # display translations keyed by language so the profile reads in the UI's language, not the
+    # ingestion language (review F1). Each value is ``{"summary": str|None, "terms": {canonical:
+    # display}}`` — the summary plus a per-chip map for the free-form chips (legacy rows may still
+    # hold a bare summary string; ``taste.service._entry_display`` upgrades those on read, no
+    # migration needed since JSONB is schemaless). Reset on regeneration; each language costs one
+    # workhorse call once.
+    summary_by_lang: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default="{}"
     )
     structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

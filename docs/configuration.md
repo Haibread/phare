@@ -299,18 +299,22 @@ a French sentence reads "Science-Fiction", not the stored English "Science Ficti
 labels stay English — they key affinity/genre matching against the catalog — so only the _displayed_
 string is translated. An unmapped genre falls back to English and emits a `phare.fallback` signal.
 
-The **taste summary** is served in the request's language: the first read in a new language spends
-one workhorse LLM call to translate it, cached per language on the profile (`summary_by_lang`) so
-each language costs at most one call per (re)generation. Offline (no `LLM_API_KEY`) it serves the
-stored summary unchanged.
+The **taste summary and free-form taste chips** are served in the request's language: the first read
+in a new language spends **one** workhorse LLM call that translates the summary plus every free-form
+chip (`likes` / `dislikes` / off-vocabulary `hard_avoids` / `comfort_axis`) in a single JSON payload,
+cached per language on the profile (`summary_by_lang`) so each language costs at most one call per
+(re)generation. The cache maps each canonical chip to its display form, so removing a chip never
+re-spends a call, and chips the user typed as overrides are shown exactly as typed — they're never
+machine-translated. Reading in the language the profile was generated in costs nothing. Offline (no
+`LLM_API_KEY`) the stored canonical strings are served unchanged. Profiles translated before chips
+localized (summary-only cache) keep their cached summary and spend one call on the chips alone.
 
-The **taste chips** on the profile (the "Drawn to" / "Avoiding" pills) display in the UI language for
-terms in the closed vocabulary — TMDB genres + the controlled affinity descriptors — via a static
-front-side table (mirrored from the backend's `recommend/genres.py`). Only the _displayed_ label is
-translated: the stored value stays the canonical English key, so overrides survive a language switch
-and every edit still writes the English key to the backend. Free-form chips (the LLM's natural-language
-`likes`, outside the vocabulary) render exactly as stored — they're never machine-translated (no LLM
-call is spent on chips).
+The **closed-vocabulary taste chips** (TMDB genres + the controlled affinity descriptors) display in
+the UI language via a static front-side table (mirrored from the backend's `recommend/genres.py`);
+they're excluded from the LLM translation call, so no chip is ever translated twice. In every case
+only the _displayed_ label localises: the stored value stays the canonical key, so overrides survive
+a language switch and every edit still writes the canonical key to the backend (the API returns the
+canonical values in `structured` and the display forms in a separate `displayTerms` map).
 
 What does **not** localise:
 

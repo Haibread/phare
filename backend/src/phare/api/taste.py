@@ -38,7 +38,7 @@ from phare.recommend.taste_vector import taste_contributions
 from phare.taste.service import (
     TasteService,
     effective_profile,
-    localized_summary,
+    localized_display,
     optional_llm_provider,
 )
 
@@ -63,11 +63,16 @@ def get_llm_provider() -> LLMProvider:
     )
 
 
-def _to_response(taste: TasteProfile, summary: str | None = None) -> TasteResponse:
+def _to_response(
+    taste: TasteProfile,
+    summary: str | None = None,
+    display_terms: dict[str, str] | None = None,
+) -> TasteResponse:
     return TasteResponse(
         profile_id=taste.profile_id,
         summary=summary if summary is not None else taste.summary_text,
         structured=effective_profile(taste),
+        display_terms=display_terms or {},
         user_overrides=taste.user_overrides,
         confidence=taste.confidence,
         model_version=taste.model_version,
@@ -91,10 +96,12 @@ def get_taste(
 ) -> TasteResponse:
     require_own_profile(user, profile_id)
     taste = _require_taste(session, profile_id)
-    # Serve the summary in the request's language, translating + caching on demand (review F1). The
-    # first request in a new language spends one workhorse call; offline serves the native summary.
-    summary = localized_summary(session, taste, language, optional_llm_provider())
-    return _to_response(taste, summary=summary)
+    # Serve the summary AND the free-form chips in the request's language, translating + caching on
+    # demand (review F1). The first request in a new language spends one workhorse call; offline
+    # serves the stored (canonical) strings. The canonical values in `structured` never change —
+    # `displayTerms` is a display-only canonical→display map the frontend looks chips up in.
+    display = localized_display(session, taste, language, optional_llm_provider())
+    return _to_response(taste, summary=display.summary, display_terms=display.terms)
 
 
 @router.post("/profiles/{profile_id}/taste/generate", response_model=TasteResponse)

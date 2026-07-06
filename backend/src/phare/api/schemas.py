@@ -159,6 +159,12 @@ class TasteResponse(ApiModel):
     profile_id: uuid.UUID
     summary: str | None = None
     structured: dict[str, Any]
+    # Display-only localization of the free-form chips in `structured`: canonical value → label in
+    # the request's language. The canonical values never change (overrides key on them, review F1);
+    # the frontend prefers this map, then its static closed-vocab table, then the canonical string.
+    # Empty when nothing needed translating (same language, offline, or write endpoints — the
+    # subsequent GET refetch carries the map).
+    display_terms: dict[str, str] = Field(default_factory=dict)
     user_overrides: dict[str, Any]
     confidence: float | None = None
     model_version: str | None = None

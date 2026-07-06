@@ -20,7 +20,7 @@ from phare.taste.service import (
     TasteService,
     _should_auto_refresh,
     effective_profile,
-    localized_summary,
+    localized_display,
     maybe_refresh_taste,
     optional_llm_provider,
 )
@@ -66,34 +66,137 @@ def test_off_vocabulary_affinity_key_is_flagged(db_session: Session, caplog) -> 
     assert any(r.message == "taste_affinity.fallback" for r in caplog.records)
 
 
-def test_localized_summary_translates_once_then_caches(db_session: Session) -> None:
-    # F1: the summary is served in the request's language, translated on demand and cached so each
-    # language costs at most one workhorse call.
-    profile_id = _profile_with_history(db_session)
-    taste = TasteService(
-        db_session, FakeLLMProvider(completion=CANNED), "m", language="en"
-    ).generate(profile_id)
-    translator = FakeLLMProvider(completion="Vous aimez la SF cérébrale et le drame prestige.")
-    first = localized_summary(db_session, taste, "fr", translator)
-    assert first == "Vous aimez la SF cérébrale et le drame prestige."
-    assert len(translator.prompts) == 1  # one workhorse call for the translation
+# Canned display-translation completion matching CANNED's free-form strings (its closed-vocabulary
+# chips never reach the LLM — the frontend's static table translates those client-side).
+FR_DISPLAY = (
+    '{"summary":"Vous aimez la SF cérébrale et le drame prestige.",'
+    '"terms":{"slow-burn sci-fi":"SF à combustion lente","slapstick":"burlesque",'
+    '"gore":"gore","prestige drama":"drame de prestige"}}'
+)
+
+
+def _generate_english_taste(session: Session) -> TasteProfile:
+    profile_id = _profile_with_history(session)
+    return TasteService(session, FakeLLMProvider(completion=CANNED), "m", language="en").generate(
+        profile_id
+    )
+
+
+def test_localized_display_translates_once_then_caches(db_session: Session) -> None:
+    # F1 (extended to chips): summary AND free-form chips are served in the request's language,
+    # translated in ONE workhorse call and cached so each language costs at most one call.
+    taste = _generate_english_taste(db_session)
+    translator = FakeLLMProvider(completion=FR_DISPLAY)
+    first = localized_display(db_session, taste, "fr", translator)
+    assert first.summary == "Vous aimez la SF cérébrale et le drame prestige."
+    assert first.terms["slow-burn sci-fi"] == "SF à combustion lente"
+    assert first.terms["prestige drama"] == "drame de prestige"  # comfort_axis rides along
+    assert len(translator.prompts) == 1  # one call covers the summary + every chip
 
     # A second French read is served from the cache — the (unused) provider is never called.
     unused = FakeLLMProvider(completion="SHOULD NOT BE CALLED")
-    assert localized_summary(db_session, taste, "fr", unused) == first
+    second = localized_display(db_session, taste, "fr", unused)
+    assert (second.summary, second.terms) == (first.summary, first.terms)
     assert unused.prompts == []
 
-    # The native language is returned as-is, with no translation call.
-    assert localized_summary(db_session, taste, "en", None) == taste.summary_text
+    # The generation language needs no LLM at all: display == canonical.
+    native = localized_display(db_session, taste, "en", None)
+    assert native.summary == taste.summary_text
+    assert native.terms["slow-burn sci-fi"] == "slow-burn sci-fi"
 
 
-def test_localized_summary_offline_serves_native(db_session: Session) -> None:
-    # Without an LLM (offline), a language miss falls back to the stored summary, not a failure.
+def test_localized_display_offline_serves_canonical(db_session: Session) -> None:
+    # Without an LLM (offline), a language miss falls back to the stored canonical strings — the
+    # profile stays fully readable, just not re-localized. No crash, no call.
+    taste = _generate_english_taste(db_session)
+    display = localized_display(db_session, taste, "fr", None)
+    assert display.summary == taste.summary_text
+    assert display.terms == {}  # frontend falls back to its vocab table, then the canonical
+
+
+def test_localized_display_never_translates_user_override_chips(db_session: Session) -> None:
+    # A chip the user typed (override) is its own display form, in whatever language they wrote it;
+    # only extractor-generated strings are sent to the LLM.
+    taste = _generate_english_taste(db_session)
+    taste.user_overrides = {"likes": ["slow-burn sci-fi", "mes pépites françaises"]}
+    db_session.flush()
+    translator = FakeLLMProvider(completion=FR_DISPLAY)
+    display = localized_display(db_session, taste, "fr", translator)
+    assert "mes pépites françaises" not in translator.prompts[0]  # never sent for translation
+    assert "mes pépites françaises" not in display.terms  # served verbatim (no map entry)
+    assert display.terms["slow-burn sci-fi"] == "SF à combustion lente"
+
+
+def test_localized_display_removed_chip_costs_nothing(db_session: Session) -> None:
+    # The cache maps canonical→display per entry, so removing a chip just stops serving its entry —
+    # no stale display, and no fresh LLM call on the next read.
+    taste = _generate_english_taste(db_session)
+    localized_display(db_session, taste, "fr", FakeLLMProvider(completion=FR_DISPLAY))
+    taste.user_overrides = {"likes": []}  # user removed "slow-burn sci-fi"
+    db_session.flush()
+    unused = FakeLLMProvider(completion="SHOULD NOT BE CALLED")
+    display = localized_display(db_session, taste, "fr", unused)
+    assert unused.prompts == []
+    assert display.summary == "Vous aimez la SF cérébrale et le drame prestige."
+
+
+def test_localized_display_skips_closed_vocabulary_terms(db_session: Session) -> None:
+    # Closed-vocabulary chips ("Horror", "gory") translate client-side from the static table; the
+    # one LLM call carries only free-form strings — no double translation, fewer tokens.
     profile_id = _profile_with_history(db_session)
+    canned = (
+        '{"summary":"x","likes":["Horror","mind-bending narratives"],"dislikes":[],'
+        '"hard_avoids":["gory"],"affinities":{"Horror":0.9},'
+        '"comfort_axis":null,"discovery_tolerance":0.5,"confidence":0.6}'
+    )
     taste = TasteService(
-        db_session, FakeLLMProvider(completion=CANNED), "m", language="en"
+        db_session, FakeLLMProvider(completion=canned), "m", language="en"
     ).generate(profile_id)
-    assert localized_summary(db_session, taste, "fr", None) == taste.summary_text
+    translator = FakeLLMProvider(
+        completion='{"summary":"Résumé.","terms":{"mind-bending narratives":"récits vertigineux"}}'
+    )
+    display = localized_display(db_session, taste, "fr", translator)
+    prompt = translator.prompts[0]
+    assert '"Horror"' not in prompt
+    assert '"gory"' not in prompt
+    assert "mind-bending narratives" in prompt
+    assert display.terms == {"mind-bending narratives": "récits vertigineux"}
+
+
+def test_localized_display_upgrades_legacy_summary_only_cache(db_session: Session) -> None:
+    # Profiles translated before chips localized cached a bare summary string per language. That
+    # summary is reused (not re-translated); the one call spends its tokens on the chips only.
+    taste = _generate_english_taste(db_session)
+    taste.summary_by_lang = {"en": taste.summary_text, "fr": "Résumé déjà traduit."}
+    db_session.flush()
+    translator = FakeLLMProvider(
+        completion='{"terms":{"slow-burn sci-fi":"SF à combustion lente","slapstick":"burlesque",'
+        '"gore":"gore","prestige drama":"drame de prestige"}}'
+    )
+    display = localized_display(db_session, taste, "fr", translator)
+    assert display.summary == "Résumé déjà traduit."  # kept, not re-spent
+    assert display.terms["slapstick"] == "burlesque"
+    assert len(translator.prompts) == 1
+    assert '"summary"' not in translator.prompts[0]  # the call asked for terms only
+
+    # The legacy seed entry (the generation language) still serves canonical without any call.
+    unused = FakeLLMProvider(completion="SHOULD NOT BE CALLED")
+    native = localized_display(db_session, taste, "en", unused)
+    assert native.summary == taste.summary_text
+    assert native.terms["slapstick"] == "slapstick"
+    assert unused.prompts == []
+
+
+def test_regeneration_resets_display_cache(db_session: Session) -> None:
+    # Regenerating produces new strings — stale translations of the previous version must drop.
+    taste = _generate_english_taste(db_session)
+    localized_display(db_session, taste, "fr", FakeLLMProvider(completion=FR_DISPLAY))
+    assert "fr" in taste.summary_by_lang
+    TasteService(db_session, FakeLLMProvider(completion=CANNED), "m", language="en").generate(
+        taste.profile_id
+    )
+    db_session.refresh(taste)
+    assert set(taste.summary_by_lang) == {"en"}  # only the fresh generation seed remains
 
 
 def test_degraded_taste_profile_is_marked_and_re_extracted(db_session: Session) -> None:
