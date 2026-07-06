@@ -85,9 +85,9 @@ describe("chat pick citation matching", () => {
   it("tolerates the composer's typography: curly apostrophes and French spaced punctuation", () => {
     // Live R7 repro: slate says "Dude, Where's My Car?", the reply wrote "Dude, Where’s My Car ?".
     const items = [item({ titleId: "dude", title: "Dude, Where's My Car?" })];
-    expect(citedTitleIds("Dude, Where’s My Car ? pourrait aussi vous plaire.", items).has("dude")).toBe(
-      true,
-    );
+    expect(
+      citedTitleIds("Dude, Where’s My Car ? pourrait aussi vous plaire.", items).has("dude"),
+    ).toBe(true);
   });
 
   it("does not crash on titles with regex-special characters", () => {
