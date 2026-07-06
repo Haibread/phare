@@ -107,6 +107,20 @@ READ_RUNTIME_CAP = 64
 _REFETCH_POOL_FLOOR_MULT = 1  # re-fetch when the filtered pool has fewer than this * k candidates
 
 
+def _pool_matches_genres(pool: Sequence[Candidate], wanted: Sequence[str]) -> bool:
+    """Whether any candidate in ``pool`` satisfies the requested genres — origin-scoped words
+    ("anime") included, with the same pool-level coverage proxy the intent filter uses (a pool
+    carrying no language data at all downgrades scoped words to their plain genre). Used to tell a
+    genuinely-matching pool from the intent filter's zero-match fallback pool."""
+    enforce_origin = any(c.original_language is not None for c in pool)
+    return any(
+        genres.genre_match_with_origin(
+            wanted, c.genres, c.original_language, enforce_origin=enforce_origin
+        )
+        for c in pool
+    )
+
+
 class RecommendationService:
     """Builds rows and ad-hoc recommendations for one engine configuration."""
 
@@ -338,9 +352,19 @@ class RecommendationService:
         rather than hoping the global-nearest slice contained matches. The re-fetched pool goes
         through the same runtime enrichment + filter, and we keep whichever pool the filter left
         larger — never padding with weak matches, so a genuinely thin catalog stays honestly thin.
+
+        One wrinkle: the chat intent filter's zero-match safety keeps the *whole* pool when a
+        requested genre matches nothing in it (A3 — a thin catalog shouldn't return nothing). As a
+        final answer that's right, but mid-pipeline it masks starvation: the pool "looks full"
+        while containing nothing the user asked for, which used to skip the re-fetch entirely (and
+        the "larger pool wins" comparison would then prefer the fallback pool over a small honest
+        genre match). So a full-looking first pass that contains *no* genre match is treated as
+        starved, and a re-fetched pool that does match the genre wins regardless of size.
         """
 
-        def retrieve(genre_labels: Sequence[str], runtime_cap: int | None) -> list[Candidate]:
+        def retrieve(
+            genre_constraints: Sequence[genres.GenreConstraint], runtime_cap: int | None
+        ) -> list[Candidate]:
             pool = generate_candidates(
                 self.session,
                 profile_id,
@@ -349,7 +373,7 @@ class RecommendationService:
                 limit=k * 4 + 10,
                 hard_avoids=avoids,
                 from_watched=rewatch,
-                genre_labels=genre_labels,
+                genre_constraints=genre_constraints,
                 max_runtime=runtime_cap,
             )
             # Backfill the pool's missing runtimes before filtering, so a runtime cap has data to
@@ -359,29 +383,50 @@ class RecommendationService:
             return candidate_filter(pool) if candidate_filter is not None else pool
 
         filtered = retrieve((), None)
-        if len(filtered) >= k * _REFETCH_POOL_FLOOR_MULT:
+        # A "full" first pass only counts when it actually contains what was asked for — the intent
+        # filter's zero-match fallback can hand back a full pool with no genre match in it (see the
+        # docstring wrinkle). Without include_genres this is never starved and behaves as before.
+        genre_starved = bool(include_genres) and not _pool_matches_genres(filtered, include_genres)
+        if len(filtered) >= k * _REFETCH_POOL_FLOOR_MULT and not genre_starved:
             return filtered
-        # Resolve the intent genres to literal catalog labels so the SQL overlap honours the same
-        # alias semantics as the in-memory match (an empty result means the words match no catalog
-        # genre — no point re-searching for a label that isn't there).
-        genre_labels = (
-            genres.resolve_catalog_genres(include_genres, self._catalog_genre_vocabulary())
-            if include_genres
-            else []
-        )
-        if not genre_labels and max_runtime is None:
+        # Resolve the intent genres to structured constraints — literal catalog labels (so the SQL
+        # overlap honours the same alias semantics as the in-memory match; an empty result means
+        # the words match no catalog genre — no point re-searching for a label that isn't there),
+        # plus the origin condition for origin-scoped words ("anime" → Animation + ja). The origin
+        # condition is only enforceable on a catalog that has original_language data at all; one
+        # cheap EXISTS picks the branch (resolve downgrades + records the fallback when False).
+        genre_constraints: list[genres.GenreConstraint] = []
+        if include_genres:
+            language_coverage = (
+                not genres.has_origin_scoped(include_genres)
+                or self._catalog_has_original_language()
+            )
+            genre_constraints = genres.resolve_catalog_constraints(
+                include_genres,
+                self._catalog_genre_vocabulary(),
+                language_coverage=language_coverage,
+            )
+        if not genre_constraints and max_runtime is None:
             return filtered  # nothing structured to push into SQL — the thin pool is honest
-        refetched = retrieve(genre_labels, max_runtime)
+        refetched = retrieve(genre_constraints, max_runtime)
         logger.info(
             "recommend.candidates_refetched",
             extra={
                 "profile_id": str(profile_id),
                 "first_pass": len(filtered),
                 "refetched": len(refetched),
-                "genre_labels": genre_labels,
+                "genre_constraints": [
+                    {"labels": list(gc.labels), "original_language": gc.original_language}
+                    for gc in genre_constraints
+                ],
                 "max_runtime": max_runtime,
             },
         )
+        # A genre-starved first pass is a fallback pool, not a competitor: if the subspace re-fetch
+        # found real genre matches, they win regardless of size (5 honest anime beat 58 fallback
+        # thrillers). Otherwise the historical "larger pool wins" comparison stands.
+        if genre_starved and refetched and _pool_matches_genres(refetched, include_genres):
+            return refetched
         return refetched if len(refetched) > len(filtered) else filtered
 
     def _catalog_genre_vocabulary(self) -> list[str]:
@@ -390,6 +435,19 @@ class RecommendationService:
         it stays one cheap query, not a full-table scan into Python."""
         rows = self.session.execute(select(func.distinct(func.unnest(Title.genres)))).scalars()
         return [g for g in rows if g]
+
+    def _catalog_has_original_language(self) -> bool:
+        """Whether *any* title carries an ``original_language`` — the branch pick for origin-scoped
+        genre words ("anime"). 0% coverage is the pre-heal / offline state where the origin
+        condition would exclude everything, so it downgrades (visibly) to the plain genre; any
+        coverage at all means NULL-language rows are honestly excluded instead. One cheap indexed
+        EXISTS, only run on origin-scoped turns."""
+        return (
+            self.session.scalar(
+                select(Title.id).where(Title.original_language.is_not(None)).limit(1)
+            )
+            is not None
+        )
 
     def you_might_like(self, profile_id: uuid.UUID, *, explainer: Explainer | None = None) -> Row:
         """The full pipeline. This is the product."""

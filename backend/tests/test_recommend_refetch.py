@@ -51,6 +51,7 @@ def _add_title(
     runtime: int | None,
     vote_count: int = 3_000,
     vote_average: float = 7.5,
+    language: str | None = None,
 ) -> Title:
     title = Title(
         kind=TitleKind.movie,
@@ -60,6 +61,7 @@ def _add_title(
         runtime_minutes=runtime,
         vote_count=vote_count,
         vote_average=vote_average,
+        original_language=language,
         overview="A candidate.",
     )
     session.add(title)
@@ -174,6 +176,171 @@ def test_no_refetch_when_first_pass_already_full(db_session: Session) -> None:
         profile.id, candidate_filter=comedy_only, include_genres=["comedy"], vote_mix=True
     )
     assert len(items) >= 10
+
+
+def _batman_taste_with_animation(
+    db_session: Session, *, western_language: str | None, anime_language: str | None
+) -> uuid.UUID:
+    """The coordinator's live case, in miniature: a profile whose taste sits on a cluster of
+    western (DC-style) animation, with a handful of Japanese anime far from the centroid. An
+    "anime" ask must cross to the ja subspace, not serve the nearby western animation."""
+    profile = Profile(display_name="batman fan")
+    db_session.add(profile)
+    db_session.flush()
+    watched = _add_title(
+        db_session,
+        tmdb_id=7000,
+        genres=["Action"],
+        vector=_THRILLER,
+        runtime=140,
+        language=western_language,
+    )
+    db_session.add(
+        WatchEvent(
+            profile_id=profile.id, title_id=watched.id, type=EventType.watched, source="test"
+        )
+    )
+    # Western animation ON the taste direction — these dominate the unconstrained nearest slice
+    # (the DC animated movies the live validation surfaced).
+    for i in range(20):
+        _add_title(
+            db_session,
+            tmdb_id=7100 + i,
+            genres=["Animation"],
+            vector=_THRILLER,
+            runtime=90,
+            language=western_language,
+        )
+    # Japanese anime, cosine-distant from the centroid.
+    for i in range(8):
+        _add_title(
+            db_session,
+            tmdb_id=7200 + i,
+            genres=["Animation"],
+            vector=_COMEDY,
+            runtime=100,
+            language=anime_language,
+        )
+    db_session.flush()
+    return profile.id
+
+
+def test_anime_intent_refetches_japanese_animation_only(db_session: Session) -> None:
+    # Healed catalog (languages known): "anime" = Animation + ja in BOTH layers. The in-memory
+    # filter rejects the nearby western animation (its zero-match fallback would keep the pool, but
+    # the genre-starvation check still fires the SQL re-fetch), and the SQL re-fetch searches the
+    # Animation+ja subspace — so the slate is exactly the Japanese titles, never DC animation.
+    from phare.agent.schema import ChatIntent
+    from phare.agent.service import intent_filter
+
+    profile_id = _batman_taste_with_animation(
+        db_session, western_language="en", anime_language="ja"
+    )
+    intent = ChatIntent(include_genres=["anime"])
+
+    items = _service(db_session).recommend(
+        profile_id,
+        candidate_filter=intent_filter(intent),
+        include_genres=intent.include_genres,
+        vote_mix=True,
+    )
+    assert items  # the ja subspace was found
+    ja_ids = {t.id for t in db_session.query(Title).filter(Title.original_language == "ja").all()}
+    assert {i.title_id for i in items} <= ja_ids  # every pick is Japanese Animation
+    assert all("Animation" in i.genres for i in items)
+
+
+def test_anime_intent_on_preheal_catalog_downgrades_to_animation_and_records(
+    db_session: Session, caplog
+) -> None:
+    # Pre-heal catalog: every original_language is NULL, so the ja condition is unenforceable.
+    # The ask degrades to plain Animation — visibly (anime_language_unknown recorded), never
+    # silently — so chat stays useful before the boot heal has run.
+    import logging
+
+    from phare.agent.schema import ChatIntent
+    from phare.agent.service import intent_filter
+
+    profile_id = _batman_taste_with_animation(
+        db_session, western_language=None, anime_language=None
+    )
+    intent = ChatIntent(include_genres=["anime"])
+
+    with caplog.at_level(logging.WARNING, logger="phare.fallback"):
+        items = _service(db_session).recommend(
+            profile_id,
+            candidate_filter=intent_filter(intent),
+            include_genres=intent.include_genres,
+            vote_mix=True,
+        )
+    assert items
+    assert all("Animation" in i.genres for i in items)  # the genre half still holds
+    assert any(
+        r.name == "phare.fallback" and getattr(r, "reason", "") == "anime_language_unknown"
+        for r in caplog.records
+    )
+
+
+def test_plain_animation_intent_spans_all_languages(db_session: Session) -> None:
+    # "animation" is NOT origin-scoped: on a healed catalog the slate may carry both western and
+    # Japanese animation — language never filters a plain genre ask.
+    from phare.agent.schema import ChatIntent
+    from phare.agent.service import intent_filter
+
+    profile_id = _batman_taste_with_animation(
+        db_session, western_language="en", anime_language="ja"
+    )
+    intent = ChatIntent(include_genres=["animation"])
+
+    items = _service(db_session).recommend(
+        profile_id,
+        candidate_filter=intent_filter(intent),
+        include_genres=intent.include_genres,
+        vote_mix=True,
+    )
+    assert items
+    assert all("Animation" in i.genres for i in items)
+    # The nearest slice is the western cluster — a plain ask is satisfied there, no ja demand.
+    western_ids = {
+        t.id for t in db_session.query(Title).filter(Title.original_language == "en").all()
+    }
+    assert {i.title_id for i in items} & western_ids  # western animation allowed through
+
+
+def test_generate_candidates_applies_origin_language_in_sql(db_session: Session) -> None:
+    # Pin the SQL WHERE itself: a GenreConstraint carrying an origin language returns only rows
+    # whose genres overlap AND whose original_language matches — NULL-language rows excluded.
+    from phare.recommend import genres as genre_mod
+    from phare.recommend.candidates import generate_candidates
+
+    profile = Profile(display_name="direct")
+    db_session.add(profile)
+    db_session.flush()
+    ja = _add_title(
+        db_session, tmdb_id=7500, genres=["Animation"], vector=_COMEDY, runtime=100, language="ja"
+    )
+    _add_title(
+        db_session, tmdb_id=7501, genres=["Animation"], vector=_COMEDY, runtime=100, language="en"
+    )
+    _add_title(
+        db_session, tmdb_id=7502, genres=["Animation"], vector=_COMEDY, runtime=100, language=None
+    )
+    _add_title(
+        db_session, tmdb_id=7503, genres=["Drama"], vector=_COMEDY, runtime=100, language="ja"
+    )
+    db_session.flush()
+
+    candidates = generate_candidates(
+        db_session,
+        profile.id,
+        _COMEDY,
+        LOCAL_MODEL_VERSION,
+        genre_constraints=[
+            genre_mod.GenreConstraint(labels=("Animation",), original_language="ja")
+        ],
+    )
+    assert [c.title_id for c in candidates] == [ja.id]
+    assert candidates[0].original_language == "ja"  # carried onto the Candidate for the filter
 
 
 def test_refetch_resolves_french_genre_alias_to_catalog_label(db_session: Session) -> None:

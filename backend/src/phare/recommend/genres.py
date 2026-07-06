@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from phare.agent.intent import _MOOD_TO_GENRE
 from phare.core.fallback import record_fallback
@@ -68,17 +69,39 @@ _ALIASES.update(
         "action & aventure": "action & adventure",
         # extra English variants not in the mood map
         "scifi": "science fiction",
-        # "anime" (and its French plural/accented forms) → Animation, so a request for anime at
-        # least lands on the animation catalog. This is only the first step: *true* anime filtering
-        # is Animation + Japanese origin (original_language == "ja"), which becomes possible once
-        # the original_language backfill (round 8, item 1) has coverage. Not built yet — the data
-        # isn't there — so for now anime is treated as a plain Animation alias.
+        # "anime" (and its French plural/accented forms) → Animation for the *genre* half of the
+        # constraint. Anime is additionally origin-scoped (Animation made in Japan) — see
+        # ``_ORIGIN_LANGUAGE`` below, which both enforcement points read.
         "anime": "animation",
         "animé": "animation",
         "animés": "animation",
         "animes": "animation",
     }
 )
+
+# Genre words that scope by *origin*, not just genre: "anime" is Animation made in Japan, so a
+# Batman-heavy profile asking for anime must not get DC animated movies (western animation). The
+# alias above gets the right shelf (Animation); this table adds the origin condition
+# (``original_language == "ja"``). This module is the single place that knows the mapping — both
+# enforcement points (the in-memory intent filter in ``agent/service.intent_filter`` and the
+# SQL-side constrained re-fetch in ``recommend/candidates.generate_candidates``) read it from
+# here, never a string special-case of their own. Keys are normalized forms (see ``_normalize``).
+_ORIGIN_LANGUAGE: dict[str, str] = {
+    "anime": "ja",
+    "animé": "ja",
+    "animés": "ja",
+    "animes": "ja",
+}
+
+
+def origin_language_for(term: str) -> str | None:
+    """The origin language a genre word implies ("anime" → "ja"), else ``None`` (plain genre)."""
+    return _ORIGIN_LANGUAGE.get(_normalize(term))
+
+
+def has_origin_scoped(terms: Iterable[str]) -> bool:
+    """True if any wanted genre word is origin-scoped (so an origin-language check is needed)."""
+    return any(origin_language_for(term) is not None for term in terms)
 
 
 # The closed vocabulary the taste extractor is asked to draw affinity/hard-avoid keys from, so they
@@ -238,6 +261,92 @@ def resolve_catalog_genres(wanted: Iterable[str], catalog_genres: Iterable[str])
     wanted_list = list(wanted)
     catalog = sorted({g for g in catalog_genres if g and g.strip()})
     return [label for label in catalog if any(term_matches(w, label) for w in wanted_list)]
+
+
+@dataclass(frozen=True)
+class GenreConstraint:
+    """A resolved genre constraint for the SQL-side re-fetch: catalog labels to overlap, plus an
+    optional origin language ("anime" → Animation labels + ``"ja"``).
+
+    A row matches one constraint when its ``genres`` array overlaps ``labels`` AND (when set) its
+    ``original_language`` equals ``original_language``. A row matches a *list* of constraints when
+    it matches any one of them (OR) — the same semantics as the in-memory ``matches_any`` filter,
+    so a mixed "anime or comedy" ask doesn't wrongly demand Japanese comedies."""
+
+    labels: tuple[str, ...]
+    original_language: str | None = None
+
+
+def resolve_catalog_constraints(
+    wanted: Iterable[str],
+    catalog_genres: Iterable[str],
+    *,
+    language_coverage: bool = True,
+) -> list[GenreConstraint]:
+    """Resolve free intent genre words into structured :class:`GenreConstraint` values for the SQL
+    re-fetch — :func:`resolve_catalog_genres` plus the origin condition.
+
+    Plain words resolve into one label-only constraint (exactly the old behaviour); origin-scoped
+    words ("anime") resolve into their own constraint carrying the required ``original_language``,
+    grouped per language. Words matching no catalog label drop out, same as before.
+
+    ``language_coverage=False`` means the catalog has **no** ``original_language`` data at all (the
+    pre-heal / offline state): the origin condition would exclude every row, so origin-scoped words
+    downgrade to their plain genre — and the downgrade is *recorded*
+    (:func:`record_origin_language_fallback`), never a silent "anime becomes animation". With
+    coverage present, a NULL-language row simply doesn't match — a thin, honest slate."""
+    catalog = list(catalog_genres)
+    wanted_list = [w for w in wanted if w and w.strip()]
+    plain = [w for w in wanted_list if origin_language_for(w) is None]
+    by_language: dict[str, list[str]] = {}
+    for word in wanted_list:
+        if (lang := origin_language_for(word)) is not None:
+            by_language.setdefault(lang, []).append(word)
+    constraints: list[GenreConstraint] = []
+    if plain and (labels := resolve_catalog_genres(plain, catalog)):
+        constraints.append(GenreConstraint(labels=tuple(labels)))
+    for lang, words in by_language.items():
+        if not (labels := resolve_catalog_genres(words, catalog)):
+            continue
+        if not language_coverage:
+            record_origin_language_fallback(words)
+            constraints.append(GenreConstraint(labels=tuple(labels)))
+        else:
+            constraints.append(GenreConstraint(labels=tuple(labels), original_language=lang))
+    return constraints
+
+
+def record_origin_language_fallback(wanted: Sequence[str]) -> None:
+    """An origin-scoped genre word ("anime") had to downgrade to its plain genre because the
+    catalog carries no ``original_language`` data yet (pre-heal / offline). Visible, never silent —
+    the operator can tell "anime served western animation" from a healed catalog honestly thin on
+    anime."""
+    record_fallback("genre_filter", "anime_language_unknown", wanted=list(wanted))
+
+
+def genre_match_with_origin(
+    wanted: Iterable[str],
+    tokens: Iterable[str],
+    original_language: str | None,
+    *,
+    enforce_origin: bool = True,
+) -> bool:
+    """In-memory counterpart of :class:`GenreConstraint` matching, for the chat intent filter.
+
+    A plain wanted word matches like :func:`matches_any`; an origin-scoped word ("anime")
+    additionally requires the candidate's ``original_language`` to equal the implied origin — so a
+    NULL-language candidate does *not* pass an anime request (honest thin slate on a healed
+    catalog). ``enforce_origin=False`` is the pre-heal downgrade (the pool carries no language data
+    at all): scoped words match on genre alone; the caller records the fallback once."""
+    token_list = list(tokens)
+    for term in wanted:
+        lang = origin_language_for(term)
+        if lang is not None and enforce_origin:
+            if original_language == lang and matches_any((term,), token_list):
+                return True
+        elif matches_any((term,), token_list):
+            return True
+    return False
 
 
 def record_genre_filter_fallback(wanted: Sequence[str], catalog_genres: Iterable[str]) -> None:

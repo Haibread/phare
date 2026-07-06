@@ -11,7 +11,7 @@ from phare.recommend import genres
 from phare.recommend.schema import Candidate
 
 
-def _cand(*, title: str, genre_names: list[str]) -> Candidate:
+def _cand(*, title: str, genre_names: list[str], language: str | None = None) -> Candidate:
     return Candidate(
         title_id=uuid.uuid4(),
         title=title,
@@ -21,6 +21,7 @@ def _cand(*, title: str, genre_names: list[str]) -> Candidate:
         keywords=[],
         runtime_minutes=120,
         popularity=None,
+        original_language=language,
         overview=None,
         similarity=0.5,
     )
@@ -58,12 +59,94 @@ def test_french_localized_vocabulary_still_steers_against_english_catalog() -> N
 
 
 def test_anime_alias_resolves_to_animation() -> None:
-    # First-step anime handling (round 8, item 4): "anime" and its French/accented forms resolve to
-    # the Animation catalog label. True anime (Animation + Japanese origin) is a later round.
+    # "anime" and its French/accented forms resolve to the Animation catalog label (the genre half
+    # of the constraint); the origin half (ja) is tested below.
     for word in ("anime", "animé", "animés", "animes"):
         assert genres.canonical(word) == "animation"
         assert genres.term_matches(word, "Animation")
+        assert genres.origin_language_for(word) == "ja"  # ...and each is origin-scoped to Japan
     assert genres.matches_any(["anime"], ["Animation"])
+    assert genres.origin_language_for("animation") is None  # plain animation is NOT origin-scoped
+
+
+# --- origin-scoped constraints ("anime" = Animation + ja) ----------------------------------------
+
+
+def test_resolve_catalog_constraints_scopes_anime_to_japanese_origin() -> None:
+    catalog = ["Animation", "Comedy", "Drama"]
+    constraints = genres.resolve_catalog_constraints(["anime"], catalog)
+    assert constraints == [genres.GenreConstraint(labels=("Animation",), original_language="ja")]
+
+
+def test_resolve_catalog_constraints_plain_animation_carries_no_language() -> None:
+    catalog = ["Animation", "Comedy"]
+    constraints = genres.resolve_catalog_constraints(["animation"], catalog)
+    assert constraints == [genres.GenreConstraint(labels=("Animation",))]
+    assert constraints[0].original_language is None
+
+
+def test_resolve_catalog_constraints_mixes_plain_and_scoped_as_separate_or_terms() -> None:
+    # "anime or comedy": the ja condition binds only to the anime constraint — a Japanese comedy
+    # must not be demanded (OR semantics, matching the in-memory filter).
+    catalog = ["Animation", "Comedy"]
+    constraints = genres.resolve_catalog_constraints(["anime", "comedy"], catalog)
+    assert genres.GenreConstraint(labels=("Comedy",)) in constraints
+    assert genres.GenreConstraint(labels=("Animation",), original_language="ja") in constraints
+
+
+def test_resolve_catalog_constraints_downgrades_anime_without_coverage_and_records(
+    caplog,
+) -> None:
+    # Pre-heal catalog (0% original_language): the ja condition would exclude everything, so anime
+    # downgrades to plain Animation — visibly, never silently.
+    catalog = ["Animation"]
+    with caplog.at_level(logging.WARNING, logger="phare.fallback"):
+        constraints = genres.resolve_catalog_constraints(
+            ["anime"], catalog, language_coverage=False
+        )
+    assert constraints == [genres.GenreConstraint(labels=("Animation",))]
+    assert any(
+        r.name == "phare.fallback" and getattr(r, "reason", "") == "anime_language_unknown"
+        for r in caplog.records
+    )
+
+
+def test_intent_filter_anime_keeps_only_japanese_animation() -> None:
+    # The coordinator's live case: a Batman-heavy profile asking for anime got DC animated movies.
+    # With language data present, "anime" must keep Animation + ja only — western animation and a
+    # Japanese non-animation title both fail.
+    ja_anime = _cand(title="Akira", genre_names=["Animation"], language="ja")
+    western = _cand(title="Batman: Mask of the Phantasm", genre_names=["Animation"], language="en")
+    ja_drama = _cand(title="Shoplifters", genre_names=["Drama"], language="ja")
+    unhealed = _cand(title="Old Cartoon", genre_names=["Animation"], language=None)
+    kept = intent_filter(ChatIntent(include_genres=["anime"]))(
+        [ja_anime, western, ja_drama, unhealed]
+    )
+    # NULL-language animation is excluded too (coverage exists → honest thin slate, no guessing).
+    assert [c.title for c in kept] == ["Akira"]
+
+
+def test_intent_filter_plain_animation_ignores_language() -> None:
+    # "animation" (and "dessin animé" per the mood map) stays a plain genre: all Animation passes.
+    ja_anime = _cand(title="Akira", genre_names=["Animation"], language="ja")
+    western = _cand(title="Batman: Mask of the Phantasm", genre_names=["Animation"], language="en")
+    drama = _cand(title="Heat", genre_names=["Drama"], language="en")
+    kept = intent_filter(ChatIntent(include_genres=["animation"]))([ja_anime, western, drama])
+    assert {c.title for c in kept} == {"Akira", "Batman: Mask of the Phantasm"}
+
+
+def test_intent_filter_anime_downgrades_on_a_preheal_pool_and_records(caplog) -> None:
+    # Pre-heal: no candidate carries a language at all, so the origin condition is unenforceable —
+    # anime downgrades to plain Animation (stays useful) and the downgrade is recorded.
+    western = _cand(title="Batman: Mask of the Phantasm", genre_names=["Animation"], language=None)
+    drama = _cand(title="Heat", genre_names=["Drama"], language=None)
+    with caplog.at_level(logging.WARNING, logger="phare.fallback"):
+        kept = intent_filter(ChatIntent(include_genres=["anime"]))([western, drama])
+    assert [c.title for c in kept] == ["Batman: Mask of the Phantasm"]
+    assert any(
+        r.name == "phare.fallback" and getattr(r, "reason", "") == "anime_language_unknown"
+        for r in caplog.records
+    )
 
 
 def test_short_terms_require_equality_not_substring() -> None:
