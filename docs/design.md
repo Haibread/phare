@@ -12,6 +12,15 @@ filters) → re-ranker → explanations (LLM)`.
   watched, apply hard-avoids, apply chat intent filters). The pgvector HNSW index is *approximate*,
   so the search widens `hnsw.ef_search` and breaks distance ties on the stable catalog id — the
   same profile gets the same candidates every load, keeping the re-ranker below deterministic.
+  - **Adaptive constraint-aware re-fetch.** The first pass retrieves the nearest-to-centroid slice
+    and prunes it with the intent filter *after* the fact. For a taste centred elsewhere than the
+    requested genre (a thriller fan asking for a light comedy), almost none of those neighbours
+    match, so the filtered pool — and then the runtime cap + relevance floor — collapses to ~1. When
+    the filtered pool falls below what the re-ranker needs, Phare re-runs the ANN with the constraint
+    pushed into **SQL** (array-overlap on the intent genres resolved to canonical catalog labels,
+    plus `runtime_minutes <= cap OR runtime IS NULL`), so it ranks the nearest titles *within the
+    matching subspace* instead of hoping the global-nearest slice contained matches. It keeps the
+    honest relevance floor — a genuinely thin catalog stays thin, never padded with weak matches.
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,

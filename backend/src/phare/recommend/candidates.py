@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select, text, true
+from sqlalchemy import or_, select, text, true
 from sqlalchemy.orm import Session
 
 from phare.core.fallback import record_fallback
@@ -44,12 +44,23 @@ def generate_candidates(
     limit: int = 50,
     hard_avoids: Sequence[str] = (),
     from_watched: bool = False,
+    genre_labels: Sequence[str] = (),
+    max_runtime: int | None = None,
 ) -> list[Candidate]:
     """Nearest titles to the centroid, hard-avoids removed.
 
     Default: catalog titles the profile has *not* watched (find something new). With
     ``from_watched=True`` the source flips to titles the profile *has* watched — the candidate pool
     for a rewatch, ranked the same way (nearest the taste centroid).
+
+    ``genre_labels`` / ``max_runtime`` push a constraint into SQL so the ANN searches the *right*
+    subspace instead of the taste-nearest slice that may contain few matches (round-7 finding 1).
+    ``genre_labels`` are canonical catalog genre strings (already alias-resolved by the caller — see
+    :func:`resolve_catalog_genres`); a title matches when its ``genres`` array overlaps them. A
+    ``max_runtime`` keeps titles at/under the cap **or** with an unknown (NULL) runtime — the
+    runtime heal runs on the retrieved pool afterwards, so a still-NULL row is a candidate the cap
+    can't yet judge, not one to exclude. Ranking (distance to centroid + stable tie-break) is
+    unchanged, so the filtered result is the true nearest matches, deterministic under wide search.
     """
     watched = watched_title_ids(session, profile_id)
     if from_watched and not watched:
@@ -60,6 +71,15 @@ def generate_candidates(
         scope = Title.id.notin_(watched)
     else:
         scope = true()
+    constraints = [scope]
+    if genre_labels:
+        # Array overlap (``&&``): keep titles tagged with at least one of the resolved labels. The
+        # labels are canonical, so this honours the same alias semantics as ``genres.matches_any``.
+        constraints.append(Title.genres.op("&&")(list(genre_labels)))
+    if max_runtime is not None:
+        constraints.append(
+            or_(Title.runtime_minutes.is_(None), Title.runtime_minutes <= max_runtime)
+        )
     distance = TitleEmbedding.embedding.cosine_distance(list(centroid))
     # Over-fetch so the post-filter for hard-avoids can't starve the result below ``limit``.
     pool = limit * 3 + len(hard_avoids) + 10
@@ -74,7 +94,7 @@ def generate_candidates(
         .join(TitleEmbedding, TitleEmbedding.title_id == Title.id)
         .where(
             TitleEmbedding.model_version == model_version,
-            scope,
+            *constraints,
         )
         # Break exact-distance ties on the stable catalog id (``tmdb_id``, not the per-insert
         # random UUID) so the ``limit(pool)`` cutoff resolves identically on every run and process.

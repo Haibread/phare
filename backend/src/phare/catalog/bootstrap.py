@@ -132,6 +132,26 @@ def heal_missing_quality_signal(session: Session, settings: Settings, source: ob
     return created
 
 
+def _schedule_runtime_heal_if_gapped(session: Session, settings: Settings) -> bool:
+    """Kick off the background bulk runtime backfill when the catalog's runtime gap is large.
+
+    Split from the boot path so it's testable in isolation. The gauge + scheduler live in
+    :mod:`phare.catalog.runtime_backfill`; the scheduler itself re-checks the TMDB key and dedups
+    concurrent starts, so this only gates on the gap (cheap count) to avoid spinning up a thread
+    when there's nothing to heal. Returns True when a heal was scheduled."""
+    from phare.catalog.runtime_backfill import (
+        _MAX_RUNTIME_GAP,
+        runtime_gap,
+        schedule_runtime_backfill,
+    )
+
+    gap = runtime_gap(session)
+    if gap <= _MAX_RUNTIME_GAP:
+        return False
+    logger.info("catalog.autoseed.runtime_heal_scheduled", extra={"runtime_gap": round(gap, 2)})
+    return schedule_runtime_backfill(settings)
+
+
 def autoseed_scope(settings: Settings) -> str:
     """Resolve the autoseed scope. ``auto`` means broad in production (so a prod box deep-seeds
     itself, no operator command) and popular elsewhere (so dev never fans out tens of thousands)."""
@@ -180,6 +200,12 @@ def seed_catalog_if_empty(settings: Settings) -> int:
                     embedding_model_version(settings),
                 )
                 session.commit()
+                # Runtime is the one field the discover import (and so the rating re-pull above)
+                # can't fill — it needs a per-title detail call. When most of the catalog is still
+                # runtime-less, schedule a BACKGROUND bulk heal so a runtime cap stops filtering on
+                # a ghost catalog (finding 2); it runs off the boot path, so readiness isn't gated
+                # on it, and no-ops when coverage is already healthy or TMDB is unset.
+                _schedule_runtime_heal_if_gapped(session, settings)
                 return 0
             logger.info("catalog.autoseed.start", extra={"pool": pool, "scope": scope})
             provider = TMDBMetadataProvider(

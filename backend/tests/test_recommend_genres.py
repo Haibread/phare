@@ -116,3 +116,16 @@ def test_translate_genre_localizes_and_falls_back(caplog) -> None:
     assert any(
         r.message == "genre_translation.fallback" and r.reason == "unmapped" for r in caplog.records
     )
+
+
+def test_resolve_catalog_genres_maps_intent_words_to_stored_labels() -> None:
+    # The SQL re-fetch needs the *literal* catalog labels to overlap against. Loose intent words
+    # (aliases, casing, a substring) resolve to the exact stored labels via the shared match rule;
+    # a word matching no catalog genre resolves to nothing (the caller then skips the SQL filter).
+    catalog = ["Comedy", "Science Fiction", "Thriller", "Horror"]
+    assert genres.resolve_catalog_genres(["comedy"], catalog) == ["Comedy"]
+    assert genres.resolve_catalog_genres(["comédie"], catalog) == ["Comedy"]  # FR alias
+    assert genres.resolve_catalog_genres(["sci-fi"], catalog) == ["Science Fiction"]  # alias
+    assert genres.resolve_catalog_genres(["western"], catalog) == []  # not in this catalog
+    # Multiple wants dedup to the union of matched labels, in stable (sorted) order.
+    assert genres.resolve_catalog_genres(["comedy", "horror"], catalog) == ["Comedy", "Horror"]

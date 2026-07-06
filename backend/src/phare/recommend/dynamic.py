@@ -222,6 +222,9 @@ def dynamic_rows(
             profile_id,
             taste=taste,
             candidate_filter=_genre_filter(theme.include_genres),
+            # Structured genres let the engine push the lens into SQL and re-search the matching
+            # subspace when the nearest-slice filter starves the row (finding 1).
+            include_genres=theme.include_genres,
             swing_slots=theme.swing_slots,
             explainer=explainer,
         )

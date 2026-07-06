@@ -209,6 +209,10 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         ctx.profile_id,
         extra_hard_avoids=intent.exclude_genres,
         candidate_filter=intent_filter(intent),
+        # Structured form of the same constraint: lets the engine push genre/runtime into SQL and
+        # re-search the matching subspace when the post-hoc filter starves the pool (finding 1).
+        include_genres=intent.include_genres,
+        max_runtime=intent.max_runtime,
         rewatch=intent.rewatch,
         vote_mix=True,  # chat slates mix well-known/lesser-known/low-vote, ordered by votes
         explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
