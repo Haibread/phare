@@ -149,6 +149,14 @@ export const titleDetailSchema = z.object({
   posterUrl: z.string().nullable(),
   tmdbUrl: z.string().nullable(),
   imdbUrl: z.string().nullable(),
+  // Richer TMDB metadata (backfilled in the background — old rows heal over hours). Each field is
+  // tolerant of an older backend that doesn't send it yet: arrays default to empty, scalars to null,
+  // so the UI simply omits the corresponding row rather than crashing on a missing key.
+  directors: z.array(z.string()).default([]),
+  topCast: z.array(z.string()).default([]),
+  voteAverage: z.number().nullable().default(null),
+  voteCount: z.number().nullable().default(null),
+  originalLanguage: z.string().nullable().default(null),
 });
 export type TitleDetail = z.infer<typeof titleDetailSchema>;
 

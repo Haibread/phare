@@ -150,6 +150,32 @@ describe("PosterCard", () => {
     expect(fallback).toHaveTextContent("Untitled");
   });
 
+  describe("search fit gauge (round 8: confidence now arrives on search results)", () => {
+    it("renders a role=meter gauge for a search item that carries a confidence", () => {
+      // hideNullFit is how Search opts in: a real confidence still earns the gauge.
+      renderCard(<PosterCard item={recItem({ confidence: 0.8 })} hideNullFit={true} />);
+      const gauge = screen.getByTestId("fit");
+      expect(gauge).toHaveAttribute("role", "meter");
+      expect(gauge).toHaveAttribute("aria-label", "Strong fit");
+    });
+
+    it("renders no gauge for a search item with null confidence (older backend / no taste)", () => {
+      // Against an older backend the confidence is null; the gauge stays absent rather than showing
+      // a misleading neutral sliver.
+      renderCard(<PosterCard item={recItem({ confidence: null })} hideNullFit={true} />);
+      expect(screen.queryByTestId("fit")).toBeNull();
+    });
+
+    it("names the open button without a fit when a null-confidence search card hides it", () => {
+      renderCard(
+        <PosterCard item={recItem({ title: "Moon", confidence: null })} hideNullFit={true} />,
+      );
+      const label = screen.getByTestId("rec-card-open").getAttribute("aria-label") ?? "";
+      expect(label).toContain("Moon");
+      expect(label).not.toContain("fit");
+    });
+  });
+
   it("no longer renders the request action on the card (round 4)", () => {
     // The request/availability control moved into the detail sheet. Even under a configured
     // availability provider (as Search wraps its grid), the *card* body must not surface it —

@@ -118,6 +118,17 @@ rows expose an honest signal of their *own* kind, not a fake taste score:
 Items the profile has already watched carry a `watched` flag, so the UI badges them "Watched" — most
 visibly in **search**, where a title you've seen can turn up and should say so (review A11).
 
+Search cards also show the **fit gauge** when the backend attaches a per-item `confidence` (the
+profile has a taste + embeddings). Against an older backend, or a profile with no taste, `confidence`
+is `null` and the gauge is **omitted** on search (rather than the neutral "worth a look" sliver the
+home rows show for a null) — a raw catalog search shouldn't imply an affinity the engine can't back.
+
+The **title detail sheet** surfaces the richer TMDB metadata a title carries once it's backfilled:
+the star **rating** (`★ 7.8 · 12 400 votes`, locale-formatted; a soft "few ratings" hint appears
+under ~200 votes, mirroring the reranker's unproven-cap honesty) and the **credits** (director(s),
+top cast). Every one of these fields can be absent on an un-healed row — the metadata backfills in
+the background over hours — so each renders only when present and its line simply disappears otherwise.
+
 Because `continue_watching`'s confidence is recency warmth ("how far into the show you are") and not
 a *taste-fit* signal, the UI **doesn't render the fit gauge** on that row — the same gauge meaning
 "how far in" on one row and "how well it fits you" on another would make one control mean two things

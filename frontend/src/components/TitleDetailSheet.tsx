@@ -124,6 +124,29 @@ export function TitleDetailSheet({
     .filter(Boolean)
     .join(" · ");
 
+  // Rating + credits ride on the lazily-fetched detail (backfilled server-side, so any field may be
+  // absent on an old row — the UI omits the corresponding line rather than showing a dash).
+  const voteAverage = detail.data?.voteAverage ?? null;
+  const voteCount = detail.data?.voteCount ?? null;
+  // Below this vote count the score is barely proven — mirror the engine's unproven-cap honesty with
+  // a soft "few ratings" hint instead of implying a settled average (matches the reranker's floor).
+  const FEW_VOTES = 200;
+  const directors = detail.data?.directors ?? [];
+  const topCast = detail.data?.topCast ?? [];
+  // Locale-aware grouping: 12400 → "12,400" (en) / "12 400" (fr). The score keeps one decimal.
+  const numberFmt = new Intl.NumberFormat(i18n.language);
+  const rating =
+    voteAverage !== null
+      ? t("detail.rating", {
+          score: new Intl.NumberFormat(i18n.language, {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+          }).format(voteAverage),
+          count: numberFmt.format(voteCount ?? 0),
+        })
+      : null;
+  const ratingIsThin = voteAverage !== null && (voteCount ?? 0) < FEW_VOTES;
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={item.title}>
       <div className={styles.detail} data-testid="title-detail">
@@ -135,6 +158,34 @@ export function TitleDetailSheet({
         </div>
         <div className={styles.detailBody}>
           {meta && <p className={`muted ${styles.detailMeta}`}>{meta}</p>}
+          {rating && (
+            // TMDB rating near the year/genre line. No voteAverage → nothing (no dash clutter);
+            // a real score on very few votes appends a soft "few ratings" hint (unproven-cap honesty).
+            <p className={styles.detailRating} data-testid="detail-rating">
+              {rating}
+              {ratingIsThin && (
+                <span className={styles.detailRatingHint} data-testid="detail-rating-thin">
+                  {" "}
+                  · {t("detail.ratingFew")}
+                </span>
+              )}
+            </p>
+          )}
+          {directors.length > 0 && (
+            // "Directed by …" / «De …» — comma-joined, one compact ellipsized line (mobile-first).
+            <p className={styles.detailCredit} data-testid="detail-directors">
+              {t("detail.directedBy", {
+                count: directors.length,
+                names: directors.join(", "),
+              })}
+            </p>
+          )}
+          {topCast.length > 0 && (
+            // "With A, B, C" / «Avec …» — one compact ellipsized line.
+            <p className={styles.detailCredit} data-testid="detail-cast">
+              {t("detail.cast", { names: topCast.join(", ") })}
+            </p>
+          )}
           {showFit && (
             // The worded fit lives here now that the card gauge dropped its inline text (R6a). Tone
             // mirrors the gauge so a strong fit reads saffron; swings keep their categorical wording.

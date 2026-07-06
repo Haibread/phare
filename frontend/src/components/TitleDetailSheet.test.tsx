@@ -1,10 +1,32 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type RenderResult, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type RecommendationItem, api } from "../api";
+import { type RecommendationItem, type TitleDetail, api } from "../api";
 import { ProfileProvider } from "../app/ProfileContext";
+import i18n from "../i18n";
 import { type AvailabilityCtx, AvailabilityProvider } from "./Availability";
 import { TitleDetailSheet } from "./TitleDetailSheet";
+
+function titleDetail(overrides: Partial<TitleDetail> = {}): TitleDetail {
+  return {
+    titleId: "t1",
+    title: "Arrival",
+    kind: "movie",
+    year: 2016,
+    runtimeMinutes: 116,
+    genres: ["Science Fiction"],
+    overview: "A linguist makes first contact.",
+    posterUrl: null,
+    tmdbUrl: null,
+    imdbUrl: null,
+    directors: [],
+    topCast: [],
+    voteAverage: null,
+    voteCount: null,
+    originalLanguage: null,
+    ...overrides,
+  };
+}
 
 function renderSheet(
   ui: React.ReactElement,
@@ -61,6 +83,96 @@ describe("TitleDetailSheet", () => {
 
     const why = await screen.findByTestId("detail-why");
     await waitFor(() => expect(why).toHaveTextContent("Because you loved tense, cerebral sci-fi."));
+  });
+
+  describe("rating (round 8: TMDB vote average + count)", () => {
+    afterEach(() => {
+      void i18n.changeLanguage("en");
+    });
+
+    it("shows a locale-formatted star rating and vote count near the metadata", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ voteAverage: 7.8, voteCount: 12400 }),
+      );
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      const rating = await screen.findByTestId("detail-rating");
+      // en grouping: "12,400"; the score keeps one decimal.
+      expect(rating).toHaveTextContent("★ 7.8 · 12,400 votes");
+      // A well-rated title carries no "few ratings" caveat.
+      expect(screen.queryByTestId("detail-rating-thin")).toBeNull();
+    });
+
+    it("groups the vote count in French", async () => {
+      await i18n.changeLanguage("fr");
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ voteAverage: 7.8, voteCount: 12400 }),
+      );
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      const rating = await screen.findByTestId("detail-rating");
+      // fr uses a narrow no-break space as the thousands separator — assert on the digits + label.
+      expect(rating.textContent).toMatch(/★ 7,8 · 12.400 votes/);
+    });
+
+    it("appends a soft 'few ratings' hint when the vote count is tiny", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ voteAverage: 8.1, voteCount: 40 }),
+      );
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      expect(await screen.findByTestId("detail-rating-thin")).toHaveTextContent("few ratings");
+    });
+
+    it("renders no rating line at all when there is no vote average (no dash clutter)", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ voteAverage: null, voteCount: null }),
+      );
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      // Wait for the detail to load (synopsis appears), then assert the rating line is absent.
+      await screen.findByText("A linguist makes first contact.");
+      expect(screen.queryByTestId("detail-rating")).toBeNull();
+    });
+  });
+
+  describe("credits (round 8: directors + top cast)", () => {
+    it("shows the director(s) and cast, comma-joined", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({
+          directors: ["Denis Villeneuve"],
+          topCast: ["Amy Adams", "Jeremy Renner", "Forest Whitaker"],
+        }),
+      );
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      expect(await screen.findByTestId("detail-directors")).toHaveTextContent(
+        "Directed by Denis Villeneuve",
+      );
+      expect(screen.getByTestId("detail-cast")).toHaveTextContent(
+        "With Amy Adams, Jeremy Renner, Forest Whitaker",
+      );
+    });
+
+    it("uses a plural director label for multiple directors", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ directors: ["Joel Coen", "Ethan Coen"] }),
+      );
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      expect(await screen.findByTestId("detail-directors")).toHaveTextContent(
+        "Directors: Joel Coen, Ethan Coen",
+      );
+    });
+
+    it("omits each credit row entirely when its array is empty (graceful absence)", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(titleDetail({ directors: [], topCast: [] }));
+      renderSheet(<TitleDetailSheet item={recItem()} open={true} onOpenChange={() => {}} />);
+      await screen.findByText("A linguist makes first contact.");
+      expect(screen.queryByTestId("detail-directors")).toBeNull();
+      expect(screen.queryByTestId("detail-cast")).toBeNull();
+    });
   });
 
   describe("worded fit label (R6a: the card gauge dropped its inline text)", () => {
