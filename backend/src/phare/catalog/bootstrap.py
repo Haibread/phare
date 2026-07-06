@@ -133,22 +133,42 @@ def heal_missing_quality_signal(session: Session, settings: Settings, source: ob
 
 
 def _schedule_runtime_heal_if_gapped(session: Session, settings: Settings) -> bool:
-    """Kick off the background bulk runtime backfill when the catalog's runtime gap is large.
+    """Kick off the background bulk metadata backfill when the catalog needs one.
 
-    Split from the boot path so it's testable in isolation. The gauge + scheduler live in
-    :mod:`phare.catalog.runtime_backfill`; the scheduler itself re-checks the TMDB key and dedups
-    concurrent starts, so this only gates on the gap (cheap count) to avoid spinning up a thread
-    when there's nothing to heal. Returns True when a heal was scheduled."""
+    Two triggers, different severities. A *large* metadata gap (share above ``_MAX_METADATA_GAP``,
+    the post-broad-seed state) schedules a pass for coverage. But *any* embedded genre-less title
+    schedules one too, regardless of share: its vector was computed from a skeletal document and
+    ANN-matches everything (the round-11 semantic-search pollution), so even a 2% backlog actively
+    corrupts retrieval — and the walker clears it in a handful of rate-capped batches. Split from
+    the boot path so it's testable in isolation; the scheduler itself re-checks the TMDB key and
+    dedups concurrent starts. Returns True when a heal was scheduled."""
+    from sqlalchemy import exists
+
     from phare.catalog.runtime_backfill import (
         _MAX_METADATA_GAP,
         metadata_gap,
         schedule_runtime_backfill,
     )
+    from phare.db.models import TitleEmbedding
 
     gap = metadata_gap(session)
-    if gap <= _MAX_METADATA_GAP:
+    poisoned = bool(
+        session.scalar(
+            select(
+                exists().where(
+                    TitleEmbedding.title_id == Title.id,
+                    Title.tmdb_id.is_not(None),  # unfillable without a TMDB id — don't loop on it
+                    func.coalesce(func.cardinality(Title.genres), 0) == 0,
+                )
+            )
+        )
+    )
+    if gap <= _MAX_METADATA_GAP and not poisoned:
         return False
-    logger.info("catalog.autoseed.metadata_heal_scheduled", extra={"metadata_gap": round(gap, 2)})
+    logger.info(
+        "catalog.autoseed.metadata_heal_scheduled",
+        extra={"metadata_gap": round(gap, 2), "poisoned_embeddings": poisoned},
+    )
     return schedule_runtime_backfill(settings)
 
 

@@ -195,6 +195,48 @@ def test_boot_gate_schedules_only_when_gap_is_large(db_session: Session) -> None
         mod.schedule_runtime_backfill = original  # type: ignore[assignment]
 
 
+def test_boot_gate_schedules_on_any_poisoned_embedding(db_session: Session) -> None:
+    # Round-11: an *embedded* genre-less title corrupts ANN retrieval regardless of the gap share,
+    # so the boot gate schedules a pass even on an otherwise-healthy catalog. A genre-less row
+    # without an embedding (or without a tmdb_id — unfillable) doesn't trip the trigger.
+    covered = [_add(db_session, tmdb_id=5200 + i, runtime=100) for i in range(8)]
+    _ = covered
+    genreless_unembedded = _add(db_session, tmdb_id=5300, runtime=100, genres=[])
+    _ = genreless_unembedded
+    orphan = _add(db_session, tmdb_id=5301, runtime=100, genres=[])
+    orphan.tmdb_id = None  # unfillable — must not schedule a walk that can't heal it
+    db_session.flush()
+    db_session.add(
+        TitleEmbedding(
+            title_id=orphan.id, model_version="fake-model", embedding=[0.1] * EMBEDDING_DIM
+        )
+    )
+    db_session.flush()
+    calls: list[bool] = []
+
+    import phare.catalog.runtime_backfill as mod
+
+    original = mod.schedule_runtime_backfill
+    mod.schedule_runtime_backfill = lambda settings, **_: calls.append(True) or True  # type: ignore[assignment]
+    try:
+        # Genre-less rows exist but none is both embedded AND fillable → no schedule (gap is small).
+        assert _schedule_runtime_heal_if_gapped(db_session, Settings(tmdb_api_key="x")) is False
+        assert calls == []
+
+        poisoned = _add(db_session, tmdb_id=5302, runtime=100, genres=[])
+        db_session.flush()
+        db_session.add(
+            TitleEmbedding(
+                title_id=poisoned.id, model_version="fake-model", embedding=[0.1] * EMBEDDING_DIM
+            )
+        )
+        db_session.flush()
+        assert _schedule_runtime_heal_if_gapped(db_session, Settings(tmdb_api_key="x")) is True
+        assert calls == [True]
+    finally:
+        mod.schedule_runtime_backfill = original  # type: ignore[assignment]
+
+
 def test_metadata_gap_counts_genreless_rows(db_session: Session) -> None:
     # Round-11: an empty ``genres`` starves the embedding document and the SQL genre filters, so a
     # genre-less row is a fillable gap even when runtime + language are already present.
