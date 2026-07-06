@@ -91,6 +91,20 @@ class MetadataProvider(Protocol):
     def find_by_imdb(self, imdb_id: str) -> ExternalMatch | None: ...
 
 
+def canonical_source[ProviderT](provider: ProviderT) -> ProviderT:
+    """The language-neutral view of a metadata provider, for writes to canonical ``Title`` rows.
+
+    A provider bound to a request language (TMDB built with ``language=...``) serves localized
+    text — fine for display (the ``title_localization`` cache) and for *matching* a title typed in
+    the user's language, never for persisting canonical metadata (see docs/data-model.md,
+    "Canonical vs localized text"). Such providers expose ``canonical()`` returning a
+    language-neutral twin; anything without one (a neutral TMDB instance, test fakes) is already
+    canonical and returned as-is.
+    """
+    fn = getattr(provider, "canonical", None)
+    return fn() if callable(fn) else provider
+
+
 @runtime_checkable
 class SourceProvider(Protocol):
     """Pulls a user's watch/rating history as a normalized event stream (e.g. Trakt)."""

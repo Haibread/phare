@@ -60,8 +60,15 @@ def _client(session: Session, provider: object) -> TestClient:
 
 
 def _seed_title(
-    session: Session, *, runtime_minutes: int | None = None, tmdb_id: int | None = 42
+    session: Session,
+    *,
+    runtime_minutes: int | None = None,
+    tmdb_id: int | None = 42,
+    original_language: str | None = "en",
 ) -> Title:
+    # Defaults to a known language + genres so a row with a runtime has no metadata gap; tests opt
+    # into "gapped" (which makes the detail open spend a canonical heal fetch) via runtime=None or
+    # original_language=None.
     title = Title(
         kind=TitleKind.movie,
         title="Dune",
@@ -71,15 +78,28 @@ def _seed_title(
         keywords=["desert"],
         overview=_BASE_OVERVIEW,
         runtime_minutes=runtime_minutes,
+        original_language=original_language,
     )
     session.add(title)
     session.flush()
     return title
 
 
+def test_first_open_of_a_complete_row_spends_no_heal_fetch(db_session: Session) -> None:
+    # A row with no metadata gap (runtime + language + genres) must cost exactly one fetch on first
+    # open: the localization. The canonical heal fetch is gated on the gap sentinel.
+    title = _seed_title(db_session, runtime_minutes=155)
+    provider = _CountingProvider(_meta(runtime_minutes=155))
+
+    _client(db_session, provider).get(f"/titles/{title.id}")
+
+    assert provider.calls == 1
+
+
 def test_first_open_localizes_and_caches(db_session: Session) -> None:
-    title = _seed_title(db_session)
-    provider = _CountingProvider(_meta())
+    # Complete row (no gap) so the fetch count isolates the localization path.
+    title = _seed_title(db_session, runtime_minutes=155)
+    provider = _CountingProvider(_meta(runtime_minutes=155))
 
     body = _client(db_session, provider).get(f"/titles/{title.id}").json()
 
@@ -248,9 +268,9 @@ def test_detail_surfaces_credits_language_and_votes(db_session: Session) -> None
 
 
 def test_detail_open_heals_missing_credits_and_language(db_session: Session) -> None:
-    # A discover-seeded row has no credits/language; opening it must heal them from the same TMDB
-    # fetch that localizes, and persist — the read-path heal now covers credits, not just runtime.
-    title = _seed_title(db_session, runtime_minutes=None)
+    # A discover-seeded row has no credits/language; opening it must heal them (via the dedicated
+    # canonical fetch) and persist — the read-path heal covers credits, not just runtime.
+    title = _seed_title(db_session, runtime_minutes=None, original_language=None)
     provider = _CountingProvider(
         TitleMetadata(
             kind=TitleKind.movie,
@@ -274,6 +294,61 @@ def test_detail_open_heals_missing_credits_and_language(db_session: Session) -> 
     assert healed.directors == ["Denis Villeneuve"]
     assert healed.top_cast == ["Timothée Chalamet"]
     assert healed.original_language == "en"
+
+
+class _BilingualProvider:
+    """A language-bound provider (French responses) whose ``canonical()`` twin serves English.
+
+    Mirrors the production TMDB provider: the request-language instance localizes everything
+    (including genre labels), and ``canonical()`` returns the language-neutral view.
+    """
+
+    def __init__(self, language: str | None = "fr") -> None:
+        self._language = language
+
+    def canonical(self) -> _BilingualProvider:
+        return _BilingualProvider(language=None)
+
+    def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata | None:
+        localized = self._language == "fr"
+        return TitleMetadata(
+            kind=TitleKind.movie,
+            tmdb_id=tmdb_id,
+            title="Dune",
+            overview="Synopsis en français." if localized else "English synopsis.",
+            genres=["Science-Fiction fr"] if localized else ["Science Fiction"],
+            runtime_minutes=148,
+            original_language="en",
+        )
+
+
+def test_detail_heal_never_writes_localized_genres_to_the_canonical_row(
+    db_session: Session,
+) -> None:
+    # The armed landmine (round 12): the detail open localizes through a language-bound provider,
+    # and the heal now fills genres — a language=fr fetch would write French genre labels into the
+    # canonical column, breaking every (English-vocabulary) genre filter. The heal must fetch
+    # through the provider's canonical() view; the localized labels go to the display cache only.
+    title = Title(
+        kind=TitleKind.movie,
+        title="Dune",
+        year=2021,
+        tmdb_id=42,
+        genres=[],  # gapped → the open triggers the heal
+        overview=_BASE_OVERVIEW,
+    )
+    db_session.add(title)
+    db_session.flush()
+
+    body = _client(db_session, _BilingualProvider()).get(f"/titles/{title.id}").json()
+
+    assert body["genres"] == ["Science-Fiction fr"]  # display stays localized
+    db_session.expire(title)
+    healed = db_session.get(Title, title.id)
+    assert healed.genres == ["Science Fiction"]  # canonical row got the canonical labels
+    assert healed.runtime_minutes == 148
+    cached = db_session.get(TitleLocalization, {"title_id": title.id, "language": "en"})
+    assert cached is not None and cached.genres == ["Science-Fiction fr"]  # cache holds display
 
 
 def test_title_model_credits_language_round_trip(db_session: Session) -> None:

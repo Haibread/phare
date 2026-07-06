@@ -162,6 +162,41 @@ def test_tmdb_language_is_sent_and_localises_the_response() -> None:
     assert meta.genres == ["Science-Fiction"]
 
 
+def test_tmdb_canonical_twin_drops_the_language_and_shares_the_cache() -> None:
+    # canonical() is the language-neutral view for canonical Title writes: same client + cache, no
+    # ``language`` param (TMDB's en-US default). The language sits in the cache key, so localized
+    # and canonical reads cache separately — a canonical fetch never serves a localized payload.
+    calls: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params.get("language"))
+        localized = request.url.params.get("language") == "fr"
+        return httpx.Response(
+            200,
+            json={
+                "id": 438631,
+                "title": "Dune (fr)" if localized else "Dune",
+                "overview": "Paul sur Arrakis." if localized else "Paul on Arrakis.",
+            },
+        )
+
+    localized = _tmdb(handler, language="fr", cache=TTLCache(ttl=300))
+    canonical = localized.canonical()
+
+    loc_meta = localized.get_title(438631, TitleKind.movie)
+    canon_meta = canonical.get_title(438631, TitleKind.movie)
+
+    assert calls == ["fr", None]  # distinct cache keys → both fetched, canonical without language
+    assert loc_meta is not None and loc_meta.overview == "Paul sur Arrakis."
+    assert canon_meta is not None and canon_meta.overview == "Paul on Arrakis."
+    # A repeat canonical read is a cache hit on the shared cache (no third HTTP call).
+    canonical.get_title(438631, TitleKind.movie)
+    assert len(calls) == 2
+    # An already-neutral provider is its own canonical view — no twin churn.
+    neutral = _tmdb(handler)
+    assert neutral.canonical() is neutral
+
+
 def test_tmdb_discover_resolves_genres_and_passes_filters() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/genre/movie/list":

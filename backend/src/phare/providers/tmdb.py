@@ -68,6 +68,28 @@ class TMDBMetadataProvider:
         self._max_retries = max_retries
         self._sleep = sleep
 
+    def canonical(self) -> TMDBMetadataProvider:
+        """A language-neutral twin of this provider, for writes to canonical ``Title`` rows.
+
+        A request-language provider serves localized text (French overviews, French genre labels)
+        — correct for display and for matching a locally-typed title, but persisting it into the
+        canonical ``Title`` row poisons the shared embedding space and the English genre vocabulary
+        (see docs/data-model.md, "Canonical vs localized text"). The twin shares this provider's
+        HTTP client and read cache (the language param is part of the cache key, so localized and
+        canonical entries never collide) and simply omits ``language``, i.e. TMDB's en-US default.
+        Returns ``self`` when already language-neutral. Resolved generically at the call sites via
+        :func:`phare.providers.types.canonical_source`.
+        """
+        if self._language is None:
+            return self
+        return TMDBMetadataProvider(
+            self._api_key,
+            client=self._client,
+            cache=self._cache,
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+        )
+
     def _fetch(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         logger.debug("tmdb.request", extra={"path": path})
         response = request_with_retry(

@@ -33,7 +33,38 @@ a crude quality floor). Round 8 adds:
   [`design.md`](design.md), "Origin-scoped genres").
 
 The heal never clobbers a non-empty value — it only fills holes (a NULL scalar or an empty credit
-array), so it's idempotent across re-runs.
+array), so it's idempotent across re-runs. The single exception is the re-canonicalization
+overwrite described below.
+
+### Canonical vs localized text
+
+`Title` rows are **canonical**: `title`, `overview`, `genres` (and everything else on the row) hold
+TMDB's language-neutral form (its en-US default), whatever language the user browses in.
+Per-language display text lives only in the **`title_localization`** cache — one row per
+`(title, language)`, TTL'd, filled lazily by the detail sheet.
+
+The rule exists for two hard reasons: all titles share **one embedding space**, and a
+French-overview document clusters by *language*, not meaning (measured live: a French semantic
+query returned the French-document rows instead of semantic matches); and the genre vocabulary —
+taste affinities, SQL genre filters — is **English**, so a localized genre label (French
+`"Science-Fiction"`) silently matches nothing.
+
+Consequences, enforced in code:
+
+- Every path that **writes** canonical `Title` fields — search upserts, chat discovery upserts, the
+  read-path/detail-sheet heal, the bulk boot backfill — fetches TMDB through the provider's
+  language-neutral `canonical()` view (`canonical_source()` resolves it generically).
+- **Localized fetches feed display and matching only**: the `title_localization` cache, and live
+  search *finding* a title by its localized name ("Amour éternel" still finds *Kara Sevda*). What
+  gets upserted for a new title found that way is a canonical **deep** fetch (which also carries
+  genres/credits/runtime — no more skeletal search upserts); already-known titles skip the fetch
+  and only get their numeric signals refreshed.
+- Rows contaminated before this rule are **re-canonicalized by a boot pass** (see
+  [`configuration.md`](configuration.md)): detected by a French-function-word regex on the
+  overview, their `title`/`overview` are *overwritten* from a canonical fetch — the one deliberate
+  exception to the heal's fill-only rule, because localized text is present-but-poisoned, not
+  missing — and their embeddings dropped for lazy re-embedding. `original_language = 'fr'` rows are
+  exempt (their canonical overview may legitimately be French).
 
 ## TV is a tree
 

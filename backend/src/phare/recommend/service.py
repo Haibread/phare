@@ -23,7 +23,7 @@ from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.backfill import schedule_embedding_backfill
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import is_local_space
-from phare.providers.types import LLMProvider, MetadataProvider
+from phare.providers.types import LLMProvider, MetadataProvider, canonical_source
 from phare.recommend import genres
 from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
@@ -221,6 +221,11 @@ class RecommendationService:
         :mod:`phare.catalog.heal` (it also heals a missing ``vote_average`` / ``vote_count``, left
         NULL by the broad discover import, which silently disabled the re-ranker's quality floor).
         Best-effort per title; the caller owns the commit.
+
+        Fetches through the provider's language-neutral view (:func:`canonical_source`): the chat
+        turn hands its request-language TMDB provider here, and a ``language=fr`` fetch would feed
+        French genre labels into ``apply_metadata_heal``'s genre fill — writing localized text into
+        the canonical row (see docs/data-model.md, "Canonical vs localized text").
         """
         missing = [c for c in candidates if c.runtime_minutes is None][:READ_RUNTIME_CAP]
         if not missing:  # pool already fully runtime'd (the common case once enriched) — no DB hit
@@ -232,7 +237,7 @@ class RecommendationService:
         )
         by_id = {row.id: row for row in rows}
         runtimes: dict[uuid.UUID, int] = {}
-        for title_id, meta in fetch_metadata_parallel(source, rows).items():
+        for title_id, meta in fetch_metadata_parallel(canonical_source(source), rows).items():
             row = by_id[title_id]  # main thread → safe to write
             if apply_metadata_heal(row, meta) and row.runtime_minutes is not None:
                 runtimes[title_id] = row.runtime_minutes

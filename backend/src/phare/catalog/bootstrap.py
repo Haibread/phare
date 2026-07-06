@@ -135,15 +135,20 @@ def heal_missing_quality_signal(session: Session, settings: Settings, source: ob
 def _schedule_runtime_heal_if_gapped(session: Session, settings: Settings) -> bool:
     """Kick off the background bulk metadata backfill when the catalog needs one.
 
-    Two triggers, different severities. A *large* metadata gap (share above ``_MAX_METADATA_GAP``,
-    the post-broad-seed state) schedules a pass for coverage. But *any* embedded genre-less title
-    schedules one too, regardless of share: its vector was computed from a skeletal document and
-    ANN-matches everything (the round-11 semantic-search pollution), so even a 2% backlog actively
-    corrupts retrieval — and the walker clears it in a handful of rate-capped batches. Split from
-    the boot path so it's testable in isolation; the scheduler itself re-checks the TMDB key and
-    dedups concurrent starts. Returns True when a heal was scheduled."""
+    Three triggers, different severities. A *large* metadata gap (share above
+    ``_MAX_METADATA_GAP``, the post-broad-seed state) schedules a pass for coverage. But *any*
+    embedded genre-less title schedules one too, regardless of share: its vector was computed from
+    a skeletal document and ANN-matches everything (the round-11 semantic-search pollution), so
+    even a 2% backlog actively corrupts retrieval — and the walker clears it in a handful of
+    rate-capped batches. Likewise *any* localized-text row (a French overview a language-bound
+    search upsert wrote into the canonical row): its document clusters the embedding space by
+    language, so the walker re-canonicalizes it (see
+    :func:`phare.catalog.runtime_backfill.run_metadata_backfill`). Split from the boot path so
+    it's testable in isolation; the scheduler itself re-checks the TMDB key and dedups concurrent
+    starts. Returns True when a heal was scheduled."""
     from sqlalchemy import exists
 
+    from phare.catalog.heal import localized_text_predicate
     from phare.catalog.runtime_backfill import (
         _MAX_METADATA_GAP,
         metadata_gap,
@@ -163,11 +168,25 @@ def _schedule_runtime_heal_if_gapped(session: Session, settings: Settings) -> bo
             )
         )
     )
-    if gap <= _MAX_METADATA_GAP and not poisoned:
+    localized = bool(
+        session.scalar(
+            select(
+                exists().where(
+                    Title.tmdb_id.is_not(None),  # unfixable without a TMDB id — don't loop on it
+                    localized_text_predicate(),
+                )
+            )
+        )
+    )
+    if gap <= _MAX_METADATA_GAP and not poisoned and not localized:
         return False
     logger.info(
         "catalog.autoseed.metadata_heal_scheduled",
-        extra={"metadata_gap": round(gap, 2), "poisoned_embeddings": poisoned},
+        extra={
+            "metadata_gap": round(gap, 2),
+            "poisoned_embeddings": poisoned,
+            "localized_text": localized,
+        },
     )
     return schedule_runtime_backfill(settings)
 

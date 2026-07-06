@@ -91,6 +91,10 @@ def get_optional_metadata_provider(
 ) -> MetadataProvider | None:
     """TMDB metadata provider bound to the request language, or ``None`` when no TMDB key is set.
 
+    Language-bound means *localized responses* — display and matching only. Anything that writes
+    canonical ``Title`` fields must fetch through ``canonical_source(provider)`` instead (see
+    docs/data-model.md, "Canonical vs localized text").
+
     Injected (rather than built inline) so the title-detail cache fill is testable — a test swaps
     in a counting/failing provider to prove the second open skips TMDB and that an outage is
     absorbed by the stored copy."""

@@ -10,18 +10,24 @@ bulk boot backfill, and any future caller share it).
 
 Idempotent by construction: every write is guarded by ``is None``, so re-running only ever fills
 holes. Best-effort per title: a flaky fetch is logged and skipped, never sinks the batch.
+
+One deliberate exception to fill-only lives here too: :func:`apply_canonical_overwrite`, the
+re-canonicalization primitive that *overwrites* localized text a past language-bound upsert wrote
+into the canonical row (see docs/data-model.md, "Canonical vs localized text").
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import and_, delete
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleEmbedding
@@ -75,6 +81,15 @@ class RateLimiter:
 def apply_metadata_heal(row: Title, meta: TitleMetadata) -> bool:
     """Copy missing metadata (runtime, votes, genres, credits, original language) from ``meta``.
 
+    **Contract: ``meta`` must be canonical (language-neutral).** This is the shared write primitive
+    behind every heal path, and some of what it fills is *text* the whole engine treats as
+    English-canonical — ``genres`` feed the SQL genre filters and the embedding document, credits
+    feed the document too. A localized fetch (TMDB with ``language=fr``) carries French genre
+    labels; persisting those would break every genre filter and cluster the embedding space by
+    language (see docs/data-model.md, "Canonical vs localized text"). Callers holding a
+    request-language provider must fetch through its ``canonical()`` view
+    (:func:`phare.providers.types.canonical_source`) before handing metadata here.
+
     Never clobbers an existing value (idempotent — only fills holes: a NULL scalar or an *empty*
     array). Returns True when *anything* was filled — the signal the gap gauge and the caller
     use to count progress; a title whose runtime was already present but whose credits/language were
@@ -117,6 +132,87 @@ def apply_metadata_heal(row: Title, meta: TitleMetadata) -> bool:
     if doc_enriched:
         _drop_stale_embeddings(row)
     return filled
+
+
+def has_metadata_gap(row: Title) -> bool:
+    """Python twin of the bulk walker's SQL gap predicate
+    (:func:`phare.catalog.runtime_backfill._metadata_gap_predicate`): the row is missing a runtime,
+    an original language, or genres. Language is the honest "never deep-fetched" sentinel — one
+    detail fetch carries runtime, votes, genres, credits *and* language, so a row with a language
+    already got whatever else TMDB had. Used by the read-path heals to decide whether a detail open
+    is worth a canonical fetch at all."""
+    return (
+        row.runtime_minutes is None or row.original_language is None or len(row.genres or []) == 0
+    )
+
+
+# Compact French-function-word detector for the re-canonicalization pass: an overview containing
+# two or more of these words (word-bounded, case-insensitive) reads as French. Tuned against the
+# measured production contamination (66 rows upserted from language-bound search); two-plus hits
+# keeps English overviews with an incidental "LA"/"pour" from matching. Kept as one alternation so
+# the SQL predicate and its Python twin can't drift.
+_FRENCH_FUNCTION_WORDS = "le|la|les|une|des|dans|avec|pour|qui"
+# PG flavour: \m/\M are POSIX word boundaries; matched with the case-insensitive ~* operator.
+LOCALIZED_OVERVIEW_SQL_PATTERN = rf"\m({_FRENCH_FUNCTION_WORDS})\M.*\m({_FRENCH_FUNCTION_WORDS})\M"
+_LOCALIZED_OVERVIEW_RE = re.compile(
+    rf"\b({_FRENCH_FUNCTION_WORDS})\b.*\b({_FRENCH_FUNCTION_WORDS})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def localized_text_predicate() -> Any:
+    """SQL predicate: the row's stored overview reads as French *and* the title isn't French-origin.
+
+    Detects canonical ``Title`` rows contaminated with localized text (upserted from a
+    language-bound live search before the canonical-writes rule). The ``original_language`` guard
+    is the convergence guard: a French film's canonical overview may legitimately be French (TMDB
+    has no English translation), so those rows are exempt rather than re-fetched forever. A NULL
+    language doesn't exempt — the same walker pass fills it, and the Python twin re-checks after."""
+    return and_(
+        Title.overview.op("~*")(LOCALIZED_OVERVIEW_SQL_PATTERN),
+        Title.original_language.is_distinct_from("fr"),
+    )
+
+
+def looks_localized(row: Title) -> bool:
+    """Python twin of :func:`localized_text_predicate`, evaluated after a heal may have just filled
+    ``original_language`` — so a row the fetch reveals to be French-origin is exempted before any
+    overwrite."""
+    return (
+        row.original_language != "fr"
+        and bool(row.overview)
+        and _LOCALIZED_OVERVIEW_RE.search(row.overview or "") is not None
+    )
+
+
+def apply_canonical_overwrite(row: Title, meta: TitleMetadata) -> bool:
+    """Overwrite a row's display/document text (``title``, ``overview``) with canonical metadata.
+
+    The **one deliberate exception** to :func:`apply_metadata_heal`'s fill-only rule: a row flagged
+    by :func:`looks_localized` holds *wrong-language* text (a localized search upsert wrote French
+    into the canonical row — e.g. "Kara Sevda" stored as "Amour éternel"), and filling holes can't
+    fix text that's present-but-poisoned. Only the re-canonicalization pass calls this, and only
+    for flagged rows; ``meta`` must be a canonical (language-neutral) fetch.
+
+    Empty canonical fields never overwrite (TMDB returns an empty overview when a title has no
+    English translation — blanking the row would starve its embedding document; the row stays
+    flagged and costs one no-op fetch per boot pass, same trade-off as the poisoned-embeddings
+    trigger). When anything changed the row's embeddings are dropped — the old vector encodes the
+    French document, which is exactly the language-clustering the pass exists to kill — and the
+    lazy read-path backfill re-embeds the canonical document. Returns True when anything changed,
+    so an identical canonical text converges to a no-op instead of rewriting forever.
+    """
+    changed = False
+    if meta.title and meta.title != row.title:
+        row.title = meta.title
+        changed = True
+    if meta.overview and meta.overview != row.overview:
+        row.overview = meta.overview
+        changed = True
+    if changed:
+        _drop_stale_embeddings(row)
+        logger.info("catalog.heal.recanonicalized", extra={"title_id": str(row.id)})
+    return changed
 
 
 def _drop_stale_embeddings(row: Title) -> None:

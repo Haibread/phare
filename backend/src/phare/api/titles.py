@@ -28,7 +28,7 @@ from phare.api.deps import (
 )
 from phare.api.recommend import _poster_url, require_profile
 from phare.api.schemas import TitleDetail
-from phare.catalog.heal import apply_metadata_heal
+from phare.catalog.heal import apply_metadata_heal, has_metadata_gap
 from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.fallback import record_fallback
@@ -42,7 +42,7 @@ from phare.db.models import (
     User,
     WatchEvent,
 )
-from phare.providers.types import LLMProvider, MetadataProvider
+from phare.providers.types import LLMProvider, MetadataProvider, canonical_source
 from phare.recommend.explain import (
     _EXPLANATION_CACHE,
     PersistentReasonCache,
@@ -60,18 +60,20 @@ def _localized_overview_genres(
     title: Title,
     language: Language,
     provider: MetadataProvider | None,
-) -> tuple[str | None, list[str], bool]:
+) -> tuple[str | None, list[str]]:
     """The synopsis + genres in the request language, cache-first.
 
-    The third return value is whether this call actually fetched from the provider — the runtime
-    backfill uses it to avoid a redundant second TMDB round-trip on the same request.
-
-    Stored catalog metadata is in whatever language it was imported in, so the detail view wants the
-    localized version. Fetching it from TMDB live on every open cost ~6 s (review C2), so it's
-    cached per (title, language) in ``title_localization`` with a long TTL. A copy inside the TTL
-    is served without touching TMDB; past the TTL (or on a first open) it's re-fetched and the cache
+    Stored catalog metadata is canonical (language-neutral), so the detail view wants the localized
+    version. Fetching it from TMDB live on every open cost ~6 s (review C2), so it's cached per
+    (title, language) in ``title_localization`` with a long TTL. A copy inside the TTL is served
+    without touching TMDB; past the TTL (or on a first open) it's re-fetched and the cache
     refreshed. When TMDB is unreachable — or unconfigured — any stored copy (even stale) is served
-    over the wrong-language base metadata, so the sheet always renders.
+    over the canonical base metadata, so the sheet always renders.
+
+    Display-only: the localized fetch feeds the response and the localization cache, never the
+    canonical ``Title`` row — a ``language=fr`` fetch carries French genre labels, and persisting
+    those would break every genre filter (see docs/data-model.md, "Canonical vs localized text").
+    Canonical healing is :func:`_heal_metadata_gaps`' job, on its own language-neutral fetch.
     """
     stored = (title.overview, list(title.genres))
     cached = session.get(TitleLocalization, {"title_id": title.id, "language": language})
@@ -83,28 +85,21 @@ def _localized_overview_genres(
     now = datetime.now(UTC)
     ttl = timedelta(seconds=get_settings().title_localization_ttl_seconds)
     if cached is not None and now - cached.fetched_at < ttl:
-        return (*_from_cache(), False)
+        return _from_cache()
     if provider is None or title.tmdb_id is None:
-        # No way to refresh — serve any stored copy (even stale) over the wrong-language base text.
-        return (*(_from_cache() if cached is not None else stored), False)
+        # No way to refresh — serve any stored copy (even stale) over the canonical base text.
+        return _from_cache() if cached is not None else stored
     try:
         meta = provider.get_title(title.tmdb_id, title.kind)
     except Exception:  # noqa: BLE001 - a TMDB hiccup must not break the detail view
         logger.warning("titles.localize_failed", extra={"title_id": str(title.id)})
         record_fallback("titles", "localization_unavailable", title_id=str(title.id))
-        # ``False``: no metadata was actually obtained, so the runtime backfill on this request
-        # still gets its one best-effort attempt — the flag means "already *successfully*
-        # consulted", not "already tried". (The failed localization isn't cached, so a later
-        # open retries either way; review finding round-4.)
-        return (*(_from_cache() if cached is not None else stored), False)
+        # The failed localization isn't cached, so a later open retries (review finding round-4).
+        return _from_cache() if cached is not None else stored
     if meta is None:
-        return (*(_from_cache() if cached is not None else stored), True)
-    # We already have the full metadata in hand — opportunistically heal missing metadata (runtime,
-    # votes, credits, original language) from the same fetch via the shared heal primitive, so a
-    # detail open never costs a second TMDB round-trip and fills whatever the row was missing.
-    apply_metadata_heal(title, meta)
+        return _from_cache() if cached is not None else stored
     _upsert_localization(session, title.id, language, meta.overview, list(meta.genres), now)
-    return (meta.overview or title.overview, list(meta.genres) or list(title.genres), True)
+    return (meta.overview or title.overview, list(meta.genres) or list(title.genres))
 
 
 def _upsert_localization(
@@ -124,46 +119,39 @@ def _upsert_localization(
     )
 
 
-def _backfill_runtime(
-    title: Title, provider: MetadataProvider | None, *, localized_fetched: bool
-) -> int | None:
-    """Fill a title's missing runtime from the metadata provider, lazily on the detail read.
+def _heal_metadata_gaps(title: Title, provider: MetadataProvider | None) -> None:
+    """Heal the row's missing canonical metadata lazily on the detail read, and persist it.
 
-    *discover* (the broad catalog import) omits per-title runtime, so a mainstream title like
-    Inception can sit at ``runtime_minutes = NULL`` — and its detail sheet then shows no runtime.
-    The recommend path only heals runtimes for turns that ask for a length cap (see
+    *discover* (the broad catalog import) omits per-title runtime/credits/language, so a mainstream
+    title like Inception can sit at ``runtime_minutes = NULL`` — and its detail sheet then shows no
+    runtime. The recommend path only heals for turns that ask for a length cap (see
     ``recommend/service._enrich_runtimes``), which never covers a plain detail open. So the detail
-    read backfills it here, persisted permanently, so the catalog heals as titles are opened — no
-    command, no manual step.
+    read heals here, permanently, and the catalog heals as titles are opened — no command, no
+    manual step.
 
-    Localization on the same request already fills the runtime from *its* TMDB fetch when it fetches
-    (so the common first-open path spends a single round-trip). This is the fallback for the case it
-    can't cover — a warm localization cache (or empty synopsis) that still left the runtime NULL —
-    where a dedicated fetch is the only way to heal it.
+    Deliberately a *separate, language-neutral* fetch (via :func:`canonical_source`) from the
+    localized one above: the request-language metadata must never feed ``apply_metadata_heal`` —
+    a ``language=fr`` fetch carries French genre labels, and writing those into the canonical
+    ``genres`` column would break every genre filter (catalog vocabulary is English). Gated on the
+    same gap sentinel as the bulk walker (:func:`has_metadata_gap` — runtime/language/genres), so
+    a fully-healed row costs no fetch; the provider's shared TTL cache absorbs repeat opens of a
+    row TMDB can't complete.
 
-    Best-effort: a TMDB hiccup (or no key / no ``tmdb_id``) leaves the runtime NULL and the detail
-    still renders. The caller owns the commit.
+    Best-effort: a TMDB hiccup (or no key / no ``tmdb_id``) leaves the gaps and the detail still
+    renders. The caller owns the commit.
     """
-    if title.runtime_minutes is not None:
-        return title.runtime_minutes
-    # Localization already hit the provider this request and found no runtime — a second fetch would
-    # return the same nothing. Only fetch here when localization served from cache (or offline).
-    if localized_fetched or provider is None or title.tmdb_id is None:
-        return None
+    if provider is None or title.tmdb_id is None or not has_metadata_gap(title):
+        return
     try:
-        meta = provider.get_title(title.tmdb_id, title.kind)
+        meta = canonical_source(provider).get_title(title.tmdb_id, title.kind)
     except Exception:  # noqa: BLE001 - a TMDB hiccup must not break the detail view
-        logger.warning("titles.runtime_backfill_failed", extra={"title_id": str(title.id)})
-        record_fallback("titles", "runtime_unavailable", title_id=str(title.id))
-        return None
+        logger.warning("titles.metadata_heal_failed", extra={"title_id": str(title.id)})
+        record_fallback("titles", "metadata_heal_unavailable", title_id=str(title.id))
+        return
     if meta is None:
-        return None
-    # Heal everything this fetch carries (runtime, votes, credits, language), not only runtime — the
-    # dedicated fetch is the fallback for a warm localization cache that left the row gapped.
-    apply_metadata_heal(title, meta)
-    if title.runtime_minutes is not None:
-        logger.info("titles.runtime_backfilled", extra={"title_id": str(title.id)})
-    return title.runtime_minutes
+        return
+    if apply_metadata_heal(title, meta):
+        logger.info("titles.metadata_healed", extra={"title_id": str(title.id)})
 
 
 def _tmdb_url(title: Title) -> str | None:
@@ -183,17 +171,15 @@ def get_title(
     title = session.get(Title, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
-    overview, genres, localized_fetched = _localized_overview_genres(
-        session, title, language, provider
-    )
-    runtime_minutes = _backfill_runtime(title, provider, localized_fetched=localized_fetched)
-    session.commit()  # persist the localization cache fill and any runtime backfill
+    overview, genres = _localized_overview_genres(session, title, language, provider)
+    _heal_metadata_gaps(title, provider)
+    session.commit()  # persist the localization cache fill and any metadata heal
     return TitleDetail(
         title_id=title.id,
         title=title.title,
         kind=title.kind.value,
         year=title.year,
-        runtime_minutes=runtime_minutes,
+        runtime_minutes=title.runtime_minutes,
         genres=genres,
         overview=overview,
         poster_url=_poster_url(title.poster_path),
