@@ -17,7 +17,7 @@ from phare.catalog.sample import seed_sample_catalog
 from phare.db.models import EventType, Profile, Title, WatchEvent
 from phare.eval import metrics
 from phare.eval.personas import PERSONAS, Persona
-from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
+from phare.providers.embeddings_local import is_local_space
 from phare.providers.types import LLMProvider
 from phare.recommend import genres
 from phare.recommend.reranker import _FIT_STRONG, _FIT_TRY
@@ -104,7 +104,7 @@ def alignment_checks_summary(model_version: str) -> str:
     read as having exercised it (mission M10.2). Empty slates are likewise not failed offline (the
     local-hash embedder leaves several personas with no neighbours) — flagged here for the same
     reason."""
-    if model_version == LOCAL_MODEL_VERSION:
+    if is_local_space(model_version):
         spread = (
             "similarity-spread + fit-uniformity + empty-slate "
             "[skipped: offline local-hash embedder]"
@@ -122,7 +122,7 @@ def _alignment_failures(
     hard-avoids — no second matcher. The similarity-spread *and* empty-slate checks are relaxed on
     the offline local-hash embedder (not the production space); every other check runs on any model.
     """
-    offline = model_version == LOCAL_MODEL_VERSION
+    offline = is_local_space(model_version)
     failures: list[str] = []
     if not recs:
         # The local-hash embedder is not the production space: several personas' taste centroids
@@ -163,7 +163,7 @@ def _alignment_failures(
     # Skipped on the offline embedder (not the production space) — reported so a green run is not
     # mistaken for having exercised this check.
     sim_rels = [rec.components.get("similarity_rel", 0.5) for rec in recs]
-    if model_version != LOCAL_MODEL_VERSION:
+    if not is_local_space(model_version):
         spread = max(sim_rels) - min(sim_rels)
         if spread < _MIN_SIM_REL_SPREAD:
             failures.append(
@@ -174,7 +174,7 @@ def _alignment_failures(
     # (e) Anti-uniformity (lot R2): the displayed fit chips must not all be the same bucket — a
     # constant badge is not information. Skipped on the offline embedder (its confidence
     # distribution is not the production one) and on slates too small to judge (_MIN_BUCKET_SLATE).
-    if model_version != LOCAL_MODEL_VERSION and len(recs) >= _MIN_BUCKET_SLATE:
+    if not is_local_space(model_version) and len(recs) >= _MIN_BUCKET_SLATE:
         buckets = {_fit_bucket(rec.confidence) for rec in recs}
         if len(buckets) < 2:
             only = next(iter(buckets))

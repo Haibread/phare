@@ -99,7 +99,7 @@ def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] =
     from sqlalchemy.orm import Session
 
     from phare.db.base import get_engine
-    from phare.embeddings.version import embedding_model_version, get_embedding_provider
+    from phare.embeddings.version import active_embedding_version, get_embedding_provider
     from phare.eval.harness import evaluate_all
 
     settings = get_settings()
@@ -110,19 +110,21 @@ def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] =
     failures = 0
     try:
         session = Session(bind=connection)
+        # The SERVED space, not the bare configured tag: after a document-version cutover the old
+        # space is deleted, and evaluating against it scores empty pools (n=0 across the board —
+        # bitten live, round 10). The app resolves the same way (api/deps.get_embedder).
+        model_version = active_embedding_version(session, settings)
         results = evaluate_all(
             session,
             embed_provider=get_embedding_provider(settings),
-            model_version=embedding_model_version(settings),
+            model_version=model_version,
             k=k,
         )
         # State up front which checks this run exercises, so a green run is never mistaken for
         # having covered more than it did (the similarity-spread check is embedder-dependent).
         from phare.eval.harness import alignment_checks_summary
 
-        typer.echo(
-            f"Alignment checks: {alignment_checks_summary(embedding_model_version(settings))}"
-        )
+        typer.echo(f"Alignment checks: {alignment_checks_summary(model_version)}")
         for result in results:
             status = "PASS" if result.passed else "FAIL"
             typer.echo(
