@@ -220,6 +220,8 @@ class ChatService:
                 profile_id,
                 extra_hard_avoids=intent.exclude_genres,
                 candidate_filter=intent_filter(intent),
+                include_genres=intent.include_genres,
+                max_runtime=intent.max_runtime,
                 rewatch=intent.rewatch,
                 vote_mix=True,  # chat slates mix by vote count, ordered most-voted-first
             ),
