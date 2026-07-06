@@ -250,24 +250,26 @@ def test_runtime_enrichment_is_bounded_per_request(
 def test_centroid_is_memoized_per_request(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # rows()/dynamic_rows fan out many recommend() calls; the centroid (which re-reads every watch
-    # event) must be computed once per service instance, not per call.
+    # rows()/dynamic_rows fan out many recommend() calls; the taste query (round 10: the facet
+    # split, which re-reads and clusters every watch event) must be computed once per service
+    # instance, not per call. recommend() now routes through the facets, so the memoization guard
+    # is on ``taste_contributions`` (the facets' shared basis), computed once and cached.
     profile_id = _seeded_profile(db_session)
     service = _service(db_session)
     service.ensure_embeddings()
 
     calls = {"n": 0}
-    real = compute_taste_centroid
+    from phare.recommend.taste_vector import taste_contributions as real
 
     def counting(*args: object, **kwargs: object) -> object:
         calls["n"] += 1
         return real(*args, **kwargs)
 
-    monkeypatch.setattr("phare.recommend.service.compute_taste_centroid", counting)
+    monkeypatch.setattr("phare.recommend.service.taste_contributions", counting)
 
     service.recommend(profile_id)
     service.recommend(profile_id)
-    assert calls["n"] == 1  # second call hit the cache
+    assert calls["n"] == 1  # second call hit the facets cache
 
 
 def test_candidates_exclude_watched(db_session: Session) -> None:

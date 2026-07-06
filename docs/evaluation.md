@@ -12,6 +12,15 @@ How we know recommendations are good with no crowd to A/B test.
   **alignment** checks assert the relevance *mechanics* a structural test misses (review H7/K1): the
   slate is ordered by score not votes; a free genre key ("sci-fi") actually filters to the catalog's
   "Science Fiction"; and taste affinity varies across the slate instead of reading a flat neutral.
+- **Mixed-taste facet guardrail (round 10).** A dedicated check proves the multi-facet retrieval
+  actually earns its keep: a two-mode persona (e.g. horror + comedy) must land items from **both**
+  modes in the slate, which a single averaged centroid demonstrably fails (it retrieves the blurry
+  mid-space between the modes). The check asserts facets pass *and* the forced single-centroid path
+  fails on the same persona — a check that passed both ways would prove nothing. It can't run on the
+  offline hash embedder (whose cosine geometry is degenerate — no two modes are ever separated), so
+  it uses a small deterministic **two-mode embedder** that places each mode in an orthogonal
+  subspace, the way the real embedder separates modes semantically. `phare evaluate` reports it as
+  the `mixed-taste-facets` line regardless of the deployed model.
 - **`phare evaluate` — the same suite against the *deployed* instance.** CI runs the persona suite
   hermetically with fake providers, so it only protects the *code*. `phare evaluate` runs it against
   your real database with your **configured** embedding/LLM models, and asserts the alignment
