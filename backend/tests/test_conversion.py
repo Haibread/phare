@@ -186,7 +186,9 @@ def test_format_conversion_handles_no_data() -> None:
 
 _OFFLINE_OVERRIDES = {
     get_embedder: lambda: Embedder(
-        provider=LocalHashEmbeddingProvider(), model_version=LOCAL_MODEL_VERSION
+        provider=LocalHashEmbeddingProvider(),
+        read_version=LOCAL_MODEL_VERSION,
+        write_version=LOCAL_MODEL_VERSION,
     ),
     get_optional_chat_llm: lambda: None,
 }

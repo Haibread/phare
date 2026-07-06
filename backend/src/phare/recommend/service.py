@@ -22,7 +22,7 @@ from phare.core.i18n import DEFAULT_LANGUAGE, Language, translate
 from phare.db.models import TasteProfile, Title, TitleEmbedding, WatchEvent
 from phare.embeddings.backfill import schedule_embedding_backfill
 from phare.embeddings.service import EmbeddingService
-from phare.providers.embeddings_local import LOCAL_MODEL_VERSION
+from phare.providers.embeddings_local import is_local_space
 from phare.providers.types import LLMProvider, MetadataProvider
 from phare.recommend import genres
 from phare.recommend import rows as row_builders
@@ -129,16 +129,35 @@ class RecommendationService:
         session: Session,
         *,
         embed_provider: LLMProvider,
-        embed_model_version: str,
+        embed_model_version: str | None = None,
+        embed_read_version: str | None = None,
+        embed_write_version: str | None = None,
         chat_llm: LLMProvider | None = None,
         row_size: int = 12,
         swing_slots: int = 2,
         explanation_budget: int = 0,  # 0 = template rows; LLM "why this" is lazy per title
         language: Language = DEFAULT_LANGUAGE,
     ) -> None:
+        # Two distinct space tags (round 9 cutover): the read/served tag every *retrieval* queries
+        # (centroid, candidate ANN, title vectors, mood-blend gate) and the write tag every *embed*
+        # targets (the inline micro-batch + the background backfill). They differ only while a new
+        # embed-document space is building — reads keep serving the old, fully-built space until the
+        # new one crosses the coverage threshold (see phare.embeddings.version).
+        # ``embed_model_version`` is the back-compat single-tag form: when the two don't need to
+        # differ (eval harness, tests, rewatch-space callers), pass it and both default to it.
+        if embed_model_version is not None:
+            embed_read_version = embed_read_version or embed_model_version
+            embed_write_version = embed_write_version or embed_model_version
+        if embed_read_version is None or embed_write_version is None:
+            raise ValueError(
+                "pass embed_model_version, or both embed_read_version and embed_write_version"
+            )
         self.session = session
         self.embed_provider = embed_provider
-        self.embed_model_version = embed_model_version
+        # The served/read tag. Retrieval MUST use only this, never the write tag, so a request never
+        # mixes spaces. Exposed under the historical name so read-path call sites stay unchanged.
+        self.embed_model_version = embed_read_version
+        self.embed_write_version = embed_write_version
         self.chat_llm = chat_llm
         self.row_size = row_size
         self.swing_slots = swing_slots
@@ -158,14 +177,26 @@ class RecommendationService:
         background backfill and returns immediately (review C1). The "still building" state that
         results surfaces to the UI via :meth:`profile_building`.
         """
-        svc = EmbeddingService(self.session, self.embed_provider, self.embed_model_version)
+        # Embedding always targets the WRITE tag (the current-document space), even while reads are
+        # still served from the previous space — that is how the new space fills up until it crosses
+        # the coverage threshold and the read tag flips to it.
+        svc = EmbeddingService(self.session, self.embed_provider, self.embed_write_version)
         embedded = svc.embed_missing(
             batch_size=READ_EMBED_MICRO_BATCH,
             limit=READ_EMBED_MICRO_LIMIT,
             time_budget_s=READ_EMBED_TIME_BUDGET_S,
         )
         if svc.has_missing():
-            schedule_embedding_backfill(self.embed_provider, self.embed_model_version)
+            schedule_embedding_backfill(self.embed_provider, self.embed_write_version)
+        elif self.embed_model_version == self.embed_write_version:
+            # The served tag is the write tag — the cutover has completed and the write space is
+            # full. Any leftover previous-space vectors are dead weight; reclaim them in the
+            # background (guarded so it only fires when there IS an older space to drop). Cheap
+            # no-op otherwise: schedule_superseded_cleanup returns early if nothing is stale.
+            from phare.core.config import get_settings
+            from phare.embeddings.cleanup import schedule_superseded_cleanup
+
+            schedule_superseded_cleanup(get_settings())
         return embedded
 
     def _enrich_runtimes(
@@ -208,7 +239,7 @@ class RecommendationService:
         One embedding call, no extra completion. Skipped on the local hash embedder (its vectors
         carry no meaning, so the blend would only add noise) and if the embed call fails.
         """
-        if self.embed_model_version == LOCAL_MODEL_VERSION:
+        if is_local_space(self.embed_model_version):
             return centroid
         try:
             mood_vec = self.embed_provider.embed([mood])[0]

@@ -13,11 +13,18 @@ from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
 from phare.core.i18n import Language, parse_accept_language
 from phare.core.net import validate_external_url
-from phare.embeddings.version import embedding_model_version, get_embedding_provider
+from phare.db.base import get_session
+from phare.embeddings.version import (
+    active_embedding_version,
+    embedding_write_version,
+    get_embedding_provider,
+)
+from phare.providers.embeddings_local import is_local_space
 from phare.providers.llm import OpenAILLMProvider
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.providers.types import LLMProvider, MetadataProvider
@@ -33,10 +40,27 @@ def require_safe_url(url: str) -> str:
 
 @dataclass(frozen=True)
 class Embedder:
-    """An embedding provider paired with the model version its vectors are stamped with."""
+    """An embedding provider paired with the two space tags a request needs (round 9 cutover).
+
+    ``read_version`` is the *served* tag every retrieval queries this request; ``write_version`` is
+    the current-document tag every embed targets. They differ only while a new embed-document space
+    is still building — reads serve the previous, fully-built space until the new one crosses the
+    coverage threshold (see ``active_embedding_version``). Resolved once per request (one COUNT) and
+    threaded everywhere, so a request never mixes spaces.
+    """
 
     provider: LLMProvider
-    model_version: str
+    read_version: str
+    write_version: str
+
+    @property
+    def degraded(self) -> bool:
+        """Whether the *served* space is the offline local hash embedder — the UI's degrade flag.
+
+        Keys on the read tag (what the user is actually being served), document version aside: while
+        a real-model v2 space builds in the background reads still serve the real-model v1 space, so
+        this is False and the UI must not show a degraded/building banner."""
+        return is_local_space(self.read_version)
 
 
 def get_language(accept_language: Annotated[str | None, Header()] = None) -> Language:
@@ -47,12 +71,18 @@ def get_language(accept_language: Annotated[str | None, Header()] = None) -> Lan
     return parse_accept_language(accept_language, default=get_settings().default_language)
 
 
-def get_embedder() -> Embedder:
-    """Embedding provider + matching version. Local hash fallback when no LLM key is set."""
+def get_embedder(session: Annotated[Session, Depends(get_session)]) -> Embedder:
+    """Embedding provider + the request's served/write space tags. Local hash fallback with no key.
+
+    Resolves the served (read) tag from coverage HERE — one COUNT per request — so every downstream
+    step (centroid, candidate ANN, degrade flag) reads the same resolved tag and the request never
+    mixes spaces. The write tag is unconditional (the current document); the embed side always
+    targets it, filling the new space until coverage flips the read tag onto it."""
     settings = get_settings()
     return Embedder(
         provider=get_embedding_provider(settings),
-        model_version=embedding_model_version(settings),
+        read_version=active_embedding_version(session, settings),
+        write_version=embedding_write_version(settings),
     )
 
 

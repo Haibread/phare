@@ -19,7 +19,7 @@ from phare.core.i18n import Language
 from phare.db.base import get_session
 from phare.db.models import Profile, TasteProfile, Title
 from phare.embeddings.service import EmbeddingService
-from phare.embeddings.version import embedding_model_version
+from phare.embeddings.version import active_embedding_version
 from phare.providers.tmdb import TMDBMetadataProvider
 from phare.recommend.rows import confidences_for_ordered_titles
 from phare.recommend.taste_vector import compute_taste_centroid, watched_title_ids
@@ -82,7 +82,9 @@ def search_catalog(
     # Stamp honest taste-fit on the results, same blend as the popular row — search order is lexical
     # relevance, but the fit gauge reads real taste. Degrades to null (UI hides the gauge) with no
     # taste profile / no embeddings. Small pool (~12), no per-item LLM, one embedding query.
-    model_version = embedding_model_version(get_settings())
+    # Score search fit in the *served* space (coverage-resolved), so the gauge and the home rows
+    # read the same vectors — never the write-target space that may still be building.
+    model_version = active_embedding_version(session, get_settings())
     centroid = compute_taste_centroid(session, profile_id, model_version)
     taste_row = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
     taste = effective_profile(taste_row) if taste_row is not None else {}
@@ -147,7 +149,7 @@ def embed_catalog(
     session: Annotated[Session, Depends(get_session)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
 ) -> EmbedSummary:
-    """Embed any titles missing a vector for the active embedding space."""
-    embedded = EmbeddingService(session, embedder.provider, embedder.model_version).embed_missing()
+    """Embed any titles missing a vector for the current-document (write) embedding space."""
+    embedded = EmbeddingService(session, embedder.provider, embedder.write_version).embed_missing()
     session.commit()
     return EmbedSummary(embedded=embedded)

@@ -172,7 +172,7 @@ def seed_catalog_if_empty(settings: Settings) -> int:
     from phare.catalog.service import broad_import_from_tmdb
     from phare.db.base import get_session_factory
     from phare.embeddings.service import EmbeddingService
-    from phare.embeddings.version import embedding_model_version, get_embedding_provider
+    from phare.embeddings.version import embedding_write_version, get_embedding_provider
     from phare.providers.tmdb import TMDBMetadataProvider
 
     scope = autoseed_scope(settings)
@@ -197,7 +197,7 @@ def seed_catalog_if_empty(settings: Settings) -> int:
                 backfill_missing_on_full_pool(
                     session,
                     get_embedding_provider(settings),
-                    embedding_model_version(settings),
+                    embedding_write_version(settings),
                 )
                 session.commit()
                 # Runtime is the one field the discover import (and so the rating re-pull above)
@@ -222,7 +222,7 @@ def seed_catalog_if_empty(settings: Settings) -> int:
                 )
                 session.commit()
                 EmbeddingService(
-                    session, get_embedding_provider(settings), embedding_model_version(settings)
+                    session, get_embedding_provider(settings), embedding_write_version(settings)
                 ).embed_missing()
                 session.commit()
                 return created
@@ -230,7 +230,7 @@ def seed_catalog_if_empty(settings: Settings) -> int:
                 session,
                 provider,
                 get_embedding_provider(settings),
-                embedding_model_version(settings),
+                embedding_write_version(settings),
             )
             return created
     except Exception:  # noqa: BLE001 - seeding must never crash startup

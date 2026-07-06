@@ -23,7 +23,25 @@ logger = logging.getLogger(__name__)
 
 
 def build_embedding_text(title: Title) -> str:
-    """Compose the text fed to the embedding model. Quality here = similarity quality."""
+    """Compose the text fed to the embedding model (document v2). Quality here = similarity quality.
+
+    Ordering is deliberate: the short, high-signal facets come first (title, year, genres,
+    keywords, credits, language) and the free-text overview goes *last*. A long overview otherwise
+    dilutes the short facets when the model averages token embeddings, so the discriminating signals
+    lead and the plot prose — which still carries genuine semantics — trails. The credit and
+    language lines (new in v2) are what pull production-level semantics into the space:
+
+    - ``Directed by`` — director(s) for a movie / creator(s) for a show (the ``directors`` column
+      carries either); an auteur's films cluster.
+    - ``Cast`` — the top billed actors, so an ensemble / lead separates titles the plot words don't.
+    - ``Language`` — the ISO original-language code as a soft token. It is what puts anime ("ja"
+      Animation) in a different neighbourhood from western animation ("en" Animation).
+
+    Pure function of the title's stored metadata; sparse fields are simply omitted (a title with no
+    cast/credits yields the v1-shaped document minus those lines). The document version is folded
+    into the write-side space tag, so any change here that alters meaning re-embeds the catalog —
+    see :mod:`phare.embeddings.version`.
+    """
     parts: list[str] = [title.title]
     if title.year:
         parts.append(f"Year: {title.year}")
@@ -31,6 +49,12 @@ def build_embedding_text(title: Title) -> str:
         parts.append("Genres: " + ", ".join(title.genres))
     if title.keywords:
         parts.append("Keywords: " + ", ".join(title.keywords))
+    if title.directors:
+        parts.append("Directed by: " + ", ".join(title.directors))
+    if title.top_cast:
+        parts.append("Cast: " + ", ".join(title.top_cast))
+    if title.original_language:
+        parts.append(f"Language: {title.original_language}")
     if title.overview:
         parts.append(title.overview)
     return "\n".join(parts)
