@@ -3,6 +3,7 @@
     "title": "Trouvons vos goûts",
     "lede": "Connectez l'outil où vous suivez déjà ce que vous regardez, et Phare construit votre profil à partir de là.",
     "connectLibrary": "Connecter votre bibliothèque",
+    "startFromScratch": "Commencer sans historique",
     "or": "ou",
     "exploreSample": "Explorer avec des données d'exemple",
     "loadingSample": "Chargement des données d'exemple…",
@@ -19,6 +20,19 @@
       "lede": "Préparation de vos recommandations…",
       "continue": "Continuer"
     }
+  },
+  "scratch": {
+    "title": "Choisissez-en quelques-uns que vous avez adorés",
+    "lede": "Aucune bibliothèque à connecter ? Ajoutez quelques films ou séries que vous adorez et Phare part de là.",
+    "searchLabel": "Rechercher un titre que vous avez adoré",
+    "searchPlaceholder": "Rechercher un film ou une série…",
+    "searching": "Recherche…",
+    "noMatches": "Aucun résultat pour « {{query}} ».",
+    "remove": "Retirer {{title}}",
+    "hint": "Ajoutez-en {{count}} environ pour un premier profil plus précis — un seul suffit pour démarrer.",
+    "hintEnough": "Parfait — c'est largement assez pour commencer. Ajoutez-en d'autres quand vous voulez.",
+    "go": "C'est parti",
+    "seeding": "Préparation…"
   },
   "sources": {
     "title": "Connecter une source",
@@ -42,6 +56,7 @@
     "trakt": {
       "hint": "Notes, historique et liste à voir",
       "notice": "Rendez-vous sur <lnk>{{url}}</lnk> et saisissez <b>{{code}}</b>. En attente de l'autorisation…",
+      "cancel": "Annuler",
       "connectionFailed": "Connexion Trakt {{status}}."
     },
     "plex": {

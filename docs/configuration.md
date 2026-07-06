@@ -151,6 +151,18 @@ path, if any titles lack a current-version vector, Phare kicks off a background 
 the whole backlog at boot — no command, no waiting for traffic. It's the same idempotent, best-effort
 embed as the seed paths; the read-path top-up and daily refresh remain as backstops.
 
+**Self-healing missing runtimes.** The broad *discover* import omits runtime, so a freshly-seeded
+catalog is almost entirely `runtime_minutes = NULL` — and a "something under 90 minutes" request (or
+the engine's SQL-side runtime filter) then filters on a ghost catalog. The rating re-pull above can't
+fix this: runtime needs a per-title TMDB **detail** call, not a discover page. So on the same boot
+skip path, if more than half the catalog lacks a runtime, Phare schedules a **background** bulk heal
+that walks the NULL-runtime rows in batches, fetches each title's detail (bounded concurrency), and
+persists runtime plus any still-missing `vote_average` / `vote_count`. It's off the boot path (so
+readiness isn't gated on it), idempotent (only ever fills NULLs, never clobbers), fires once after a
+broad seed and then no-ops as coverage stays healthy, and is a strict no-op without a TMDB key. The
+read-path enrichment (a detail sheet opening, or the chat candidate pool on a runtime-capped turn)
+remains as a backstop that heals whatever the bulk pass hasn't reached yet — no command either way.
+
 **Staying fresh — new movies & TV.** Seeding is a point-in-time snapshot; new releases keep coming,
 and nothing on the read path can surface a title that isn't imported yet. So a background pass runs
 every `CATALOG_REFRESH_INTERVAL_SECONDS` (default daily; `0` to disable) and pulls TMDB's **current

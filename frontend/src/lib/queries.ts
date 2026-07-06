@@ -189,6 +189,16 @@ export function useSeedCatalog() {
   return useMutation({ mutationFn: () => api.seedCatalog() });
 }
 
+/** Log a title the user picked as "loved" during the onboarding "start from scratch" flow. Writes a
+ * watched+liked pair server-side (the `loved` feedback signal), seeding a taste profile with no
+ * connected history (round 7, fix 1). No invalidation here: the onboarding step generates taste and
+ * navigates on its own once the user is done picking. */
+export function useSeedLovedTitle(profileId: string) {
+  return useMutation({
+    mutationFn: (titleId: string) => api.sendTitleFeedback(profileId, titleId, "loved"),
+  });
+}
+
 /** Poll onboarding readiness while the sample seed runs, so ColdStart can show live step progress.
  * Stops polling once the profile is ready to browse (the app then reveals the tabbed shell). */
 export function useOnboardingStatus(profileId: string, enabled: boolean) {

@@ -55,6 +55,17 @@ _ALIASES.update(
         "guerre": "war",
         "science fiction": "science fiction",
         "science-fiction": "science fiction",
+        # French forms of the TV-flavoured / compound TMDB genres, so a French affinity key drawn
+        # verbatim from the localised controlled vocabulary (review R7) still alias-resolves to the
+        # catalog's English label instead of going inert.
+        "enfants": "kids",
+        "téléréalité": "reality",
+        "telerealite": "reality",
+        # Keys are looked up after ``_normalize`` (which flattens ``-`` to a space), so spell the
+        # compound forms with spaces, matching the normalized lookup — a hyphenated key is dead.
+        "science fiction & fantastique": "sci fi & fantasy",
+        "guerre & politique": "war & politics",
+        "action & aventure": "action & adventure",
         # extra English variants not in the mood map
         "scifi": "science fiction",
     }
@@ -202,6 +213,22 @@ def matches_any(terms: Iterable[str], tokens: Iterable[str]) -> bool:
     """True if any term matches any token (order-independent)."""
     token_list = list(tokens)
     return any(term_matches(term, token) for term in terms for token in token_list)
+
+
+def resolve_catalog_genres(wanted: Iterable[str], catalog_genres: Iterable[str]) -> list[str]:
+    """Resolve free-form intent genre words to the exact catalog labels they match, for an SQL-side
+    array-overlap filter (round-7 finding 1).
+
+    The DB filter needs *literal* stored labels to overlap against, but the intent carries loose
+    words ("sci-fi", "horreur"). This maps each wanted term through the shared match rule
+    (:func:`term_matches` — alias-resolved equality or a ≥4-char substring) onto the distinct genre
+    vocabulary the caller pulls from the catalog, so the SQL filter honours the same semantics as
+    the in-memory ``matches_any``. Returns the deduplicated matched labels (empty when none match —
+    the caller then skips the SQL genre filter rather than searching for a label that isn't there).
+    """
+    wanted_list = list(wanted)
+    catalog = sorted({g for g in catalog_genres if g and g.strip()})
+    return [label for label in catalog if any(term_matches(w, label) for w in wanted_list)]
 
 
 def record_genre_filter_fallback(wanted: Sequence[str], catalog_genres: Iterable[str]) -> None:

@@ -12,6 +12,15 @@ filters) → re-ranker → explanations (LLM)`.
   watched, apply hard-avoids, apply chat intent filters). The pgvector HNSW index is *approximate*,
   so the search widens `hnsw.ef_search` and breaks distance ties on the stable catalog id — the
   same profile gets the same candidates every load, keeping the re-ranker below deterministic.
+  - **Adaptive constraint-aware re-fetch.** The first pass retrieves the nearest-to-centroid slice
+    and prunes it with the intent filter *after* the fact. For a taste centred elsewhere than the
+    requested genre (a thriller fan asking for a light comedy), almost none of those neighbours
+    match, so the filtered pool — and then the runtime cap + relevance floor — collapses to ~1. When
+    the filtered pool falls below what the re-ranker needs, Phare re-runs the ANN with the constraint
+    pushed into **SQL** (array-overlap on the intent genres resolved to canonical catalog labels,
+    plus `runtime_minutes <= cap OR runtime IS NULL`), so it ranks the nearest titles *within the
+    matching subspace* instead of hoping the global-nearest slice contained matches. It keeps the
+    honest relevance floor — a genuinely thin catalog stays thin, never padded with weak matches.
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
@@ -128,6 +137,25 @@ neutral chip. (Today every row computes a real value, so that path is just the g
 - **Dynamic LLM-generated rows** — an agent picks the day's rows from profile + mood + calendar
   ("late October → horror you'd tolerate"; "finished Dune → the Villeneuve rabbit-hole"). Cheap
   differentiator.
+
+## Onboarding (cold start)
+
+A fresh account has no history, so the app shows a first-run takeover (`ColdStart`) until the
+profile has any watch events, then reveals the tabbed shell. Browse is gated on
+`readyToBrowse` from `GET /profiles/{id}/onboarding` (catalog + history both present); taste
+finishes in the background and Browse handles the thin `profile_building` profile honestly.
+
+Three ways in:
+
+- **Connect a library** — Trakt / Plex / Jellyfin import real watch history (the headline path).
+- **Start without history** (`start-from-scratch`) — always available, and the *only* path that
+  works with no library to connect and no dev sample data. The user searches the catalog and picks
+  a handful of titles they loved; each pick logs a `loved` signal (a `watched`+`liked` event pair,
+  via the shared feedback endpoint), then a taste generation kicks off and the seeded events unblock
+  Browse. Honest by design: the profile is thin (Browse shows `profile_building`), and we encourage
+  ~3 picks but proceed from 1.
+- **Explore with sample data** — dev-only escape hatch, hidden in production (the sample endpoints
+  403 there).
 
 ## Scope of recommendations
 

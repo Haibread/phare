@@ -15,6 +15,7 @@ import {
   useRecommendations,
   useRequestTitle,
 } from "../lib/queries";
+import { RichText } from "../lib/richText";
 import styles from "./routes.module.css";
 
 export function Hero({ item }: { item: RecommendationItem }): React.JSX.Element {
@@ -63,7 +64,7 @@ export function Hero({ item }: { item: RecommendationItem }): React.JSX.Element 
         </h2>
         {why !== null && why !== "" && (
           <p className="muted" data-testid="hero-why">
-            {why}
+            <RichText text={why} />
           </p>
         )}
         <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />

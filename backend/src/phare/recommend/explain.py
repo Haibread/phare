@@ -58,8 +58,9 @@ _EXPLANATION_CACHE = TTLCache(ttl=86_400, maxsize=8192)
 # "2" = the personalised-prompt rewrite; "3" = grounded in synopsis/keywords + honest weak-fit
 # framing (review H4); "4" = the wrong-language guard (R5) — entries cached before it exist that
 # the guard would now reject (observed: Franglais on a French hero), so flush them; "5" = the
-# no-English-opener directive + opener rejection (R6) — v4 entries could still open with "Since".
-_PROMPT_VERSION = "5"
+# no-English-opener directive + opener rejection (R6) — v4 entries could still open with "Since";
+# "6" = the French vouvoiement directive (R7) — v5 entries could be cached tutoiement.
+_PROMPT_VERSION = "6"
 
 
 def _taste_fingerprint(

@@ -10,6 +10,9 @@ vi.mock("../api", () => ({
     onboardingStatus: vi.fn(),
     syncPlex: vi.fn(),
     history: vi.fn(),
+    searchCatalog: vi.fn().mockResolvedValue({ results: [] }),
+    sendTitleFeedback: vi.fn(),
+    generateTaste: vi.fn(),
     sourceCapabilities: vi.fn().mockResolvedValue({
       trakt: true,
       plex: true,
@@ -118,6 +121,29 @@ describe("ColdStart sample-data escape hatch", () => {
     });
     expect(screen.getByTestId("error").textContent).toContain("disabled in production");
     expect(screen.queryByTestId("onboarding-steps")).not.toBeInTheDocument();
+  });
+});
+
+describe("ColdStart start-from-scratch (r7-1)", () => {
+  it("offers the escape even when sample data is disabled, and opens the seeding step", async () => {
+    // Production-like: no sample data. The scratch path must still be available — it's the only one
+    // that works without a connected library.
+    mocked.sourceCapabilities.mockResolvedValueOnce({
+      trakt: true,
+      plex: true,
+      jellyfin: true,
+      seerr: true,
+      sampleData: false,
+    });
+
+    render(tree());
+    await screen.findByTestId("open-source-picker");
+    expect(screen.queryByTestId("explore-sample")).not.toBeInTheDocument();
+
+    // The scratch button is present and reveals the by-hand seeding step.
+    fireEvent.click(screen.getByTestId("start-from-scratch"));
+    expect(await screen.findByTestId("scratch-start")).toBeInTheDocument();
+    expect(screen.getByTestId("scratch-search")).toBeInTheDocument();
   });
 });
 

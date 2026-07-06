@@ -41,6 +41,22 @@ def test_french_genre_word_matches_english_catalog_label() -> None:
     assert genres.term_matches("comédie", "Comedy")
 
 
+def test_french_localized_vocabulary_still_steers_against_english_catalog() -> None:
+    # R7: taste chips now emit in the profile's language, so a French genre key drawn from the
+    # localised controlled vocabulary must still match the catalog's English TMDB labels. Cover the
+    # forms that only got aliases in R7 (the TV-flavoured / compound genres) plus a compound chip.
+    assert genres.matches_any(["Enfants"], ["Kids"])
+    assert genres.matches_any(["Téléréalité"], ["Reality"])
+    assert genres.matches_any(["Science-Fiction & Fantastique"], ["Sci-Fi & Fantasy"])
+    assert genres.matches_any(["Guerre & Politique"], ["War & Politics"])
+    assert genres.matches_any(["Action & Aventure"], ["Action & Adventure"])
+    # A compound genre-level chip ("science-fiction cérébrale") still steers via the substring rule.
+    assert genres.matches_any(["science-fiction cérébrale"], ["Science Fiction"])
+    # And each localised vocabulary key resolves in-vocabulary, so it isn't flagged as inert.
+    assert genres.in_vocabulary("Enfants")
+    assert genres.in_vocabulary("Téléréalité")
+
+
 def test_short_terms_require_equality_not_substring() -> None:
     # "war" (< 4 chars) must not match "wardrobe"; it still matches the genre "War" by equality.
     assert not genres.term_matches("war", "wardrobe")
@@ -100,3 +116,16 @@ def test_translate_genre_localizes_and_falls_back(caplog) -> None:
     assert any(
         r.message == "genre_translation.fallback" and r.reason == "unmapped" for r in caplog.records
     )
+
+
+def test_resolve_catalog_genres_maps_intent_words_to_stored_labels() -> None:
+    # The SQL re-fetch needs the *literal* catalog labels to overlap against. Loose intent words
+    # (aliases, casing, a substring) resolve to the exact stored labels via the shared match rule;
+    # a word matching no catalog genre resolves to nothing (the caller then skips the SQL filter).
+    catalog = ["Comedy", "Science Fiction", "Thriller", "Horror"]
+    assert genres.resolve_catalog_genres(["comedy"], catalog) == ["Comedy"]
+    assert genres.resolve_catalog_genres(["comédie"], catalog) == ["Comedy"]  # FR alias
+    assert genres.resolve_catalog_genres(["sci-fi"], catalog) == ["Science Fiction"]  # alias
+    assert genres.resolve_catalog_genres(["western"], catalog) == []  # not in this catalog
+    # Multiple wants dedup to the union of matched labels, in stable (sorted) order.
+    assert genres.resolve_catalog_genres(["comedy", "horror"], catalog) == ["Comedy", "Horror"]

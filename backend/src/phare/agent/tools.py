@@ -87,12 +87,6 @@ class ExecutionResult:
     resurfaced: bool = False
 
 
-def _resolve_title(ctx: ToolContext, query: str) -> Title | None:
-    """Best match for a free-text title, upserting from TMDB when configured. None if unfound."""
-    matches = search_titles(ctx.session, query, ctx.metadata, limit=1)
-    return matches[0] if matches else None
-
-
 # The top title must be at least this many times more voted than the runner-up to resolve a signal
 # without asking — otherwise two plausible titles of similar popularity are treated as ambiguous.
 _AMBIGUITY_RATIO = 3.0
@@ -122,14 +116,21 @@ def _recent_chat_titles(ctx: ToolContext, *, limit: int = 30) -> list[Title]:
     return unique
 
 
-def _resolve_signal_title(ctx: ToolContext, query: str) -> tuple[Title | None, bool]:
-    """Resolve a title the user is logging a signal for, and say whether we're sure enough to write.
+def _resolve_write_title(ctx: ToolContext, query: str) -> tuple[Title | None, bool]:
+    """Resolve a title the user is about to have written against (a watch signal *or* a watch-plan
+    commitment), and say whether we're sure enough to write.
 
-    Order (review H3b — writing a signal on the wrong title corrupts the taste memory silently):
+    Order (review H3b/R7 — writing on the wrong title silently corrupts taste memory or lands a
+    watch-plan on an obscure fuzzy-match: "Kiss Kiss Bang Bang" (2005) → "Kiss kiss (Bang Bang)"
+    (2001)):
     1. a title recently recommended in *this conversation* whose name matches exactly (best signal);
     2. otherwise search, prefer an exact-name match, then most-voted — but if the top two are of
        similar popularity (no clear winner), return ``confident=False`` so the caller asks rather
        than guesses.
+
+    Every tool that writes against a free-text title routes through this one guard (rule of three:
+    signal, commitment, and commitment resolution) so the conversation-context-first + ambiguity
+    protection can't be forgotten on one of them.
     """
     normalized = query.strip().lower()
     if not normalized:
@@ -208,6 +209,10 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
         ctx.profile_id,
         extra_hard_avoids=intent.exclude_genres,
         candidate_filter=intent_filter(intent),
+        # Structured form of the same constraint: lets the engine push genre/runtime into SQL and
+        # re-search the matching subspace when the post-hoc filter starves the pool (finding 1).
+        include_genres=intent.include_genres,
+        max_runtime=intent.max_runtime,
         rewatch=intent.rewatch,
         vote_mix=True,  # chat slates mix well-known/lesser-known/low-vote, ordered by votes
         explain_with_llm=False,  # the composed reply frames the picks; skip per-item LLM calls
@@ -224,7 +229,7 @@ def tool_log_signal(ctx: ToolContext, args: dict, result: ExecutionResult) -> No
     signal = str(args.get("signal", "watched")).lower()
     text = args.get("note")
     rating = args.get("rating")
-    title, confident = _resolve_signal_title(ctx, query) if query else (None, False)
+    title, confident = _resolve_write_title(ctx, query) if query else (None, False)
     if title is None:
         result.notes.append(f"couldn't find a title matching '{query}'")
         return
@@ -269,9 +274,19 @@ def tool_log_signal(ctx: ToolContext, args: dict, result: ExecutionResult) -> No
 
 def tool_set_commitment(ctx: ToolContext, args: dict, result: ExecutionResult) -> None:
     query = str(args.get("title", "")).strip()
-    title = _resolve_title(ctx, query) if query else None
+    title, confident = _resolve_write_title(ctx, query) if query else (None, False)
     if title is None:
         result.notes.append(f"couldn't find a title matching '{query}'")
+        return
+    if not confident:
+        # Ambiguous — do NOT commit to the wrong title. The live failure: "add it to my list" after
+        # the agent recommended "Kiss Kiss Bang Bang" (2005) landed on the obscure fuzzy-match
+        # "Kiss kiss (Bang Bang)" (2001). Ask which one instead of silently planning the wrong film
+        # (mirrors tool_log_signal's unconfident path so the composer asks naturally).
+        result.notes.append(
+            f"more than one title matches '{query}' — did you mean {_title_label(title)}? "
+            "I haven't added it to your watch plans yet"
+        )
         return
     commitment = commitments_store.create_commitment(
         ctx.session, ctx.profile_id, title.id, note=args.get("note")
@@ -296,8 +311,11 @@ def tool_resolve_commitment(ctx: ToolContext, args: dict, result: ExecutionResul
     query = str(args.get("title", "")).strip()
     outcome = str(args.get("outcome", "watched")).lower()
     reaction = args.get("reaction")
-    title = _resolve_title(ctx, query) if query else None
-    commitment = _pending_for_title(ctx, title.id) if title is not None else None
+    # Resolve the title through the same conversation-context-first + ambiguity guard as the other
+    # writes (H3b/R7), then resolve the commitment of *that* title — so "I watched it" after a chat
+    # rec marks the right pending plan, not a fuzzy-matched namesake's.
+    title, confident = _resolve_write_title(ctx, query) if query else (None, False)
+    commitment = _pending_for_title(ctx, title.id) if title is not None and confident else None
     if title is None or commitment is None:
         result.notes.append(f"no pending plan found for '{query}'")
         return

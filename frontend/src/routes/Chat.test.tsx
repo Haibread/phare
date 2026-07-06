@@ -69,6 +69,27 @@ describe("chat pick citation matching", () => {
     expect(citedTitleIds("Try It tonight.", items).has("a")).toBe(true);
   });
 
+  it("does not cite a title that only appears inside a longer slate title", () => {
+    // Live R7 repro: "Black" was falsely tagged RECOMMENDED because "Men in Black" was cited.
+    const items = [
+      item({ titleId: "mib", title: "Men in Black" }),
+      item({ titleId: "black", title: "Black" }),
+    ];
+    const cited = citedTitleIds("Vous allez adorer Men in Black, un film léger.", items);
+    expect(cited.has("mib")).toBe(true);
+    expect(cited.has("black")).toBe(false);
+    // A genuine separate mention of the shorter title still counts.
+    expect(citedTitleIds("Men in Black, ou alors Black.", items).has("black")).toBe(true);
+  });
+
+  it("tolerates the composer's typography: curly apostrophes and French spaced punctuation", () => {
+    // Live R7 repro: slate says "Dude, Where's My Car?", the reply wrote "Dude, Where’s My Car ?".
+    const items = [item({ titleId: "dude", title: "Dude, Where's My Car?" })];
+    expect(citedTitleIds("Dude, Where’s My Car ? pourrait aussi vous plaire.", items).has("dude")).toBe(
+      true,
+    );
+  });
+
   it("does not crash on titles with regex-special characters", () => {
     const items = [
       item({ titleId: "a", title: "Amélie (2001)" }),

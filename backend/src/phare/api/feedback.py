@@ -27,9 +27,12 @@ from phare.taste.service import maybe_refresh_taste
 
 router = APIRouter()
 
-# API signal → the event we persist. One member for now; the map is where new signals plug in.
-_SIGNAL_EVENT: dict[FeedbackSignal, EventType] = {
-    FeedbackSignal.not_interested: EventType.not_interested,
+# API signal → the event(s) we persist. Most signals are one event; ``loved`` stacks watched+liked
+# (mirroring the chat signal tool's "loved" mapping) so an onboarding seed both teaches the centroid
+# and marks the title as seen. The map is where new signals plug in.
+_SIGNAL_EVENTS: dict[FeedbackSignal, tuple[EventType, ...]] = {
+    FeedbackSignal.not_interested: (EventType.not_interested,),
+    FeedbackSignal.loved: (EventType.watched, EventType.liked),
 }
 
 
@@ -51,18 +54,23 @@ def submit_feedback(
     if session.get(Title, title_id) is None:
         raise HTTPException(status_code=404, detail="Title not found")
 
-    event = WatchEvent(
-        profile_id=profile_id,
-        title_id=title_id,
-        type=_SIGNAL_EVENT[body.signal],
-        occurred_at=datetime.now(UTC),  # a fresh rejection should count at full recency weight
-        source="feedback",
-        external_ref=f"feedback:{uuid.uuid4()}",
-    )
-    session.add(event)
-    session.flush()
-    # Same token shape the chat signal tool mints, so /chat/undo reverses it with no special-casing.
-    undo_token = f"event:{event.id}"
+    now = datetime.now(UTC)  # a fresh signal counts at full recency weight
+    event_ids: list[uuid.UUID] = []
+    for event_type in _SIGNAL_EVENTS[body.signal]:
+        event = WatchEvent(
+            profile_id=profile_id,
+            title_id=title_id,
+            type=event_type,
+            occurred_at=now,
+            source="feedback",
+            external_ref=f"feedback:{uuid.uuid4()}",
+        )
+        session.add(event)
+        session.flush()
+        event_ids.append(event.id)
+    # Same token shape the chat signal tool mints (comma-joined for multi-event signals), so
+    # /chat/undo reverses each with no special-casing.
+    undo_token = ",".join(f"event:{event_id}" for event_id in event_ids)
     maybe_refresh_taste(session, profile_id, chat_llm, language)
     session.commit()
     return FeedbackResponse(title_id=title_id, signal=body.signal, undo_token=undo_token)
