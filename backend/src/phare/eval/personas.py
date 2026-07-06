@@ -3,6 +3,15 @@
 Each persona watches a few catalog titles (to seed a taste centroid) and carries an explicit
 taste profile (so the suite needs no LLM). The assertions are deterministic regression catchers:
 hard-avoids must never surface, watched titles must never be recommended.
+
+The four base personas are single-mode tastes scored against the shared sample catalog on the
+offline hash embedder. The round-10 ``mixed-taste`` persona is different in kind: it proves the
+*multi-facet* retrieval machinery, which a single averaged centroid demonstrably fails. It needs
+genuinely-separated taste modes to discriminate — impossible on the hash embedder, whose cosine
+geometry is degenerate (every pair ≈0.85, no partial-overlap signal) — so it runs on a small
+two-mode embedder that places each mode in an orthogonal subspace (see
+``phare.eval.facet_discrimination``), the way the *real* production embedder separates modes
+semantically. That's the only honest way to exercise the facet split offline.
 """
 
 from __future__ import annotations

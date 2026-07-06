@@ -137,6 +137,21 @@ def evaluate(k: Annotated[int, typer.Option(help="Top-K slate size to score")] =
             for reason in result.alignment_failures:
                 typer.echo(f"    alignment: {reason}")
             failures += 0 if result.passed else 1
+
+        # Round-10 facet guardrail: prove per-facet retrieval carries both modes of a mixed taste
+        # where a single averaged centroid carries neither. Runs on its own two-mode embedder (the
+        # deployed embedder's space can't separate the modes deterministically), so it's independent
+        # of the model above — reported here so `phare evaluate` surfaces the facet win explicitly.
+        from phare.eval.facet_discrimination import evaluate_facet_discrimination
+
+        fd = evaluate_facet_discrimination(session)
+        fd_ok = fd.facets_pass and fd.single_centroid_fails
+        typer.echo(
+            f"[{'PASS' if fd_ok else 'FAIL'}] mixed-taste-facets: k={fd.facet_count} "
+            f"sizes={fd.facet_sizes} facet_slate(A={fd.facet_a_items},B={fd.facet_b_items}) "
+            f"vs single_centroid(A={fd.single_a_items},B={fd.single_b_items})"
+        )
+        failures += 0 if fd_ok else 1
     finally:
         transaction.rollback()
         connection.close()

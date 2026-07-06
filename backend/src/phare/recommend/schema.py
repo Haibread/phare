@@ -28,6 +28,17 @@ class Candidate(BaseModel):
     overview: str | None
     poster_path: str | None = None
     similarity: float  # cosine similarity to the taste centroid, in [-1, 1]
+    # Multi-facet retrieval (round 10). When a candidate came through the per-facet merge,
+    # ``similarity`` holds its *facet-relative* placement mapped back onto the cosine range —
+    # different regions of a real embedding space have different raw-cosine scales (a dense action
+    # neighbourhood reads systematically higher than a sparse one), so raw cosines merged across
+    # facets would let one mode sweep the pool-relative ranking. These two then carry the rest:
+    # ``raw_similarity`` — the honest raw cosine (the confidence blend's absolute band and swing
+    # novelty must read the true scale, never the normalised one) and ``facet`` — the index of the
+    # facet whose query surfaced it best. Both None on every single-vector retrieval path, where
+    # ``similarity`` is the raw cosine as it always was.
+    raw_similarity: float | None = None
+    facet: int | None = None
 
 
 class Anchor(BaseModel):
