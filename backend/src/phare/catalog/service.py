@@ -77,8 +77,11 @@ def search_titles(
     query = query.strip()
     if not query:
         return []
-    results: list[Title] = []
-    seen: set[uuid.UUID] = set()
+    # TMDB is a *discovery* source, not an ordering source: upsert its matches so they exist
+    # locally, then rank everything below with the single lexical-tier + vote-count ordering.
+    # Prepending TMDB's own order shadowed that ranking entirely whenever a key was configured
+    # (production), which is how "Bikini Inception" outranked a 314-vote match live.
+    tmdb_matches: list[Title] = []
     if metadata is not None:
         metas = metadata.search(query, limit=limit)
         upsert_titles(session, metas)
@@ -89,9 +92,10 @@ def search_titles(
             title = session.scalar(
                 select(Title).where(Title.tmdb_id == meta.tmdb_id, Title.kind == meta.kind)
             )
-            if title is not None and title.id not in seen:
-                seen.add(title.id)
-                results.append(title)
+            if title is not None:
+                tmdb_matches.append(title)
+    results: list[Title] = []
+    seen: set[uuid.UUID] = set()
     # Escape LIKE wildcards in the user's query so "%" / "_" match literally, not as patterns.
     like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     # Rank lexical relevance FIRST, then break ties by known-ness (vote_count) — so an obscure exact
@@ -120,6 +124,12 @@ def search_titles(
         .limit(limit)
     ).all()
     for title in local:
+        if title.id not in seen:
+            seen.add(title.id)
+            results.append(title)
+    # Fuzzy TMDB matches whose stored title doesn't literally contain the query (translations,
+    # alternate titles) aren't in the ranked query above — append them after every lexical match.
+    for title in tmdb_matches:
         if title.id not in seen:
             seen.add(title.id)
             results.append(title)
