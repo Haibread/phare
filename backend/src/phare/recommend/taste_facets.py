@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import math
+import uuid
 from dataclasses import dataclass
 
 from phare.recommend.taste_vector import (
@@ -67,12 +68,17 @@ _FACET_MIN_DEPTH = 24
 class Facet:
     """One taste mode: its centroid (the query vector), the share of positive event mass behind it
     (``weight``, normalised across facets to sum to 1), and how many titles seeded it. ``weight`` is
-    what sizes the facet's retrieval budget; ``size`` is for observability."""
+    what sizes the facet's retrieval budget; ``size`` is for observability.
+
+    ``member_title_ids`` are the *positive* contributions that seeded the facet — what makes the
+    facet inspectable (principle 2): the taste API joins them back to titles for genre labels and
+    exemplars. Negatives ride into the centroid but are never members."""
 
     centroid: list[float]
     weight: float
     size: int
     mean_intra_sim: float
+    member_title_ids: tuple[uuid.UUID, ...] = ()
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -208,6 +214,7 @@ def extract_facets(contributions: list[TasteContribution]) -> list[Facet]:
             mean_intra_sim=_mean_intra_sim(
                 cluster_positives, blend_contributions(cluster_positives) or centroid
             ),
+            member_title_ids=tuple(c.title_id for c in cluster_positives),
         )
 
     single = [_facet_from(positives)]
@@ -231,8 +238,13 @@ def _normalise_weights(facets: list[Facet]) -> list[Facet]:
     total = sum(f.weight for f in facets)
     if total <= 0.0:
         equal = 1.0 / len(facets)
-        return [Facet(f.centroid, equal, f.size, f.mean_intra_sim) for f in facets]
-    return [Facet(f.centroid, f.weight / total, f.size, f.mean_intra_sim) for f in facets]
+        return [
+            Facet(f.centroid, equal, f.size, f.mean_intra_sim, f.member_title_ids) for f in facets
+        ]
+    return [
+        Facet(f.centroid, f.weight / total, f.size, f.mean_intra_sim, f.member_title_ids)
+        for f in facets
+    ]
 
 
 def facet_budgets(facets: list[Facet], k: int) -> list[int]:
@@ -249,6 +261,21 @@ def facet_budgets(facets: list[Facet], k: int) -> list[int]:
         return [total]
     floor = max(2 * k, _FACET_MIN_DEPTH)
     return [max(int(f.weight * total), floor) for f in facets]
+
+
+def rank_members_by_centrality(
+    facet: Facet, contributions: list[TasteContribution]
+) -> list[uuid.UUID]:
+    """The facet's member title ids, most central first (cosine to the facet centroid, descending).
+
+    Feeds the taste API's *exemplars* — the titles that best typify a taste mode. Ties break on the
+    stable ``title_id`` order (same anchor the clustering uses), so the ranking is deterministic.
+    Members whose contribution is missing from ``contributions`` are skipped (defensive: the two
+    always come from the same extraction in practice)."""
+    by_id = {c.title_id: c for c in contributions}
+    members = [by_id[tid] for tid in facet.member_title_ids if tid in by_id]
+    members.sort(key=lambda c: (-_cosine(c.embedding, facet.centroid), c.title_id.bytes))
+    return [c.title_id for c in members]
 
 
 def log_facets(profile_id: str, facets: list[Facet]) -> None:

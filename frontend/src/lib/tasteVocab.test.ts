@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { translateGenre, translateTasteTerm } from "./tasteVocab";
+import { translateFacetLabel, translateGenre, translateTasteTerm } from "./tasteVocab";
 
 describe("translateGenre", () => {
   it("translates a known genre into French", () => {
@@ -33,5 +33,27 @@ describe("translateGenre", () => {
 describe("translateTasteTerm", () => {
   it("also covers affinity descriptors, not just genres", () => {
     expect(translateTasteTerm("slow-burn", "fr")).toBe("rythme lent");
+  });
+});
+
+describe("translateFacetLabel", () => {
+  it("translates each genre of a composite facet label", () => {
+    expect(translateFacetLabel("Action · Science Fiction", "fr")).toBe(
+      "Action · Science-Fiction",
+    );
+  });
+
+  it("translates a single-genre label", () => {
+    expect(translateFacetLabel("Horror", "fr")).toBe("Horreur");
+  });
+
+  it("leaves a non-genre fallback label (a title name) as stored", () => {
+    expect(translateFacetLabel("Blade Runner", "fr")).toBe("Blade Runner");
+  });
+
+  it("is the identity for English", () => {
+    expect(translateFacetLabel("Action · Science Fiction", "en")).toBe(
+      "Action · Science Fiction",
+    );
   });
 });

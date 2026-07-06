@@ -28,6 +28,12 @@
     "generateError": "Impossible de générer les goûts : {{message}}",
     "generateUnavailable": "Impossible de joindre l'IA pour régénérer vos goûts pour le moment. Votre profil actuel est inchangé — réessayez dans un instant."
   },
+  "facets": {
+    "heading": "Facettes de votre goût",
+    "subtitle": "Les grandes familles de votre historique — chacune pèse sur vos recommandations à hauteur de son poids.",
+    "share": "{{pct}} % · {{count}} titres",
+    "weightLabel": "Poids de la facette {{label}}"
+  },
   "sources": {
     "heading": "Sources connectées",
     "add": "Ajouter",
