@@ -233,8 +233,10 @@ const undoResultSchema = z.object({ undone: z.boolean() });
 
 const catalogSummarySchema = z.object({ created: z.number() });
 
-/** The only card-feedback signal for now — extensible, but deliberately no thumbs-up (K2). */
-export type FeedbackSignal = "not_interested";
+/** Title signals the UI can send. `not_interested` is the negative card correction (deliberately no
+ * on-card thumbs-up, K2); `loved` is the onboarding "start from scratch" seed (a title the user
+ * picks as one they loved), written server-side as a watched+liked pair. */
+export type FeedbackSignal = "not_interested" | "loved";
 const feedbackResponseSchema = z.object({
   titleId: z.string(),
   signal: z.string(),

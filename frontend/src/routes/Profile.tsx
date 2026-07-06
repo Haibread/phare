@@ -18,6 +18,7 @@ import {
   useTaste,
   useUpdateTaste,
 } from "../lib/queries";
+import { RichText } from "../lib/richText";
 import { relativeTime, relativeTimeLocalized } from "../lib/time";
 import { SourcePicker } from "../onboarding/SourcePicker";
 import { AccountCard } from "./AccountCard";
@@ -119,7 +120,7 @@ export function Profile(): React.JSX.Element {
         ) : taste.data?.summary ? (
           <>
             <p className="muted" data-testid="taste-summary">
-              {taste.data.summary}
+              <RichText text={taste.data.summary} />
             </p>
             <div style={{ marginTop: "var(--sp-3)" }}>
               <EditableChips
@@ -350,7 +351,10 @@ export function Profile(): React.JSX.Element {
                       {item.title}
                       {episodeLabel(item)}
                     </td>
-                    <td>{item.type}</td>
+                    {/* Localize known event enums; fall back to the raw backend string for any
+                        member the map doesn't cover, so a new enum still renders (untranslated)
+                        rather than blanking. */}
+                    <td>{t(`history.events.${item.type}`, { defaultValue: item.type })}</td>
                     <td>{item.rating ?? "—"}</td>
                     <td>{item.occurredAt ? item.occurredAt.slice(0, 10) : "—"}</td>
                   </tr>

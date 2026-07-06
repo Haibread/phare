@@ -157,6 +157,14 @@
   transition: border-color 0.12s ease;
 }
 
+/* When there's no poster art, the box centers an honest title+year placeholder instead of the
+   bottom-left caption — see .posterFallback. */
+.poster.posterEmpty {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
 .poster img {
   position: absolute;
   inset: 0;
@@ -165,13 +173,32 @@
   object-fit: cover;
 }
 
+/* Honest "no cover art" placeholder: the title + year, centered, over the tinted tile. Reads as a
+   stand-in poster rather than a blank grey box (round 7, fix 4). The small saffron year separates it
+   from the plain card label below, so a poster-less card no longer looks like the title printed
+   twice. */
 .posterFallback {
-  font-size: 0.72rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.92);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-items: center;
   position: relative;
   z-index: 1;
+  padding: var(--sp-2);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.posterFallbackTitle {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.posterFallbackYear {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--accent);
 }
 
 .cardTitle {

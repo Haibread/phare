@@ -39,6 +39,12 @@ export function SourcePicker({
   // the fix is a re-run — resume picks up where it stopped (review G3).
   const [partial, setPartial] = useState<number | null>(null);
   const [trakt, setTrakt] = useState<{ userCode: string; verificationUrl: string } | null>(null);
+  // The Trakt device flow waits (minutes) for the user to authorize in their browser. Unlike a
+  // running import, this must NOT lock the other source buttons — a user who tapped Trakt by mistake
+  // has to be able to pick something else (or cancel). So it's tracked separately from `busy`, which
+  // stays reserved for the blocking phases (form submit, running sync). While this is true, other
+  // sources stay enabled and picking one (or "Annuler") aborts the poll (review r7-2).
+  const [traktWaiting, setTraktWaiting] = useState(false);
 
   // A history import (Trakt/Plex/Jellyfin) can run for minutes. Rather than block on the await with
   // no feedback, we flip into a "syncing" view and poll `GET /history` for the running `total`,
@@ -76,6 +82,10 @@ export function SourcePicker({
     if (!open) {
       pollAbort.current?.abort();
       stopCountPolling();
+      // Closing the sheet aborts the Trakt poll — clear its waiting state + notice too, so reopening
+      // starts clean rather than showing a stale "waiting for authorization" from an aborted loop.
+      setTraktWaiting(false);
+      setTrakt(null);
     }
     return () => {
       pollAbort.current?.abort();
@@ -160,10 +170,26 @@ export function SourcePicker({
 
   function select(next: Active) {
     setError(null);
+    // Switching to any other source while a Trakt device-flow poll is waiting supersedes it: abort
+    // the in-flight loop and clear its notice so we don't keep polling for an authorization the user
+    // has moved on from (review r7-2).
+    if (next !== "trakt" && traktWaiting) {
+      cancelTrakt();
+    }
     setActive(next);
     if (next === "trakt") {
       void connectTrakt();
     }
+  }
+
+  /** Abort the in-flight Trakt device-flow poll and clear its notice, without touching the blocking
+   * `busy` flag (the poll never set it). Used by the explicit "Annuler" affordance and when the user
+   * picks another source mid-poll. */
+  function cancelTrakt() {
+    pollAbort.current?.abort();
+    setTraktWaiting(false);
+    setTrakt(null);
+    setActive((current) => (current === "trakt" ? null : current));
   }
 
   async function loadJellyfinUsers() {
@@ -186,7 +212,9 @@ export function SourcePicker({
     pollAbort.current = controller;
     const { signal } = controller;
 
-    setBusy(true);
+    // The waiting phase is deliberately non-blocking (see `traktWaiting`): it does NOT set `busy`, so
+    // the other source buttons stay usable while the user authorizes (or changes their mind).
+    setTraktWaiting(true);
     setError(null);
     try {
       const start = await api.traktConnectStart();
@@ -200,7 +228,9 @@ export function SourcePicker({
         const poll = await api.traktConnectPoll(profileId, start.deviceCode);
         if (signal.aborted) return;
         if (poll.status === "connected") {
-          // Device flow is done; hand off to the shared syncing view + progress poll.
+          // Device flow is done; the import is the blocking phase, so hand off to the shared syncing
+          // view (which sets `busy`) and drop out of the waiting state.
+          setTraktWaiting(false);
           await runSync(() => api.syncTrakt(profileId));
           return;
         }
@@ -213,7 +243,7 @@ export function SourcePicker({
       if (!signal.aborted) setError(message(e));
     } finally {
       if (!signal.aborted) {
-        setBusy(false);
+        setTraktWaiting(false);
         setTrakt(null);
       }
     }
@@ -283,6 +313,10 @@ export function SourcePicker({
     hint: string,
   ): React.JSX.Element {
     const enabled = capable(source);
+    // The Trakt button re-arms itself while its own poll is waiting (tapping it again would just
+    // restart the same device flow); every OTHER source stays enabled during that wait, so a
+    // mis-tap on Trakt is escapable. The blocking `busy` (a running import) still locks everything.
+    const selfWaiting = source === "trakt" && traktWaiting;
     return (
       <>
         <button
@@ -290,7 +324,7 @@ export function SourcePicker({
           className={styles.source}
           data-testid={testid}
           onClick={() => select(source)}
-          disabled={busy || !enabled}
+          disabled={busy || selfWaiting || !enabled}
         >
           <div className={styles.sourceBody}>
             <div className={styles.sourceName}>{name}</div>
@@ -330,7 +364,17 @@ export function SourcePicker({
               ),
               b: <strong />,
             }}
-          />
+          />{" "}
+          {/* Explicit escape hatch: the poll waits minutes, and closing the sheet (which also
+              aborts it) isn't discoverable — so offer a visible cancel (review r7-2). */}
+          <button
+            type="button"
+            className={styles.stallRetry}
+            data-testid="trakt-cancel"
+            onClick={cancelTrakt}
+          >
+            {t("sources.trakt.cancel")}
+          </button>
         </p>
       )}
 

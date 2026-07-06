@@ -63,6 +63,16 @@
       "rating": "Rating",
       "when": "When"
     },
+    "events": {
+      "watched": "watched",
+      "rated": "rated",
+      "liked": "liked",
+      "disliked": "disliked",
+      "abandoned": "abandoned",
+      "rewatched": "rewatched",
+      "watchlisted": "watchlisted",
+      "not_interested": "not interested"
+    },
     "showing": "Showing {{shown}} of {{total}} events",
     "showMore": "Show more",
     "loadingMore": "Loading…"

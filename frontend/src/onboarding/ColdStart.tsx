@@ -10,6 +10,7 @@ import {
   useSeedCatalog,
   useSourceCapabilities,
 } from "../lib/queries";
+import { ScratchStart } from "./ScratchStart";
 import { SourcePicker } from "./SourcePicker";
 import styles from "./onboarding.module.css";
 
@@ -25,6 +26,8 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
   const qc = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  // "Start from scratch": the by-hand favorite-seeding path, for a user with no library to connect.
+  const [scratch, setScratch] = useState(false);
   // Set to the imported count once a source sync finishes, so we show a brief confirmation instead
   // of hard-cutting to Browse the instant history exists (review D4). Landing is deferred until the
   // user (or the timer) continues, by holding back the history invalidation until then.
@@ -95,6 +98,13 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
     );
   }
 
+  if (scratch) {
+    // The by-hand seeding flow. Once it logs the loved picks + kicks off taste, invalidate so the
+    // app (gated on history existing) reveals Browse — which handles the thin `profile_building`
+    // profile honestly.
+    return <ScratchStart profileId={profileId} onDone={invalidate} />;
+  }
+
   if (seeding && !sample.isError && !catalog.isError) {
     // The three steps are driven by the polled onboarding status; the first not-yet-done one is
     // "active". Catalog is seeded before history, so they light up in order.
@@ -145,6 +155,18 @@ export function ColdStart({ profileId }: { profileId: string }): React.JSX.Eleme
         onClick={() => setPickerOpen(true)}
       >
         {t("coldStart.connectLibrary")}
+      </button>
+
+      {/* The always-available escape for a user with no Trakt/Plex/Jellyfin: seed a taste profile by
+          hand. Not sample-gated — this is the only path that works without any of those three tools
+          or a dev sample dataset (round 7, fix 1). */}
+      <button
+        type="button"
+        className={styles.link}
+        data-testid="start-from-scratch"
+        onClick={() => setScratch(true)}
+      >
+        {t("coldStart.startFromScratch")}
       </button>
 
       {sampleAvailable && (

@@ -138,6 +138,25 @@ neutral chip. (Today every row computes a real value, so that path is just the g
   ("late October → horror you'd tolerate"; "finished Dune → the Villeneuve rabbit-hole"). Cheap
   differentiator.
 
+## Onboarding (cold start)
+
+A fresh account has no history, so the app shows a first-run takeover (`ColdStart`) until the
+profile has any watch events, then reveals the tabbed shell. Browse is gated on
+`readyToBrowse` from `GET /profiles/{id}/onboarding` (catalog + history both present); taste
+finishes in the background and Browse handles the thin `profile_building` profile honestly.
+
+Three ways in:
+
+- **Connect a library** — Trakt / Plex / Jellyfin import real watch history (the headline path).
+- **Start without history** (`start-from-scratch`) — always available, and the *only* path that
+  works with no library to connect and no dev sample data. The user searches the catalog and picks
+  a handful of titles they loved; each pick logs a `loved` signal (a `watched`+`liked` event pair,
+  via the shared feedback endpoint), then a taste generation kicks off and the seeded events unblock
+  Browse. Honest by design: the profile is thin (Browse shows `profile_building`), and we encourage
+  ~3 picks but proceed from 1.
+- **Explore with sample data** — dev-only escape hatch, hidden in production (the sample endpoints
+  403 there).
+
 ## Scope of recommendations
 
 Primary: **recommend from the whole universe** (great content, period). Optional, behind action

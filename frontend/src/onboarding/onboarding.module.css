@@ -255,3 +255,92 @@
     opacity: 0.4;
   }
 }
+
+/* "Start from scratch" favorite-seeding view (round 7, fix 1). The list can grow tall, so this
+   variant tops out the centered .cold layout and lets the page scroll instead of overflowing. */
+.scratch {
+  justify-content: flex-start;
+  padding-top: var(--sp-6);
+}
+
+.scratch .field {
+  width: 100%;
+  max-width: 22rem;
+}
+
+/* Picked-title chips — removable, wrap on a narrow (375px) viewport. */
+.pickChips {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  justify-content: center;
+  width: 100%;
+  max-width: 22rem;
+}
+
+.pickChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0.25rem 0.3rem 0.25rem 0.7rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.pickRemove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.pickRemove:hover {
+  color: var(--text);
+}
+
+/* Search-result rows — full-width tap targets, one per line. */
+.resultList {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  width: 100%;
+  max-width: 22rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.resultRow {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.resultRow:hover {
+  background: var(--surface-2);
+}
+
+.resultName {
+  font-size: 0.9rem;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

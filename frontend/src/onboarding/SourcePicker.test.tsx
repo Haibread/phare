@@ -69,6 +69,58 @@ describe("SourcePicker Trakt polling", () => {
   });
 });
 
+describe("SourcePicker Trakt cancel + non-blocking wait (r7-2)", () => {
+  it("keeps other sources enabled while the Trakt poll waits, and cancels on demand", async () => {
+    mocked.traktConnectStart.mockResolvedValue({
+      deviceCode: "d",
+      userCode: "U",
+      verificationUrl: "http://verify",
+      interval: 100, // long, so we stay in the waiting phase for the assertions
+      expiresIn: 1000,
+    });
+    mocked.traktConnectPoll.mockResolvedValue({ status: "pending" });
+
+    render(tree(true));
+    fireEvent.click(screen.getByTestId("source-trakt"));
+
+    // The device-code notice shows and the OTHER sources stay usable (the mistap is escapable).
+    await waitFor(() => expect(screen.getByTestId("trakt-connect-notice")).toBeInTheDocument());
+    expect(screen.getByTestId("source-plex")).not.toBeDisabled();
+    expect(screen.getByTestId("source-jellyfin")).not.toBeDisabled();
+    // The Trakt button itself re-arms (tapping again would just restart the same flow).
+    expect(screen.getByTestId("source-trakt")).toBeDisabled();
+
+    // The explicit cancel affordance aborts the poll and clears the notice.
+    fireEvent.click(screen.getByTestId("trakt-cancel"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("trakt-connect-notice")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("source-trakt")).not.toBeDisabled();
+  });
+
+  it("aborts the Trakt poll when the user picks another source instead", async () => {
+    mocked.traktConnectStart.mockResolvedValue({
+      deviceCode: "d",
+      userCode: "U",
+      verificationUrl: "http://verify",
+      interval: 100,
+      expiresIn: 1000,
+    });
+    mocked.traktConnectPoll.mockResolvedValue({ status: "pending" });
+
+    render(tree(true));
+    fireEvent.click(screen.getByTestId("source-trakt"));
+    await waitFor(() => expect(screen.getByTestId("trakt-connect-notice")).toBeInTheDocument());
+
+    // Selecting Plex supersedes the Trakt poll: its notice clears and the Plex form opens.
+    fireEvent.click(screen.getByTestId("source-plex"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("trakt-connect-notice")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByPlaceholderText("Plex token")).toBeInTheDocument();
+  });
+});
+
 describe("SourcePicker import progress", () => {
   it("shows the syncing view with a live count while a sync runs", async () => {
     // Hold the sync open so the syncing view stays mounted while we assert on it.

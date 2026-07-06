@@ -321,10 +321,16 @@ class UndoResponse(ApiModel):
 
 
 class FeedbackSignal(enum.StrEnum):
-    """A correction a user can send from a recommendation card. One negative member for now — no
-    thumbs-up, to avoid optimising for engagement (review K2) — but shaped to grow."""
+    """A signal a user can send about a title from the UI.
+
+    ``not_interested`` is the negative card correction — no on-card thumbs-up, to avoid optimising
+    for engagement (review K2). ``loved`` is the onboarding "start from scratch" seed: a title the
+    user picks as one they loved, written as a watched+liked pair so a taste profile can be built
+    with no connected history (round 7, fix 1). It is deliberately not exposed on recommendation
+    cards — it's an onboarding-only positive signal."""
 
     not_interested = "not_interested"
+    loved = "loved"
 
 
 class FeedbackRequest(ApiModel):

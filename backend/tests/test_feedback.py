@@ -85,6 +85,54 @@ def test_not_interested_drops_the_title_and_undo_restores_it(db_session: Session
     assert target in _recommended_ids(client, profile_id)
 
 
+def test_loved_seeds_watched_and_liked_and_unblocks_onboarding(db_session: Session) -> None:
+    """The onboarding "start from scratch" path (round 7, fix 1): loving a catalog title with no
+    connected history writes a watched+liked pair and flips the onboarding gate to ready-to-browse.
+    """
+    user = make_account(db_session)
+    client = _client(db_session, user)
+    profile_id = str(user.profile.id)
+    # Only a catalog — no sample history. This mirrors a fresh account seeding by hand.
+    client.post("/catalog/sample")
+
+    # Before any loved pick, history isn't ready and Browse is gated.
+    before = client.get(f"/profiles/{profile_id}/onboarding").json()
+    assert before["historyReady"] is False
+    assert before["readyToBrowse"] is False
+
+    target = next(iter(_recommended_ids(client, profile_id)))
+    resp = client.post(f"/profiles/{profile_id}/titles/{target}/feedback", json={"signal": "loved"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["signal"] == "loved"
+    # A loved pick is two events, so the undo token is a comma-joined pair.
+    tokens = body["undoToken"].split(",")
+    assert len(tokens) == 2
+    assert all(token.startswith("event:") for token in tokens)
+
+    # Both a watched and a liked event landed on the title.
+    events = db_session.scalars(
+        select(WatchEvent).where(
+            WatchEvent.profile_id == uuid.UUID(profile_id),
+            WatchEvent.title_id == uuid.UUID(target),
+        )
+    ).all()
+    assert {e.type for e in events} == {EventType.watched, EventType.liked}
+
+    # The seeded events unblock Browse: history (and, offline, taste) now read ready.
+    after = client.get(f"/profiles/{profile_id}/onboarding").json()
+    assert after["historyReady"] is True
+    assert after["readyToBrowse"] is True
+
+    # Undo reverses the whole pair (the chat undo mechanism handles the comma-joined token).
+    undo = client.post(f"/profiles/{profile_id}/chat/undo", json={"token": body["undoToken"]})
+    assert undo.status_code == 200 and undo.json()["undone"] is True
+    assert (
+        db_session.scalar(select(WatchEvent).where(WatchEvent.title_id == uuid.UUID(target)))
+        is None
+    )
+
+
 def test_feedback_unknown_title_is_404(db_session: Session) -> None:
     user = make_account(db_session)
     client = _client(db_session, user)
