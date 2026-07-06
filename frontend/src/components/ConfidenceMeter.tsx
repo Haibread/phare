@@ -3,28 +3,42 @@ import { useEmbeddingsDegraded } from "../lib/degraded";
 import { type Fit, fitFor } from "../lib/fit";
 import styles from "./components.module.css";
 
-/** Worded fit label + a coarse 3-segment bar. The bar mirrors the label's bucket exactly — it's a
- * visual echo, not a finer-grained score (no fake precision). In offline mode (local hash embedder)
- * the top "strong fit" bucket is suppressed, so an approximate pick can't read as a confident one. */
+/** A slim continuous-fill gauge whose width is proportional to the confidence and whose colour is
+ * keyed to the fit bucket (success/saffron for a strong fit, neutral otherwise). No number and no
+ * inline text — a percentage would be false precision on a heuristic blend (owner request R6a). The
+ * bucket wording still reaches assistive tech via the gauge's ``aria-label`` + hover ``title``, and
+ * it lives visibly in the detail sheet.
+ *
+ * Swings render nothing here: a swing is a categorical "deliberate stretch", not a point on the same
+ * scalar axis, so the card shows its swing badge instead of a gauge. In offline mode (local hash
+ * embedder) ``fitFor`` caps the tone so an approximate pick can never read as a confident success. */
 export function ConfidenceMeter({
   confidence,
   isSwing,
 }: {
   confidence: number | null;
   isSwing: boolean;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const { t } = useTranslation("common");
   const degraded = useEmbeddingsDegraded();
   const fit: Fit = fitFor(confidence, isSwing, degraded);
+  if (fit.fill === null) {
+    // Swing — the poster card carries the categorical badge; no scalar gauge.
+    return null;
+  }
+  const label = t(fit.labelKey);
+  const pct = `${Math.round(fit.fill * 100)}%`;
   return (
-    <span className={styles.fit} data-testid="fit">
-      <span className={styles.fitLabel} data-tone={fit.tone}>
-        {t(fit.labelKey)}
-      </span>
-      <span className={styles.bar} aria-hidden="true">
-        {[1, 2, 3].map((n) => (
-          <span key={n} className={styles.seg} data-on={n <= fit.filled} data-tone={fit.tone} />
-        ))}
+    <span
+      className={styles.fit}
+      data-testid="fit"
+      role="meter"
+      aria-label={label}
+      title={label}
+      data-tone={fit.tone}
+    >
+      <span className={styles.gaugeTrack} aria-hidden="true">
+        <span className={styles.gaugeFill} data-tone={fit.tone} style={{ width: pct }} />
       </span>
     </span>
   );

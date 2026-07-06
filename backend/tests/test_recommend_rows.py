@@ -1,12 +1,13 @@
-"""The per-item confidence the heuristic rows now expose — recency decay for "continue watching"
-and a log-scaled popularity for "popular". Pure functions, so no DB needed here; row wiring is
-covered in test_recommend_engine."""
+"""The recency-decay confidence "continue watching" exposes. Pure function, so no DB needed here.
+
+The "popular" row's confidence is now a real *taste fit* (lot R6b), not a popularity magnitude — it
+needs embeddings + a centroid, so its wiring is covered in test_recommend_engine, not here."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from phare.recommend.rows import _popularity_confidence, _recency_confidence
+from phare.recommend.rows import _recency_confidence
 
 _NOW = datetime(2026, 6, 21, tzinfo=UTC)
 
@@ -33,17 +34,3 @@ def test_recency_confidence_handles_missing_and_naive_timestamps() -> None:
     assert _recency_confidence(None, now=_NOW) == 0.1
     naive = datetime(2026, 6, 21)  # noqa: DTZ001 — deliberately naive, treated as UTC
     assert _recency_confidence(naive, now=_NOW) == 1.0
-
-
-def test_popularity_confidence_grows_with_popularity() -> None:
-    assert _popularity_confidence(None) == 0.0
-    assert _popularity_confidence(0) == 0.0
-    mild = _popularity_confidence(100)
-    big = _popularity_confidence(1000)
-    assert mild < big
-    assert big == 1.0  # log10(1001)/3 caps at the full bar
-    assert 0.6 < mild < 0.7  # ~two-thirds — a "worth a try" / "strong fit" boundary
-
-
-def test_popularity_confidence_is_clamped_to_one() -> None:
-    assert _popularity_confidence(50_000) == 1.0

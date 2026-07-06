@@ -103,6 +103,7 @@ export function PosterCard({
         open={detailOpen}
         onOpenChange={setDetailOpen}
         anchorTitleId={anchorTitleId}
+        showFit={showFit}
       />
     </article>
   );

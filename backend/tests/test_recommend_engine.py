@@ -415,6 +415,111 @@ def test_popular_row_unchanged_without_hard_avoids(db_session: Session) -> None:
     assert [item.title for item in row.items] == ["Big Drama", "Silly Comedy"]
 
 
+def _embed_all(session: Session) -> None:
+    """Embed every catalog title missing a vector in the local space (deterministic, no creds)."""
+    from phare.embeddings.service import EmbeddingService
+
+    EmbeddingService(session, LocalHashEmbeddingProvider(), LOCAL_MODEL_VERSION).embed_missing(
+        batch_size=64, limit=10_000
+    )
+
+
+def test_popular_row_confidence_is_real_taste_fit_when_taste_present(db_session: Session) -> None:
+    # R6b: the popular row's confidence is now a genuine taste fit (similarity to the profile
+    # centroid + affinity through the canonical blend), not popularity magnitude. With a taste
+    # centroid + embeddings present, every popular item gets a real [0, 1] confidence — and the row
+    # is still ORDERED by popularity, not by that confidence.
+    from phare.recommend.rows import popular_row
+
+    profile_id = _seeded_profile(db_session)
+    _popular_title(db_session, 9201, "Runaway Hit", ["Action"], 900.0)
+    _popular_title(db_session, 9202, "Mild Pick", ["Drama"], 100.0)
+    db_session.flush()
+    _embed_all(db_session)
+    centroid = compute_taste_centroid(db_session, profile_id, LOCAL_MODEL_VERSION)
+    assert centroid is not None
+
+    row = popular_row(
+        db_session,
+        profile_id,
+        limit=12,
+        centroid=centroid,
+        taste=_service(db_session).load_taste(profile_id),
+        model_version=LOCAL_MODEL_VERSION,
+    )
+    by_title = {item.title: item for item in row.items}
+    # Both popular titles carry a real, non-null confidence in range.
+    for name in ("Runaway Hit", "Mild Pick"):
+        assert name in by_title
+        conf = by_title[name].confidence
+        assert conf is not None and 0.0 <= conf <= 1.0
+    # Ordering is by popularity (the row's identity), independent of the fit confidence.
+    hit_i = next(i for i, it in enumerate(row.items) if it.title == "Runaway Hit")
+    mild_i = next(i for i, it in enumerate(row.items) if it.title == "Mild Pick")
+    assert hit_i < mild_i  # 900.0 popularity precedes 100.0
+
+
+def test_popular_row_confidence_is_null_without_taste(db_session: Session) -> None:
+    # Cold start: no watch history -> no centroid -> the popular row's fit is null (the UI's neutral
+    # "worth a look"), never a fabricated popularity score. The cold-start UX must not regress.
+    from phare.recommend.rows import popular_row
+
+    profile = Profile(display_name="cold-start")
+    db_session.add(profile)
+    db_session.flush()
+    _popular_title(db_session, 9301, "Big Drama", ["Drama"], 500.0)
+    db_session.flush()
+
+    # Even if a centroid were somehow absent while taste dict exists, no centroid => all null.
+    row = popular_row(
+        db_session,
+        profile.id,
+        limit=12,
+        centroid=None,
+        taste={},
+        model_version=LOCAL_MODEL_VERSION,
+    )
+    assert row.items
+    assert all(item.confidence is None for item in row.items)
+
+
+def test_popular_row_unproven_title_confidence_is_capped(db_session: Session) -> None:
+    # A fresh release with almost no votes has no quality signal yet, so its displayed fit is capped
+    # below the top buckets even if it lands near the centroid — popular skews recent, so this cap
+    # (the same vote threshold the reranker uses) is exactly what keeps a just-dropped title from
+    # reading as a confident pick.
+    from phare.recommend.reranker import _MIN_PROVEN_VOTES, _UNPROVEN_CONF_CAP
+    from phare.recommend.rows import popular_row
+
+    profile_id = _seeded_profile(db_session)
+    # One well-proven, one just-dropped (few votes) — same everything else.
+    proven = Title(
+        kind=TitleKind.movie, tmdb_id=9401, title="Proven", genres=["Action"], popularity=800.0
+    )
+    proven.vote_count = _MIN_PROVEN_VOTES + 500
+    fresh = Title(
+        kind=TitleKind.movie, tmdb_id=9402, title="Fresh Drop", genres=["Action"], popularity=700.0
+    )
+    fresh.vote_count = 3  # barely any votes -> unproven
+    db_session.add_all([proven, fresh])
+    db_session.flush()
+    _embed_all(db_session)
+    centroid = compute_taste_centroid(db_session, profile_id, LOCAL_MODEL_VERSION)
+    assert centroid is not None
+
+    row = popular_row(
+        db_session,
+        profile_id,
+        limit=12,
+        centroid=centroid,
+        taste=_service(db_session).load_taste(profile_id),
+        model_version=LOCAL_MODEL_VERSION,
+    )
+    fresh_conf = next(it.confidence for it in row.items if it.title == "Fresh Drop")
+    assert fresh_conf is not None
+    assert fresh_conf <= _UNPROVEN_CONF_CAP  # the unproven cap bites regardless of similarity
+
+
 def test_because_you_watched_rows_anchor_on_loved_titles(db_session: Session) -> None:
     profile_id = _seeded_profile(db_session)
     service = _service(db_session)

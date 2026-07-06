@@ -411,6 +411,45 @@ def _confidence(
     return round(max(0.0, min(1.0, base)), 3)
 
 
+def confidence_for_pool(
+    candidates: Sequence[Candidate], taste: Mapping[str, Any]
+) -> list[float | None]:
+    """Honest per-title fit confidence for an *externally-ordered* pool — same blend the re-ranker
+    stamps on a ranked slate, without re-ordering.
+
+    The ``popular`` row is selected and ordered by popularity (its identity), but its fit gauge must
+    read real taste, not popularity magnitude (lot R6b — the owner's "populaire n'a pas de rating").
+    So it scores its own titles here: each candidate's cosine similarity to the taste centroid is
+    placed pool-relative (:func:`_relative_similarities`) exactly as ``rerank`` does, folded with
+    the graded affinity into the canonical :func:`_confidence` blend — including the ``unproven``
+    cap, so a fresh, few-votes release can't read as a confident pick (popular skews recent). No
+    swing hedging: these aren't reserved discovery slots.
+
+    Returns one confidence in ``[0, 1]`` per input candidate, positionally aligned; the caller keeps
+    its own order. An empty pool yields ``[]``. A caller with no taste centroid simply shouldn't
+    call this (it would have no ``similarity`` to pass) and should leave ``confidence = None`` — the
+    UI then shows the neutral "worth a look", and the cold-start path never regresses.
+    """
+    if not candidates:
+        return []
+    sim_rels = _relative_similarities([c.similarity for c in candidates])
+    out: list[float | None] = []
+    for candidate, sim_rel in zip(candidates, sim_rels, strict=True):
+        _, components = score_candidate(candidate, taste, sim_rel=sim_rel)
+        out.append(
+            _confidence(
+                taste,
+                is_swing=False,
+                sim_rel=components["similarity_rel"],
+                sim_norm=components["similarity"],
+                affinity_norm=components["affinity"],
+                unproven=candidate.vote_count is not None
+                and candidate.vote_count < _MIN_PROVEN_VOTES,
+            )
+        )
+    return out
+
+
 def rerank(
     candidates: Sequence[Candidate],
     taste: Mapping[str, Any],
