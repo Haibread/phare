@@ -76,14 +76,14 @@ def test_facets_beat_single_centroid_on_mixed_taste(db_session: Session) -> None
     )
     # Facets surface both modes...
     assert result.facets_pass, (
-        f"facet slate missed a mode: A={result.facet_a_cousins} B={result.facet_b_cousins} "
+        f"facet slate missed a mode: A={result.facet_a_items} B={result.facet_b_items} "
         f"(need >= {_MIN_PER_MODE} each)"
     )
     # ...and the single averaged centroid does NOT — the regression this round removes. Without this
     # assertion the check could pass both ways and prove nothing (mission mandate).
     assert result.single_centroid_fails, (
         "the single averaged centroid also surfaced both modes — the check does not discriminate: "
-        f"A={result.single_a_cousins} B={result.single_b_cousins}"
+        f"A={result.single_a_items} B={result.single_b_items}"
     )
 
 

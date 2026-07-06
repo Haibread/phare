@@ -274,6 +274,16 @@ def _quality_penalty(candidate: Candidate) -> float:
     return max(0.0, (_QUALITY_FLOOR - candidate.vote_average) / _QUALITY_FLOOR)
 
 
+def _raw_similarity(candidate: Candidate) -> float:
+    """The candidate's honest raw cosine. Facet-merged candidates carry it on ``raw_similarity``
+    (their ``similarity`` is the facet-relative placement); single-vector candidates carry it on
+    ``similarity`` itself. Everything that must read the *true* scale — the confidence blend's
+    absolute band, swing novelty — goes through here."""
+    return (
+        candidate.raw_similarity if candidate.raw_similarity is not None else candidate.similarity
+    )
+
+
 def _relative_similarities(sims: Sequence[float]) -> list[float]:
     """Place each raw similarity relative to its pool: ``clamp01(0.5 + (sim-mean)/(SPREAD*std))``.
 
@@ -299,7 +309,11 @@ def score_candidate(
     is what scores, so a query's spread of candidates actually separates. When omitted (a lone
     candidate scored outside a pool) it falls back to the absolute normalised similarity.
     """
-    sim_norm = (candidate.similarity + 1.0) / 2.0  # cosine [-1,1] -> [0,1], absolute
+    # The absolute reading must be the TRUE cosine: a facet-merged candidate's ``similarity`` is
+    # its facet-relative placement (see service._merge_facet_pools), the right thing to *rank* by
+    # but a lie to the confidence blend's absolute band. ``raw_similarity`` carries the honest
+    # value there; on single-vector paths it is None and ``similarity`` is already the raw cosine.
+    sim_norm = (_raw_similarity(candidate) + 1.0) / 2.0  # cosine [-1,1] -> [0,1], absolute
     sim_effective = sim_norm if sim_rel is None else sim_rel
     affinity = _affinity_score(candidate, taste.get("affinities", {}) or {})
     affinity_norm = (affinity + 1.0) / 2.0  # [-1,1] -> [0,1], 0.5 = neutral
@@ -319,6 +333,8 @@ def score_candidate(
         "quality_penalty": round(quality_penalty, 4),
         "score": round(score, 4),
     }
+    if candidate.facet is not None:  # transparency: which taste facet surfaced this pick
+        components["facet"] = float(candidate.facet)
     return score, components
 
 
@@ -330,21 +346,92 @@ def _genre_overlap(candidate: Candidate, covered: Counter[str]) -> float:
     return hit / len(candidate.genres)
 
 
+# Facet-share guarantee (round 10, live finding). A profile whose taste splits 0.37/0.25/0.20/0.18
+# across four facets must not render a 10/0/0/0 slate: every facet carrying at least this share of
+# the taste mass is guaranteed at least one main slot (and its proportional share, floored), unless
+# its candidates genuinely ran out post-filter — in which case the shortfall is recorded, never
+# silent. Mirrors how swing slots are reserved: membership guarantees, score/MMR still orders.
+_FACET_QUOTA_MIN_WEIGHT = 0.15
+
+
+def _facet_quotas(
+    facet_weights: Sequence[float] | None,
+    scored: list[tuple[float, Candidate, dict[str, float]]],
+    main_slots: int,
+) -> dict[int, int] | None:
+    """Reserved main-slate slots per facet: proportional to facet weight (``int(w * slots)``), with
+    a floor of one slot for any facet at/above ``_FACET_QUOTA_MIN_WEIGHT``. The remainder is filled
+    by global MMR. ``None`` (no reservation) when there's no facet structure to honour."""
+    if not facet_weights or main_slots <= 0:
+        return None
+    if not any(candidate.facet is not None for _, candidate, _ in scored):
+        return None
+    quotas: dict[int, int] = {}
+    for idx, weight in enumerate(facet_weights):
+        reserved = int(weight * main_slots)
+        if weight >= _FACET_QUOTA_MIN_WEIGHT:
+            reserved = max(reserved, 1)
+        if reserved > 0:
+            quotas[idx] = reserved
+    # The floors can only pathologically push the total past the slot count (many tiny facets);
+    # trim from the lightest facet, deterministically, so reservations never exceed the slate.
+    while sum(quotas.values()) > main_slots:
+        lightest = min(quotas, key=lambda i: (facet_weights[i], -i))
+        quotas[lightest] -= 1
+        if quotas[lightest] == 0:
+            del quotas[lightest]
+    return quotas or None
+
+
 def _select_diverse(
-    scored: list[tuple[float, Candidate, dict[str, float]]], count: int
+    scored: list[tuple[float, Candidate, dict[str, float]]],
+    count: int,
+    *,
+    quotas: dict[int, int] | None = None,
 ) -> list[tuple[float, Candidate, dict[str, float]]]:
-    """Greedy MMR: repeatedly take the highest score-minus-genre-overlap candidate."""
+    """Greedy MMR: repeatedly take the highest score-minus-genre-overlap candidate.
+
+    With ``quotas`` (facet index → reserved slots), the greedy pick is constrained just enough to
+    honour them: while the remaining slots exceed the unmet reservations, selection is free (best
+    MMR pick wins, whatever its facet); once the remaining slots are all spoken for, only candidates
+    from under-quota facets are eligible. MMR still orders *within* the constraint, so diversity and
+    score behave as before — the quota only decides membership, exactly like swing slots. A facet
+    whose candidates run out before its reservation is met is released (and recorded via
+    ``record_fallback``) so the slate still fills — filters emptying a facet is honest, hiding three
+    facets behind one is not."""
     chosen: list[tuple[float, Candidate, dict[str, float]]] = []
     covered: Counter[str] = Counter()
     pool = list(scored)
+    unmet: dict[int, int] = dict(quotas or {})
     while pool and len(chosen) < count:
+        if unmet:
+            # Release reservations no candidate can satisfy any more (the facet ran out post-
+            # filter) — visible, never a deadlock.
+            available = {c.facet for _, c, _ in pool}
+            starved = [idx for idx in unmet if idx not in available]
+            for idx in starved:
+                record_fallback("reranker", "facet_quota_starved", facet=idx, unmet=unmet[idx])
+                del unmet[idx]
+        remaining = count - len(chosen)
+        deficit = sum(unmet.values())
+        if unmet and deficit >= remaining:
+            eligible = [i for i in range(len(pool)) if unmet.get(pool[i][1].facet, 0) > 0]
+        else:
+            eligible = list(range(len(pool)))
+        if not eligible:
+            eligible = list(range(len(pool)))
         best_idx = max(
-            range(len(pool)),
+            eligible,
             key=lambda i: pool[i][0] - _DIVERSITY_LAMBDA * _genre_overlap(pool[i][1], covered),
         )
         score, candidate, components = pool.pop(best_idx)
         chosen.append((score, candidate, components))
         covered.update(candidate.genres)
+        facet = candidate.facet
+        if facet is not None and unmet.get(facet, 0) > 0:
+            unmet[facet] -= 1
+            if unmet[facet] == 0:
+                del unmet[facet]
     return chosen
 
 
@@ -457,12 +544,19 @@ def rerank(
     k: int = 12,
     swing_slots: int = 2,
     vote_mix: bool = False,
+    facet_weights: Sequence[float] | None = None,
 ) -> list[Recommendation]:
     """Order candidates into a slate of up to ``k``, reserving ``swing_slots`` novelty picks.
 
     ``vote_mix=True`` (the chat path) ignores swing slots and instead composes a deliberate mix by
     vote count — ~50/35/15 well-known / lesser-known / low-vote — ordered by score, so the chat
     slate leads with the most *relevant* pick while still spanning a range of known-ness.
+
+    ``facet_weights`` (round 10) is the taste-facet mass distribution behind a facet-merged pool;
+    the main MMR selection then reserves slots per facet proportional to weight (floor of one for
+    any facet ≥ ``_FACET_QUOTA_MIN_WEIGHT``) so one dominant mode can't sweep the whole slate — see
+    :func:`_facet_quotas`. Ignored on the vote-mix path (chat composes by known-ness, and the
+    per-facet similarity normalisation upstream already makes its score ordering facet-fair).
     """
     if not candidates:
         return []
@@ -490,12 +584,16 @@ def rerank(
     swing_slots = max(0, min(swing_slots, k))
     main_slots = max(0, k - swing_slots)
 
-    main = _select_diverse(scored, main_slots)
+    main = _select_diverse(
+        scored, main_slots, quotas=_facet_quotas(facet_weights, scored, main_slots)
+    )
     chosen_ids = {c.title_id for _, c, _ in main}
 
-    # Swings: the most *novel* leftovers (lowest similarity), not the next-best by score.
+    # Swings: the most *novel* leftovers (lowest similarity), not the next-best by score. Novelty
+    # reads the RAW cosine — a facet-merged candidate's ``similarity`` is facet-relative, and
+    # "least like the taste" is a statement about the true embedding distance.
     leftovers = [item for item in scored if item[1].title_id not in chosen_ids]
-    leftovers.sort(key=lambda item: item[1].similarity)  # ascending = most novel first
+    leftovers.sort(key=lambda item: _raw_similarity(item[1]))  # ascending = most novel first
     swings = leftovers[:swing_slots]
 
     recommendations: list[Recommendation] = []

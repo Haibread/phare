@@ -53,10 +53,14 @@ _COHESION_THRESHOLD = 0.92
 # Fixed Lloyd iterations. k-means converges fast on a handful of points; a fixed small count keeps
 # it deterministic (no convergence-tolerance branch differing across float orders) and bounded.
 _LLOYD_ITERS = 8
-# Per-facet retrieval floor as a fraction of the single-centroid limit. A facet backed by only 10%
-# of the history still needs *enough* candidates to contribute a couple of picks, so its share never
-# drops below this fraction of the total even if its weight is tiny (the rest is split by weight).
-_FACET_LIMIT_FLOOR_FRAC = 0.25
+# Per-facet retrieval depth floor (live round-10 finding). The first cut split the single-query
+# budget (k*4+10) proportionally across facets, which left the smallest facet ~11 candidates — too
+# shallow for its picks to survive runtime/genre filters, the quality floor, and MMR. ANN queries
+# are cheap (each is one indexed pgvector scan), so every facet retrieves at least this deep: the
+# max of 2*k and this constant. Slate share is enforced downstream by the reranker's facet quota,
+# not by starving retrieval. Worst case (4 facets) is ~4 ANN queries of ~2k each — bounded, and the
+# merged pool stays the same order of magnitude as the historical single query.
+_FACET_MIN_DEPTH = 24
 
 
 @dataclass(frozen=True)
@@ -231,27 +235,20 @@ def _normalise_weights(facets: list[Facet]) -> list[Facet]:
     return [Facet(f.centroid, f.weight / total, f.size, f.mean_intra_sim) for f in facets]
 
 
-def facet_budgets(facets: list[Facet], total_limit: int) -> list[int]:
-    """Split ``total_limit`` candidates across facets by weight, with a per-facet floor.
+def facet_budgets(facets: list[Facet], k: int) -> list[int]:
+    """Per-facet ANN retrieval limits for a slate of ``k``.
 
-    The merged pool must stay ~the single-centroid size (``k*4+10``), NOT ``k`` facets × that — so
-    the budget is *divided*, not multiplied. Each facet gets at least ``_FACET_LIMIT_FLOOR_FRAC`` of
-    an equal share (a thin 10% mode still retrieves enough to place a pick or two), the rest split
-    by weight, and largest-remainder rounding hands out the leftover so the parts sum to
-    ``total_limit``. Single facet → the whole limit (identical to today)."""
-    n = len(facets)
-    if n <= 1:
-        return [total_limit]
-    floor = max(1, int(_FACET_LIMIT_FLOOR_FRAC * total_limit / n))
-    floored_total = floor * n
-    remaining = max(0, total_limit - floored_total)
-    raw = [floor + remaining * f.weight for f in facets]
-    budgets = [int(x) for x in raw]
-    leftover = total_limit - sum(budgets)
-    order = sorted(range(n), key=lambda i: raw[i] - budgets[i], reverse=True)
-    for i in range(max(0, leftover)):
-        budgets[order[i % n]] += 1
-    return budgets
+    Single facet → the historical ``k*4+10`` (byte-identical behaviour). Multiple facets: each gets
+    its weight's share of that total, floored at ``max(2*k, _FACET_MIN_DEPTH)`` — the proportional
+    split alone proved too shallow live (a 4-facet profile left the smallest facet ~11 candidates,
+    which the filters + quality floor + MMR then erased). Depth is cheap (one indexed pgvector scan
+    per facet); *slate share* is what proportionality governs, and that's enforced by the reranker's
+    facet quota, not by starving a facet's retrieval. Deterministic: pure arithmetic on weights."""
+    total = k * 4 + 10
+    if len(facets) <= 1:
+        return [total]
+    floor = max(2 * k, _FACET_MIN_DEPTH)
+    return [max(int(f.weight * total), floor) for f in facets]
 
 
 def log_facets(profile_id: str, facets: list[Facet]) -> None:

@@ -22,14 +22,30 @@ filters) → re-ranker → explanations (LLM)`.
     no RNG — pgvector is already approximate, the clustering must not add a second source of
     flicker). `k` is adaptive: it grows only while splitting keeps buying separation (a cohesion
     threshold on each cluster's mean intra-similarity), so a genuinely one-note taste stays `k=1`.
-    Each facet gets its own ANN query with a share of the retrieval budget **proportional to its
-    event mass** (a mode backed by 60 % of the history gets ~60 % of the slots); the budget is
-    *split* across facets, not multiplied, so the merged pool stays the same size as the old single
-    query (~`k*4+10`). Pools merge with dedup, keeping each candidate's **best** similarity across
-    facets. The re-ranker, mood nudge, and constraint-aware re-fetch all compose unchanged — mood
-    nudges each facet, the re-fetch runs per facet. **Negatives** (abandonment / dislike) are *not*
-    clustered: they push the whole taste away, so they ride into every facet centroid, never seed
-    their own.
+    Each facet gets its own ANN query, deep enough to survive the downstream filters (at least
+    `max(2k, 24)` candidates each — depth is cheap, one indexed pgvector scan per facet, and a
+    proportional-only split proved to starve the light facets live). Pools merge with dedup,
+    keeping each candidate's best similarity.
+    - **Cross-facet similarity fairness** (live round-10 finding). Raw cosines are **not
+      comparable across facets**: a dense region of the embedding space (mainstream action/SF)
+      reads systematically higher raw cosines than a sparser one (prestige drama), so merging raw
+      similarities let the dominant mode occupy the whole top of the merged range — the re-ranker's
+      pool-relative normalisation then squashed every other mode out, and a 4-facet profile
+      rendered a 10/10 single-mode slate. So each facet's pool is normalised *within itself* first
+      ("top of facet B" competes fairly with "top of facet A") before merging; the honest raw
+      cosine is kept alongside, because the confidence meter's absolute band and swing-slot novelty
+      must read the *true* scale, never the normalised one. Each candidate also records which facet
+      surfaced it (`facet` in the score breakdown — the engine stays inspectable).
+    - **Facet-share guarantee.** The main slate reserves slots per facet **proportional to its
+      event mass** (a mode backed by 60 % of the history gets ~60 % of the slate; floor of one slot
+      for any facet ≥ 15 %), mirroring how swing slots are reserved: the quota decides membership,
+      score + MMR still order. A 0.37/0.25/0.20/0.18 profile can no longer render a 10/0/0/0 slate
+      — unless the filters/quality floor genuinely empty a facet, in which case its reservation is
+      released and recorded as a `facet_quota_starved` fallback, never silently.
+    - The re-ranker, mood nudge, and constraint-aware re-fetch all compose unchanged — mood nudges
+      each facet, the re-fetch runs per facet. **Negatives** (abandonment / dislike) are *not*
+      clustered: they push the whole taste away, so they ride into every facet centroid, never seed
+      their own.
     - **k=1 degradation.** A small history (< ~8 positively-weighted titles) or an already-cohesive
       taste collapses to a single facet whose centroid **equals** the historical one — so N=1 and
       single-mode profiles behave exactly as before (principle 5). Rewatch rows and title-anchored

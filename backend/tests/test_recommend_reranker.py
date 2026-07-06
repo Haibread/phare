@@ -424,3 +424,105 @@ def test_confidence_for_pool_applies_the_unproven_cap() -> None:
 
 def test_confidence_for_pool_empty_is_empty() -> None:
     assert confidence_for_pool([], {}) == []
+
+
+# --- multi-facet fairness (round 10, live finding) ---------------------------------------------
+#
+# A facet-merged candidate carries similarity = facet-relative placement, raw_similarity = the true
+# cosine, facet = which taste mode surfaced it. The reranker must (a) keep the confidence blend's
+# absolute band honest by reading the raw value, and (b) honour the facet-share quota so one
+# dominant mode can't sweep the slate.
+
+
+def _facet_cand(*, title: str, sim: float, raw: float, facet: int, genres: list[str]) -> Candidate:
+    return _cand(title=title, sim=sim, genres=genres).model_copy(
+        update={"raw_similarity": raw, "facet": facet}
+    )
+
+
+def test_absolute_similarity_component_reads_the_raw_cosine() -> None:
+    # similarity (facet-relative) says "top of my facet"; the absolute component must still read
+    # the true cosine, or a weak facet's #1 would claim a strong absolute band in the confidence.
+    normalised = _facet_cand(title="x", sim=1.0, raw=0.60, facet=1, genres=["Drama"])
+    _, components = score_candidate(normalised, {}, sim_rel=0.9)
+    assert components["similarity"] == round((0.60 + 1.0) / 2.0, 4)  # raw, not the facet-relative
+    assert components["similarity_rel"] == 0.9
+    assert components["facet"] == 1.0  # transparency: the winning facet is in the breakdown
+
+
+def test_facet_quota_prevents_single_mode_sweep() -> None:
+    # The live round-10 failure: a dominant facet's candidates all outscore the others, and without
+    # the quota the slate is 10/0. With facet weights, every facet >= 15% mass gets its floor slot.
+    # Distinct genres per dominant candidate so MMR's genre-overlap penalty can't accidentally
+    # rescue the other facets — the sweep must come from score dominance alone, as it did live.
+    dominant = [
+        _facet_cand(title=f"a{i}", sim=0.9 - i * 0.01, raw=0.9, facet=0, genres=[f"G{i}"])
+        for i in range(10)
+    ]
+    drama = [
+        _facet_cand(title=f"d{i}", sim=0.5 - i * 0.01, raw=0.55, facet=1, genres=["Drama"])
+        for i in range(4)
+    ]
+    comedy = [
+        _facet_cand(title=f"c{i}", sim=0.45 - i * 0.01, raw=0.52, facet=2, genres=["Comedy"])
+        for i in range(4)
+    ]
+    pool = [*dominant, *drama, *comedy]
+    weights = [0.55, 0.25, 0.20]
+
+    without = rerank(pool, {}, k=8, swing_slots=0)
+    with_quota = rerank(pool, {}, k=8, swing_slots=0, facet_weights=weights)
+
+    def facet_counts(recs):  # type: ignore[no-untyped-def]
+        by_title = {c.title: c.facet for c in pool}
+        counts = {0: 0, 1: 0, 2: 0}
+        for r in recs:
+            counts[by_title[r.title]] += 1
+        return counts
+
+    # Sanity: without the quota the dominant facet sweeps (that's the regression)...
+    assert facet_counts(without)[1] == 0 and facet_counts(without)[2] == 0
+    # ...with it, every facet with >= 15% weight holds at least its proportional floor.
+    counts = facet_counts(with_quota)
+    assert counts[1] >= max(int(0.25 * 8), 1)
+    assert counts[2] >= max(int(0.20 * 8), 1)
+    assert counts[0] >= max(int(0.55 * 8), 1)  # the dominant facet keeps its share too
+
+
+def test_facet_quota_released_when_a_facet_runs_out() -> None:
+    # A facet whose candidates were all filtered away must not deadlock the slate: its reservation
+    # is released (recorded as a fallback) and the slate still fills from what exists.
+    dominant = [
+        _facet_cand(title=f"a{i}", sim=0.9 - i * 0.01, raw=0.9, facet=0, genres=["Action"])
+        for i in range(6)
+    ]
+    with mock.patch("phare.recommend.reranker.record_fallback") as fallback:
+        recs = rerank(dominant, {}, k=4, swing_slots=0, facet_weights=[0.6, 0.4])
+    assert len(recs) == 4  # filled despite facet 1 being empty
+    assert any(call.args[:2] == ("reranker", "facet_quota_starved") for call in fallback.mock_calls)
+
+
+def test_facet_quota_ignored_without_facet_structure() -> None:
+    # Single-vector pools (no facet tags) must behave exactly as before even if weights are passed.
+    pool = [_cand(title=f"t{i}", sim=0.8 - i * 0.05, genres=["Drama"]) for i in range(6)]
+    assert [r.title for r in rerank(pool, {}, k=4, swing_slots=0, facet_weights=[1.0])] == [
+        r.title for r in rerank(pool, {}, k=4, swing_slots=0)
+    ]
+
+
+def test_swing_novelty_reads_the_raw_cosine() -> None:
+    # Swings pick the most-novel leftovers. Novelty is a statement about true embedding distance:
+    # a facet-relative similarity of 0.2 in a strong facet may still be a raw 0.9 — not novel.
+    pool = [
+        _facet_cand(title="strong-main", sim=1.0, raw=0.95, facet=0, genres=["Action"]),
+        _facet_cand(title="mid", sim=0.9, raw=0.90, facet=0, genres=["Drama"]),
+        # Facet-relative LOW but raw HIGH — must not be picked as the swing...
+        _facet_cand(title="rel-low-raw-high", sim=0.2, raw=0.93, facet=0, genres=["Comedy"]),
+        # ...while raw LOW is the honest most-novel pick, even at a higher facet-relative value.
+        _facet_cand(title="raw-low", sim=0.5, raw=0.40, facet=1, genres=["Horror"]),
+    ]
+    # No facet_weights here on purpose: the quota would legitimately pull "raw-low" into the main
+    # slate as facet 1's reserved slot; this test isolates the *novelty* ordering of the leftovers.
+    recs = rerank(pool, {}, k=3, swing_slots=1)
+    swing = next(r for r in recs if r.is_swing)
+    assert swing.title == "raw-low"
