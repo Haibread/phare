@@ -286,6 +286,81 @@ def test_candidates_exclude_watched(db_session: Session) -> None:
     assert all(c.title_id not in watched for c in candidates)
 
 
+def test_facets_cached_across_requests_until_events_change(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The facet extraction is CPU-heavy, so it's cached across requests (service instances) keyed
+    # on a change-stamp of the profile's watch events: a fresh service hits the cache, a new event
+    # changes the stamp and recomputes — no explicit busting anywhere.
+    from phare.db.models import EventType, WatchEvent
+    from phare.recommend.taste_vector import taste_contributions as real
+
+    profile_id = _seeded_profile(db_session)
+    first = _service(db_session)
+    first.ensure_embeddings()
+
+    calls = {"n": 0}
+
+    def counting(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("phare.recommend.service.taste_contributions", counting)
+
+    first.recommend(profile_id)
+    assert calls["n"] == 1  # cold: extracted once
+    # A brand-new service instance (a new request) — same events, so the stamp matches and the
+    # process-wide cache serves the facets without re-reading the history.
+    _service(db_session).recommend(profile_id)
+    assert calls["n"] == 1
+    # A new watch event changes the stamp; the next request recomputes.
+    title = db_session.execute(select(Title).limit(1)).scalar_one()
+    db_session.add(
+        WatchEvent(profile_id=profile_id, title_id=title.id, type=EventType.liked, source="test")
+    )
+    db_session.flush()
+    _service(db_session).recommend(profile_id)
+    assert calls["n"] == 2
+
+
+def test_hard_avoids_are_excluded_in_the_ann_sql(db_session: Session) -> None:
+    # Live round-6 finding: a mood query's entire 86-candidate ANN pool was genre-avoided and
+    # dropped post-hoc in Python (``hard_avoids_emptied``) — the fetch was wasted and the slate
+    # empty even though matching titles existed farther out. Genre-taggable avoids are now pushed
+    # into the ANN WHERE (``NOT (genres && avoided_labels)``), so one fetch lands on titles the
+    # avoid filter won't erase. Geometry is hand-built: 40 Horror titles sit nearest the query
+    # vector — more than the whole over-fetch pool (limit*3 + len(avoids) + 10 = 26) — with 5
+    # comedies far away that the old code could never reach.
+    from phare.db.models import EMBEDDING_DIM, TitleEmbedding
+
+    profile = Profile(display_name="no horror")
+    db_session.add(profile)
+    db_session.flush()
+
+    near = [1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 2)  # the horror cluster = the query direction
+    far = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
+
+    def add(tmdb_id: int, name: str, genre: str, vector: list[float]) -> None:
+        title = Title(kind=TitleKind.movie, tmdb_id=tmdb_id, title=name, genres=[genre])
+        db_session.add(title)
+        db_session.flush()
+        db_session.add(
+            TitleEmbedding(title_id=title.id, model_version=LOCAL_MODEL_VERSION, embedding=vector)
+        )
+
+    for i in range(40):
+        add(5000 + i, f"Scary {i}", "Horror", near)
+    for i in range(5):
+        add(6000 + i, f"Funny {i}", "Comedy", far)
+    db_session.flush()
+
+    candidates = generate_candidates(
+        db_session, profile.id, near, LOCAL_MODEL_VERSION, limit=5, hard_avoids=["horror"]
+    )
+    assert len(candidates) == 5  # above the floor in ONE fetch — previously emptied entirely
+    assert all(c.genres == ["Comedy"] for c in candidates)
+
+
 def test_candidates_respect_hard_avoids(db_session: Session) -> None:
     profile_id = _seeded_profile(db_session)
     _service(db_session).ensure_embeddings()
