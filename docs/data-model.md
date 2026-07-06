@@ -28,8 +28,9 @@ a crude quality floor). Round 8 adds:
   no extra HTTP call. Surfaced on the title-detail API (`directors`, `topCast`), not yet embedded.
 - **`original_language`** — TMDB ISO-639-1 origin code (`en`, `ja`, …), nullable. Wired through the
   broad *discover* import (it carries the field) so new imports get it for free, and healed for
-  older rows. Groundwork for true anime handling (Animation + `ja` origin); the current "anime"
-  handling is only a genre alias → Animation (see `recommend/genres.py`).
+  older rows. This is what makes "anime" a real constraint — Animation **and** `ja` origin — in
+  both the intent filter and the SQL re-fetch (see `recommend/genres.py` and
+  [`design.md`](design.md), "Origin-scoped genres").
 
 The heal never clobbers a non-empty value — it only fills holes (a NULL scalar or an empty credit
 array), so it's idempotent across re-runs.

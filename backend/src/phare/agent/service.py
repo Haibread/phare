@@ -107,7 +107,24 @@ def intent_filter(intent: ChatIntent):
             # Hard filter — "a movie for tonight" must not return a show (review A5).
             result = [c for c in result if c.kind == intent.kind]
         if intent.include_genres:
-            matched = [c for c in result if genres.matches_any(intent.include_genres, c.genres)]
+            # Origin-scoped words ("anime" = Animation made in Japan) also require the candidate's
+            # ``original_language`` — a Batman-heavy profile asking for anime must not get DC
+            # animated movies. Enforceable only when the pool carries language data at all: on a
+            # pre-heal catalog (every candidate NULL) the scoped words downgrade to their plain
+            # genre — recorded, never silent — so the request stays useful before the heal runs.
+            enforce_origin = any(c.original_language is not None for c in result)
+            if not enforce_origin and genres.has_origin_scoped(intent.include_genres):
+                genres.record_origin_language_fallback(intent.include_genres)
+            matched = [
+                c
+                for c in result
+                if genres.genre_match_with_origin(
+                    intent.include_genres,
+                    c.genres,
+                    c.original_language,
+                    enforce_origin=enforce_origin,
+                )
+            ]
             # Don't return nothing just because the catalog is thin — fall back to runtime-only, but
             # make the miss visible (A3/G1) so a vocabulary bug can't hide behind an empty match.
             if matched:

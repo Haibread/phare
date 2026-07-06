@@ -21,6 +21,17 @@ filters) → re-ranker → explanations (LLM)`.
     plus `runtime_minutes <= cap OR runtime IS NULL`), so it ranks the nearest titles *within the
     matching subspace* instead of hoping the global-nearest slice contained matches. It keeps the
     honest relevance floor — a genuinely thin catalog stays thin, never padded with weak matches.
+    A first pass that *looks* full but contains **no genre match** (the intent filter's zero-match
+    safety keeps the whole pool) still counts as starved, and a re-fetched pool that genuinely
+    matches the genre wins regardless of size — otherwise the fallback pool masked the starvation.
+  - **Origin-scoped genres ("anime").** "Anime" is not a TMDB genre but *Animation made in Japan*:
+    the word (and its French forms) resolves to a structured constraint — genre `Animation` **and**
+    `original_language = 'ja'` — enforced identically in the in-memory intent filter and the SQL
+    re-fetch (both read the single mapping in `recommend/genres.py`). Plain "animation" / "dessin
+    animé" stays a genre-only ask. A NULL-language title does **not** pass an anime request (honest
+    thin slate); only when the catalog has *zero* `original_language` coverage (pre-heal / offline)
+    does the ask degrade to plain Animation, recorded as a `anime_language_unknown` fallback —
+    never a silent "anime becomes animation".
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
