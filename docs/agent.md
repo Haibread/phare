@@ -20,11 +20,15 @@ execution → reply`
 - **Tools** ([`agent/tools.py`](../backend/src/phare/agent/tools.py)) — thin wrappers over the
   engine: `recommend`, `explain_picks`, `log_signal`, `set_commitment`, `resolve_commitment`,
   `remember`, `update_taste`. Title references resolve through the catalog search (local + live
-  TMDB). For a **signal write** (`log_signal` — "I loved Get Out") resolution is disambiguated,
-  because writing onto the wrong title silently corrupts taste: it prefers a title just recommended
-  in this conversation, else the most-voted exact-name match, and if two titles are equally
-  plausible it **writes nothing and asks which one** rather than guessing (review H3b). The confirmed
-  action names the resolved title + year so the reply states exactly what was recorded.
+  TMDB). Every tool that **writes against a free-text title** — `log_signal` ("I loved Get Out"),
+  `set_commitment` ("add it to my list"), and `resolve_commitment` ("I watched it") — routes through
+  one shared disambiguation guard, because writing onto the wrong title silently corrupts taste or
+  lands a watch plan on the wrong film (live R7: "add it to my list" after recommending *Kiss Kiss
+  Bang Bang* (2005) planned the obscure *Kiss kiss (Bang Bang)* (2001) instead). The guard prefers a
+  title just recommended in this conversation, else the most-voted exact-name match, and if two
+  titles are equally plausible it **writes nothing and asks which one** rather than guessing (review
+  H3b). The confirmed action names the resolved title + year so the reply states exactly what was
+  recorded.
   `explain_picks` ("why these?") re-surfaces the **last logged chat slate** from the
   recommendation log — never from the model's memory — so the reply explains the titles actually
   shown. It emits **no new strip** (they're already on screen from the previous turn — review B2)

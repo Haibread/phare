@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 
 from phare.core.config import get_settings
 from phare.core.fallback import record_fallback
-from phare.core.i18n import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language, translate
+from phare.core.i18n import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_NAMES,
+    Language,
+    llm_output_directive,
+    translate,
+)
 from phare.db.models import TasteProfile, Title, WatchEvent
 from phare.llm_json import extract_json
 from phare.providers.llm import OpenAILLMProvider
@@ -33,14 +39,24 @@ logger = logging.getLogger(__name__)
 # response so a chatty model can't run up the token bill on it.
 _TASTE_MAX_TOKENS = 700
 
-_ALLOWED_GENRES = ", ".join(genres.CANONICAL_GENRES)
-_ALLOWED_KEYWORDS = ", ".join(genres.AFFINITY_KEYWORDS)
 
 # ``affinities`` and ``hard_avoids`` are the keys that actually steer scoring, so they must line up
 # with what catalog titles are tagged with — a free key ("Mind-bending Sci-Fi") matched nothing and
 # left the profile inert (review H1). Constrain them to a closed vocabulary; ``summary`` / ``likes``
 # / ``dislikes`` stay free-form natural language so the displayed profile isn't impoverished.
-_PROMPT_HEADER = f"""You analyze a viewer's watch history and produce a structured taste profile.
+def _prompt_header(language: Language) -> str:
+    """The taste-extraction system prompt, with the controlled vocabulary in ``language``.
+
+    The genre vocabulary is presented in the profile's language so the model emits affinity/avoid
+    keys the *user* can read (a French profile no longer sports English chips like "cerebral sci-fi"
+    under a French summary, review R7). The English genre labels stay in scoring range because
+    ``recommend/genres.py`` alias-resolves the French forms back to the catalog's English names
+    (``_ALIASES``); free descriptors match less in French, an accepted trade-off (honest,
+    user-visible language over hidden matching for the genre-level chips that do the bulk of the
+    steering — we do NOT build a translation layer)."""
+    allowed_genres = ", ".join(genres.translate_genres(genres.CANONICAL_GENRES, language))
+    allowed_keywords = ", ".join(genres.AFFINITY_KEYWORDS)
+    return f"""You analyze a viewer's watch history and produce a structured taste profile.
 
 Output ONLY a JSON object with these keys:
 - summary: one short paragraph describing the viewer's taste, in plain language, addressed
@@ -57,8 +73,8 @@ Output ONLY a JSON object with these keys:
 - confidence: number in [0, 1] based on how much history is available
 
 Controlled vocabulary for `affinities` keys and `hard_avoids`:
-- genres: {_ALLOWED_GENRES}
-- descriptors: {_ALLOWED_KEYWORDS}
+- genres: {allowed_genres}
+- descriptors: {allowed_keywords}
 
 Guidance: weight recent activity more; treat abandoned/low-rated titles as strong negative
 signal and rewatches as comfort signal. Be specific. History (most recent first):
@@ -189,13 +205,17 @@ class TasteService:
     def generate(self, profile_id: uuid.UUID) -> TasteProfile:
         lines = self._history_lines(profile_id)
         history = "\n".join(lines) if lines else "(no history)"
-        prompt = _PROMPT_HEADER + history + self._memory_block(profile_id)
+        prompt = _prompt_header(self.language) + history + self._memory_block(profile_id)
         if self.language != DEFAULT_LANGUAGE:
-            # Only the human-readable summary localises; structured keys stay English because they
-            # key affinity matching against catalog genre names.
+            # Everything the user sees localises — the summary AND the affinity/avoid/like keys, so
+            # a French profile isn't studded with English chips (review R7). The genre keys picked
+            # from the (now localised) controlled vocabulary above still steer scoring: genres.py
+            # alias-resolves the French forms back to catalog English labels. `vous`, not `tu`.
+            directive = llm_output_directive(self.language)
             prompt += (
-                f"\n\nWrite the `summary` field in {LANGUAGE_NAMES[self.language]}. Keep every "
-                "other string value (likes, dislikes, hard_avoids, affinity keys) in English."
+                f"\n\nWrite every string value (summary, likes, dislikes, hard_avoids, and the "
+                f"affinity keys) in {LANGUAGE_NAMES[self.language]}, drawing the affinity/avoid "
+                f"keys from the controlled vocabulary exactly as spelled above. {directive}"
             )
         logger.info("taste.generate", extra={"profile_id": str(profile_id), "events": len(lines)})
 
