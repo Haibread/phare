@@ -169,6 +169,32 @@ class UpdateTasteRequest(ApiModel):
     user_overrides: dict[str, Any]
 
 
+class FacetExemplarResponse(ApiModel):
+    """A member title most central to a taste facet — shown as the facet's face on the Profile."""
+
+    title_id: uuid.UUID
+    title: str
+    year: int | None = None
+    poster_url: str | None = None
+
+
+class TasteFacetResponse(ApiModel):
+    """One taste mode, made inspectable (principle 2): a deterministic genre label, its share of
+    the positive event mass (``weight``, facets sum to 1), how many titles seeded it, and the 3
+    most central member titles. No LLM anywhere — pure clustering + genre counting."""
+
+    label: str
+    weight: float
+    title_count: int
+    exemplars: list[FacetExemplarResponse]
+
+
+class TasteFacetsResponse(ApiModel):
+    """Weight-descending facets; empty when the taste has a single mode (no insight to show)."""
+
+    facets: list[TasteFacetResponse]
+
+
 class CatalogSummary(ApiModel):
     created: int
 

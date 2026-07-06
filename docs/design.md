@@ -53,6 +53,13 @@ filters) → re-ranker → explanations (LLM)`.
       are computed per request (cached for the request's fan-out of row queries) from the vectors —
       no persistent state, no schema change. A `taste.facets` structured log records `k`, the facet
       sizes, and each facet's mean intra-similarity.
+    - **Inspectable to the user** (principle 2 — the taste profile is never a black box). The same
+      deterministic split is exposed read-only at `GET /profiles/{id}/taste/facets`: each facet
+      carries a genre-derived label (top 1–2 genres of its member titles, English catalog terms —
+      the client localises), its weight (share of positive event mass, facets sum to 1), its title
+      count, and its 3 most centroid-central member titles as exemplars. The Profile page renders
+      them as "Facets of your taste" with a weight bar and exemplar posters; a single-facet taste
+      returns an empty list and the section hides — one blob facet carries no insight. No LLM call.
   - **Adaptive constraint-aware re-fetch.** The first pass retrieves the nearest-to-centroid slice
     and prunes it with the intent filter *after* the fact. For a taste centred elsewhere than the
     requested genre (a thriller fan asking for a light comedy), almost none of those neighbours
