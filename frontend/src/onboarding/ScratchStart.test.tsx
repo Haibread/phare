@@ -91,6 +91,7 @@ describe("ScratchStart", () => {
       profileId: "p1",
       summary: null,
       structured: {},
+      displayTerms: {},
       userOverrides: {},
       confidence: null,
       modelVersion: null,
