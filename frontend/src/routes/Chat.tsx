@@ -6,6 +6,7 @@ import { useProfileId } from "../app/ProfileContext";
 import { TitleDetailSheet } from "../components/TitleDetailSheet";
 import { posterTint } from "../lib/poster";
 import { useChatOpening, useInvalidateAfterChat, useUndoChatAction } from "../lib/queries";
+import { RichText } from "../lib/richText";
 import styles from "./routes.module.css";
 
 /** Suggestion keys map to a translated chip label; "whyThese" also rewrites the outbound message. */
@@ -244,7 +245,7 @@ export function Chat(): React.JSX.Element {
               </span>
             ) : (
               <p style={{ margin: 0 }}>
-                {turn.text}
+                <RichText text={turn.text} />
                 {turn.streaming && <span className={styles.caret} aria-hidden="true" />}
               </p>
             )}

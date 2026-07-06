@@ -11,6 +11,7 @@ import {
   useTitleDetail,
   useUndoChatAction,
 } from "../lib/queries";
+import { RichText } from "../lib/richText";
 import { translateGenre } from "../lib/tasteVocab";
 import { TitleAction } from "./Availability";
 import { Sheet } from "./Sheet";
@@ -148,7 +149,7 @@ export function TitleDetailSheet({
           {why && (
             <p className={styles.detailWhy} data-testid="detail-why">
               <span className={styles.detailLabel}>{t("detail.whyThis")}</span>
-              {why}
+              <RichText text={why} />
               {whyStreaming && <span className={styles.whyCaret} aria-hidden="true" />}
             </p>
           )}

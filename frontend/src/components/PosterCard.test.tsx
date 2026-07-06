@@ -41,7 +41,9 @@ describe("PosterCard", () => {
   it("shows the title, year, and a continuous-fill fit gauge (no inline text)", () => {
     renderCard(<PosterCard item={recItem({ title: "Arrival", confidence: 0.8 })} />);
     expect(screen.getAllByText("Arrival").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/2016/)).toBeInTheDocument();
+    // The year appears in the card meta and, on a poster-less card, in the placeholder too — so
+    // just assert it's present at least once (fixes 4/6 put the year in the fallback tile).
+    expect(screen.getAllByText(/2016/).length).toBeGreaterThanOrEqual(1);
     // The gauge is a meter labelled with the bucket wording (no inline text on the card anymore).
     const gauge = screen.getByTestId("fit");
     expect(gauge).toHaveAttribute("role", "meter");
@@ -131,12 +133,21 @@ describe("PosterCard", () => {
     expect(container.querySelector("img")).toHaveAttribute("src", "https://img/x.jpg");
   });
 
-  it("falls back to the text placeholder without a posterUrl", () => {
+  it("falls back to an honest title+year placeholder without a posterUrl", () => {
     const { container } = renderCard(
-      <PosterCard item={recItem({ title: "Moon", posterUrl: null })} />,
+      <PosterCard item={recItem({ title: "Moon", year: 2009, posterUrl: null })} />,
     );
     expect(container.querySelector("img")).toBeNull();
-    expect(screen.getAllByText("Moon").length).toBeGreaterThanOrEqual(1);
+    // The placeholder tile carries the title + year, centered, instead of a blank grey box (fix 4).
+    const fallback = screen.getByTestId("poster-fallback");
+    expect(fallback).toHaveTextContent("Moon");
+    expect(fallback).toHaveTextContent("2009");
+  });
+
+  it("shows the placeholder title without a year when the year is unknown", () => {
+    renderCard(<PosterCard item={recItem({ title: "Untitled", year: null, posterUrl: null })} />);
+    const fallback = screen.getByTestId("poster-fallback");
+    expect(fallback).toHaveTextContent("Untitled");
   });
 
   it("no longer renders the request action on the card (round 4)", () => {

@@ -3,6 +3,7 @@
     "title": "Let's find your taste",
     "lede": "Connect where you already track what you watch, and Phare builds your profile from it.",
     "connectLibrary": "Connect your library",
+    "startFromScratch": "Start without history",
     "or": "or",
     "exploreSample": "Explore with sample data",
     "loadingSample": "Loading sample data…",
@@ -19,6 +20,19 @@
       "lede": "Preparing your recommendations…",
       "continue": "Continue"
     }
+  },
+  "scratch": {
+    "title": "Pick a few you loved",
+    "lede": "No library to connect? Add a handful of movies or shows you love and Phare starts from there.",
+    "searchLabel": "Search for a title you loved",
+    "searchPlaceholder": "Search a movie or show…",
+    "searching": "Searching…",
+    "noMatches": "No matches for \"{{query}}\".",
+    "remove": "Remove {{title}}",
+    "hint": "Add {{count}} or so for a sharper first read — one is enough to get started.",
+    "hintEnough": "Nice — that's plenty to start. Add more any time.",
+    "go": "Let's go",
+    "seeding": "Setting up…"
   },
   "sources": {
     "title": "Connect a source",
@@ -42,6 +56,7 @@
     "trakt": {
       "hint": "Ratings, history & watchlist",
       "notice": "Go to <lnk>{{url}}</lnk> and enter <b>{{code}}</b>. Waiting for authorization…",
+      "cancel": "Cancel",
       "connectionFailed": "Trakt connection {{status}}."
     },
     "plex": {

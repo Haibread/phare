@@ -55,7 +55,7 @@ export function PosterCard({
         onClick={() => setDetailOpen(true)}
       >
         <div
-          className={styles.poster}
+          className={`${styles.poster} ${showPoster ? "" : styles.posterEmpty}`}
           style={showPoster ? undefined : { background: posterTint(item.titleId) }}
         >
           {item.isSwing && (
@@ -88,7 +88,13 @@ export function PosterCard({
               onError={() => setImgFailed(true)}
             />
           ) : (
-            <span className={styles.posterFallback}>{item.title}</span>
+            // Honest "no cover art" placeholder: the title + year centered over the tinted tile,
+            // instead of a blank grey box or the raw title caption doubled with the label below
+            // (round 7, fixes 4 & 6).
+            <span className={styles.posterFallback} data-testid="poster-fallback">
+              <span className={styles.posterFallbackTitle}>{item.title}</span>
+              {item.year !== null && <span className={styles.posterFallbackYear}>{item.year}</span>}
+            </span>
           )}
         </div>
         <div className={styles.cardTitle}>{item.title}</div>
