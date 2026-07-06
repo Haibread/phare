@@ -115,3 +115,63 @@ describe("EditableChips localization (F1 / M8.3)", () => {
     expect(onRemove).toHaveBeenCalledWith("Science Fiction");
   });
 });
+
+describe("EditableChips server-side display map (free-form chip localization)", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en"); // restore the shared singleton
+  });
+
+  it("prefers the API display form for free-form chips and falls back to the vocab table", async () => {
+    await i18n.changeLanguage("fr");
+    render(
+      <EditableChips
+        label="Drawn to"
+        tone="like"
+        items={["mind-bending narratives", "Horror", "ma pépite perso"]}
+        busy={false}
+        display={{ "mind-bending narratives": "récits vertigineux" }}
+        onAdd={() => {}}
+        onRemove={() => {}}
+      />,
+    );
+    // Free-form chip: the server-translated display form wins...
+    expect(screen.getByText("récits vertigineux")).toBeInTheDocument();
+    expect(screen.queryByText("mind-bending narratives")).not.toBeInTheDocument();
+    // ...closed-vocabulary chip: not in the server map, the static table still translates it...
+    expect(screen.getByText("Horreur")).toBeInTheDocument();
+    // ...and a user-typed override (absent from both) renders verbatim.
+    expect(screen.getByText("ma pépite perso")).toBeInTheDocument();
+  });
+
+  it("keys remove on the canonical value even when the server display form is shown", async () => {
+    await i18n.changeLanguage("fr");
+    const onRemove = vi.fn();
+    render(
+      <EditableChips
+        label="Drawn to"
+        tone="like"
+        items={["mind-bending narratives"]}
+        busy={false}
+        display={{ "mind-bending narratives": "récits vertigineux" }}
+        onAdd={() => {}}
+        onRemove={onRemove}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Retirer récits vertigineux"));
+    expect(onRemove).toHaveBeenCalledWith("mind-bending narratives");
+  });
+
+  it("shows the canonical value when no display map is provided (offline backend)", () => {
+    render(
+      <EditableChips
+        label="Drawn to"
+        tone="like"
+        items={["mind-bending narratives"]}
+        busy={false}
+        onAdd={() => {}}
+        onRemove={() => {}}
+      />,
+    );
+    expect(screen.getByText("mind-bending narratives")).toBeInTheDocument();
+  });
+});

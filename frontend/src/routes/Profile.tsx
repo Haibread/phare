@@ -128,6 +128,7 @@ export function Profile(): React.JSX.Element {
                 tone="like"
                 items={likes}
                 busy={updateTaste.isPending}
+                display={taste.data.displayTerms}
                 onAdd={(v) => setOverride("likes", [...likes, v])}
                 onRemove={(v) =>
                   setOverride(
@@ -142,6 +143,7 @@ export function Profile(): React.JSX.Element {
               tone="avoid"
               items={avoids}
               busy={updateTaste.isPending}
+              display={taste.data.displayTerms}
               onAdd={(v) => setOverride("hard_avoids", [...avoids, v])}
               onRemove={(v) =>
                 setOverride(
