@@ -21,7 +21,7 @@ from phare.catalog.runtime_backfill import (
     schedule_runtime_backfill,
 )
 from phare.core.config import Settings
-from phare.db.models import Title, TitleKind
+from phare.db.models import EMBEDDING_DIM, Title, TitleEmbedding, TitleKind
 from phare.providers.fakes import FakeMetadataProvider
 from phare.providers.types import TitleMetadata
 
@@ -39,16 +39,19 @@ def _add(
     tmdb_id: int,
     runtime: int | None,
     language: str | None = "en",
+    genres: list[str] | None = None,
     **extra: object,
 ) -> Title:
-    # Default a language so a row with a runtime is fully covered (no gap) — the gap/backfill tests
-    # opt a row into "gapped" by passing ``runtime=None`` and/or ``language=None`` explicitly.
+    # Default a language and genres so a row with a runtime is fully covered (no gap) — the
+    # gap/backfill tests opt a row into "gapped" by passing ``runtime=None``, ``language=None``
+    # and/or ``genres=[]`` explicitly.
     title = Title(
         kind=TitleKind.movie,
         tmdb_id=tmdb_id,
         title=f"T{tmdb_id}",
         runtime_minutes=runtime,
         original_language=language,
+        genres=["Drama"] if genres is None else genres,
         **extra,
     )
     session.add(title)
@@ -190,6 +193,66 @@ def test_boot_gate_schedules_only_when_gap_is_large(db_session: Session) -> None
         assert calls == [True]
     finally:
         mod.schedule_runtime_backfill = original  # type: ignore[assignment]
+
+
+def test_metadata_gap_counts_genreless_rows(db_session: Session) -> None:
+    # Round-11: an empty ``genres`` starves the embedding document and the SQL genre filters, so a
+    # genre-less row is a fillable gap even when runtime + language are already present.
+    _add(db_session, tmdb_id=6500, runtime=100, genres=[])
+    _add(db_session, tmdb_id=6501, runtime=100)  # fully covered
+    db_session.flush()
+    assert metadata_gap(db_session) == 0.5
+
+
+def test_run_backfill_fills_genres_and_drops_the_stale_embedding(db_session: Session) -> None:
+    # Round-11 (live finding): a discovery-upserted row embedded from a skeletal document (no
+    # genres/credits/language) ANN-matches everything. The heal must fill the genres AND drop the
+    # stale vector so the read-path backfill re-embeds the enriched document.
+    row = _add(db_session, tmdb_id=9000, runtime=100, language=None, genres=[])
+    db_session.flush()
+    db_session.add(
+        TitleEmbedding(title_id=row.id, model_version="fake-model", embedding=[0.1] * EMBEDDING_DIM)
+    )
+    db_session.flush()
+    provider = FakeMetadataProvider(
+        titles={
+            (9000, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie,
+                title="T9000",
+                genres=["Drama", "Romance"],
+                original_language="tr",
+            )
+        }
+    )
+    assert rb.run_metadata_backfill(db_session, provider) == 1
+    assert row.genres == ["Drama", "Romance"]
+    assert (
+        db_session.scalar(select(TitleEmbedding).where(TitleEmbedding.title_id == row.id)) is None
+    )
+
+
+def test_runtime_only_heal_keeps_the_embedding(db_session: Session) -> None:
+    # Runtime and votes don't feed the embedding document — healing them must NOT throw away a
+    # perfectly good vector.
+    row = _add(db_session, tmdb_id=9100, runtime=None)
+    db_session.flush()
+    db_session.add(
+        TitleEmbedding(title_id=row.id, model_version="fake-model", embedding=[0.1] * EMBEDDING_DIM)
+    )
+    db_session.flush()
+    provider = FakeMetadataProvider(
+        titles={
+            (9100, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, title="T9100", runtime_minutes=95
+            )
+        }
+    )
+    assert rb.run_metadata_backfill(db_session, provider) == 1
+    assert row.runtime_minutes == 95
+    assert (
+        db_session.scalar(select(TitleEmbedding).where(TitleEmbedding.title_id == row.id))
+        is not None
+    )
 
 
 def test_run_backfill_fills_credits_and_language_without_clobbering(db_session: Session) -> None:

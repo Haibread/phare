@@ -331,8 +331,17 @@ def _embedded_title(
     vote_count: int | None,
     vector: list[float],
     version: str = "fake-embed",
+    genres: list[str] | None = None,
 ) -> Title:
-    row = Title(kind=TitleKind.movie, tmdb_id=tmdb_id, title=title, vote_count=vote_count)
+    # Genres default non-empty: the semantic tier excludes genre-less rows (skeletal documents the
+    # heal hasn't enriched yet) — a test opts into that state with ``genres=[]``.
+    row = Title(
+        kind=TitleKind.movie,
+        tmdb_id=tmdb_id,
+        title=title,
+        vote_count=vote_count,
+        genres=["Drama"] if genres is None else genres,
+    )
     session.add(row)
     session.flush()
     session.add(TitleEmbedding(title_id=row.id, model_version=version, embedding=vector))
@@ -378,6 +387,32 @@ def test_search_semantic_fill_surfaces_nearest_titles_between_lead_and_junk(
     assert doc.id not in ids[1:]  # already a lexical result — never duplicated by the fill
     assert sub_floor_neighbor.id not in ids  # an ANN neighbour with 3 votes is junk too
     assert embedder.calls == 1  # exactly one embedding call per search request
+
+
+def test_search_semantic_fill_excludes_genreless_skeletal_documents(db_session: Session) -> None:
+    # Live round-11 finding: a title upserted by discovery with no genres was embedded from a
+    # skeletal document and ANN-matched wildly unrelated queries ("inception" AND "ghibli"). Until
+    # the heal enriches + re-embeds it, it must not be offered as a semantic neighbour.
+    lead = Title(kind=TitleKind.movie, tmdb_id=889001, title="Nova Prime", vote_count=500)
+    db_session.add(lead)
+    skeletal = _embedded_title(
+        db_session,
+        tmdb_id=889002,
+        title="Eternal Soap",
+        vote_count=700,  # well above the floor — the exclusion is about the document, not votes
+        vector=_unit_vector(0),
+        genres=[],
+    )
+    healed = _embedded_title(
+        db_session, tmdb_id=889003, title="Real Neighbor", vote_count=700, vector=_unit_vector(0)
+    )
+    embedder = _CountingQueryEmbedder(_unit_vector(0))
+
+    results = search_titles(db_session, "nova", embedder=embedder, embedding_version="fake-embed")
+    ids = [t.id for t in results]
+    assert healed.id in ids
+    assert skeletal.id not in ids
+    assert ids[0] == lead.id
 
 
 def test_search_semantic_fill_skips_when_lexical_results_are_strong(db_session: Session) -> None:

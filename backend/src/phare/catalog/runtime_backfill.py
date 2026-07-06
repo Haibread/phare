@@ -40,15 +40,22 @@ _BULK_HEAL_RPS = 30.0
 
 
 def _metadata_gap_predicate() -> Any:
-    """A title has a fillable metadata gap when it's missing a runtime *or* an original language.
+    """A title has a fillable metadata gap when it lacks a runtime, an original language, or genres.
 
-    A single detail fetch carries runtime, votes, credits *and* language, so this one predicate
-    walks every row a heal could still improve — crucially, one whose runtime was already healed
-    live but that never got credits/language (a runtime-only predicate would skip all of those).
-    Language is the honest sentinel for "never deep-fetched": credits arrive in the same call, so a
-    row with a language also has whatever credits TMDB had. ``vote`` gaps aren't included — they're
+    A single detail fetch carries runtime, votes, genres, credits *and* language, so this one
+    predicate walks every row a heal could still improve — crucially, one whose runtime was already
+    healed live but that never got credits/language (a runtime-only predicate would skip all of
+    those). Language is the honest sentinel for "never deep-fetched": credits arrive in the same
+    call, so a row with a language also has whatever credits TMDB had. Genre-less rows are included
+    because an empty ``genres`` starves the embedding document (the round-11 semantic-search
+    pollution) and the SQL genre filters; a title genuinely without genres on TMDB is passed over
+    once per pass by the keyset cursor and never blocks it. ``vote`` gaps aren't included — they're
     a bonus of the same fetch, not a reason to walk the catalog again."""
-    return or_(Title.runtime_minutes.is_(None), Title.original_language.is_(None))
+    return or_(
+        Title.runtime_minutes.is_(None),
+        Title.original_language.is_(None),
+        func.coalesce(func.cardinality(Title.genres), 0) == 0,
+    )
 
 
 # Above this share of gapped titles the catalog is missing enough metadata (runtime/credits/

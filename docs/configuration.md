@@ -158,8 +158,9 @@ the engine's SQL-side runtime filter) then filters on a ghost catalog, and the d
 "who made it" line. The rating re-pull above can't fix this: these fields need a per-title TMDB
 **detail** call (which bundles runtime, votes, credits *and* language in one request via
 `append_to_response`), not a discover page. So on the same boot skip path, if more than half the
-catalog has a **metadata gap** (`runtime_minutes IS NULL OR original_language IS NULL` — one fetch
-fills both, plus credits/votes), Phare schedules a **background** bulk heal that walks the gapped
+catalog has a **metadata gap** (`runtime_minutes IS NULL OR original_language IS NULL` or an empty
+`genres` array — one fetch fills them all, plus credits/votes), Phare schedules a **background**
+bulk heal that walks the gapped
 rows in batches behind a keyset cursor, fetches each title's detail (bounded concurrency, capped at
 ~30 req/s so the fan-out can't rate-limit TMDB), and fills whatever the row was missing. The gap
 predicate deliberately includes language, not just runtime: movies whose runtime was already healed
@@ -169,6 +170,11 @@ ever fills holes — a NULL scalar or an empty credit array, never clobbers), fi
 seed and then no-ops as coverage stays healthy, and is a strict no-op without a TMDB key. The
 read-path enrichment (a detail sheet opening, or the chat candidate pool on a runtime-capped turn)
 remains as a backstop that heals whatever the bulk pass hasn't reached yet — no command either way.
+When a heal fills a field that feeds the embedding document (genres, credits, language), the
+title's stale vector is dropped and lazily re-embedded on the next recommendation pass — a vector
+computed from a skeletal document sits in a meaningless neighbourhood, so between drop and re-embed
+the title simply doesn't match semantic queries (strictly better than matching everything). For the
+same reason, semantic search fill skips genre-less rows until the heal has enriched them.
 
 **Staying fresh — new movies & TV.** Seeding is a point-in-time snapshot; new releases keep coming,
 and nothing on the read path can surface a title that isn't imported yet. So a background pass runs

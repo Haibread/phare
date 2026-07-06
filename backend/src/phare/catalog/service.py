@@ -106,6 +106,11 @@ def _semantic_fill(
         .where(
             TitleEmbedding.model_version == embedding_version,
             Title.vote_count >= SEARCH_VOTE_FLOOR,
+            # A genre-less row was embedded from a skeletal document (discovery upsert the heal
+            # hasn't visited yet) — its vector sits in a meaningless neighbourhood and matches
+            # *everything* (measured live: one such show filled for both "inception" and "ghibli").
+            # The heal enriches + re-embeds it, and then it competes here like any other title.
+            func.coalesce(func.cardinality(Title.genres), 0) > 0,
         )
         .order_by(distance.asc(), Title.tmdb_id.asc().nulls_last(), Title.id)
         .limit(slots + len(exclude))  # over-fetch: the exclusion filter may eat into the top
