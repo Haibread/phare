@@ -43,6 +43,48 @@ def test_build_embedding_text_includes_metadata() -> None:
     assert "On Arrakis." in text
 
 
+def test_build_embedding_text_document_v2_full_pin() -> None:
+    """Exact string pin for a fully-populated title (document v2). Order is load-bearing: short
+    high-signal facets first, credits + language, then the free-text overview last."""
+    title = Title(
+        kind=TitleKind.movie,
+        title="Spirited Away",
+        year=2001,
+        genres=["Animation", "Fantasy"],
+        keywords=["bathhouse", "spirits"],
+        directors=["Hayao Miyazaki"],
+        top_cast=["Rumi Hiiragi", "Miyu Irino"],
+        original_language="ja",
+        overview="A girl wanders into a world of spirits.",
+    )
+    assert build_embedding_text(title) == (
+        "Spirited Away\n"
+        "Year: 2001\n"
+        "Genres: Animation, Fantasy\n"
+        "Keywords: bathhouse, spirits\n"
+        "Directed by: Hayao Miyazaki\n"
+        "Cast: Rumi Hiiragi, Miyu Irino\n"
+        "Language: ja\n"
+        "A girl wanders into a world of spirits."
+    )
+
+
+def test_build_embedding_text_document_v2_sparse_pin() -> None:
+    """A sparse title omits every missing facet — no empty ``Cast:`` / ``Language:`` lines."""
+    title = Title(kind=TitleKind.movie, title="Untitled", genres=[], keywords=[])
+    assert build_embedding_text(title) == "Untitled"
+
+
+def test_build_embedding_text_language_separates_anime_from_western_animation() -> None:
+    """The language line is what pulls "ja" Animation away from "en" Animation in the space."""
+    common = {"kind": TitleKind.movie, "genres": ["Animation"], "keywords": []}
+    anime = Title(title="A", original_language="ja", **common)  # type: ignore[arg-type]
+    western = Title(title="A", original_language="en", **common)  # type: ignore[arg-type]
+    assert "Language: ja" in build_embedding_text(anime)
+    assert "Language: en" in build_embedding_text(western)
+    assert build_embedding_text(anime) != build_embedding_text(western)
+
+
 def test_embed_missing_stores_vectors(db_session: Session) -> None:
     _title(db_session)
     _title(db_session, tmdb_id=1, title="Sicario")
