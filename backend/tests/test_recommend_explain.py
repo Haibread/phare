@@ -165,6 +165,9 @@ def test_llm_prompt_carries_the_french_directive() -> None:
     llm = FakeLLMProvider(completion="Un thriller cérébral taillé pour vos goûts.")
     explain([_rec()], {"summary": "x"}, llm=llm, language="fr")
     assert "French" in llm.prompts[0]
+    # R7: the register directive reaches the explanation prompt too, so the model vouvoies (the
+    # explanations were the loudest offenders — "Tu adoreras…").
+    assert 'polite "vous"' in llm.prompts[0]
 
 
 def test_llm_prompt_has_no_directive_in_english() -> None:

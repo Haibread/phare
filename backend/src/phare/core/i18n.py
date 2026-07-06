@@ -216,7 +216,14 @@ def llm_output_directive(language: Language) -> str:
     # connective otherwise ("Since tu aimes…" observed repeatedly on fresh generations) — one
     # English word the wrong-language guard can't reject without false positives, so head it off
     # in the instruction instead.
-    return (
+    directive = (
         f"Write your response entirely in {LANGUAGE_NAMES[language]}, including the very first "
         f"word — never open with an English connective like 'Since' or 'Because'."
     )
+    # Register discipline: the LLM was observed tutoying ("je t'aurais suggéré", "Tu adoreras…")
+    # while every static string vouvoies, jarring within one conversation. Pin the polite form so
+    # the model's prose matches the canned strings. French is the only supported non-default
+    # language today; add a per-language register note here as more are added.
+    if language == "fr":
+        directive += ' Address the user with the polite "vous" form, never the familiar "tu".'
+    return directive
