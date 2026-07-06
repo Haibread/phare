@@ -93,6 +93,33 @@ def test_run_backfill_stops_on_a_title_tmdb_cannot_fill(db_session: Session) -> 
     assert len(provider.calls) == 1  # tried once, then stopped (didn't spin to the safety bound)
 
 
+def test_run_backfill_walks_past_a_full_batch_of_unfillable_titles(db_session: Session) -> None:
+    # Live R7 regression: the first batch was entirely TV-style titles TMDB returns no runtime for,
+    # and the heal gave up at 609/7400. The keyset cursor must pass over them and keep walking.
+    unfillable = [
+        _add(db_session, tmdb_id=4000 + i, runtime=None) for i in range(rb._RUNTIME_BATCH)
+    ]
+    fillable = [_add(db_session, tmdb_id=9000 + i, runtime=None) for i in range(2)]
+    db_session.flush()
+    provider = FakeMetadataProvider(
+        titles={
+            **{
+                (t.tmdb_id, TitleKind.movie): TitleMetadata(kind=TitleKind.movie, title=t.title)
+                for t in unfillable
+            },
+            **{
+                (t.tmdb_id, TitleKind.movie): TitleMetadata(
+                    kind=TitleKind.movie, title=t.title, runtime_minutes=95
+                )
+                for t in fillable
+            },
+        }
+    )
+    assert rb.run_runtime_backfill(db_session, provider) == 2
+    assert all(t.runtime_minutes == 95 for t in fillable)
+    assert all(t.runtime_minutes is None for t in unfillable)  # skipped, not clobbered
+
+
 def test_schedule_is_a_noop_without_a_tmdb_key(db_session: Session) -> None:
     # Offline: no provider to fetch runtimes from, so scheduling must no-op (never marks running).
     started = schedule_runtime_backfill(Settings(tmdb_api_key=None))

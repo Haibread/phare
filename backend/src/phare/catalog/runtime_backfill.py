@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from collections.abc import Callable
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import Session
 
 from phare.catalog.heal import apply_metadata_heal, fetch_metadata_parallel
@@ -69,27 +70,30 @@ def runtime_backfill_running() -> bool:
 def run_runtime_backfill(session: Session, source: MetadataProvider) -> int:
     """Fill missing runtimes (+ any missing quality signal) for NULL-runtime titles with a tmdb_id.
 
-    Walks the backlog in batches, committing each so progress survives a crash and is observable in
-    the logs. Idempotent: it re-queries the NULL-runtime rows each batch, so a title whose runtime
-    got filled drops out; a title TMDB can't fill for stays NULL and is skipped next time it's
-    picked up (bounded by ``_MAX_RUNTIME_BATCHES``, since it would otherwise be re-selected
-    forever). Split out from the thread wrapper so tests can drive it synchronously; the caller owns
-    the final state, this commits its own batches. Returns the count of runtimes filled.
+    Walks the backlog in batches behind a keyset cursor on ``(tmdb_id, id)``, committing each batch
+    so progress survives a crash and is observable in the logs. The cursor is what makes one pass
+    terminate: a title TMDB returns no runtime for (TV without a fixed episode length, stale ids)
+    stays NULL but is *passed over*, never re-selected — measured live, an early all-unfillable
+    batch otherwise stalled the heal at 609/7400. Idempotent across boots: filled rows drop out of
+    the NULL-runtime predicate. Split out from the thread wrapper so tests can drive it
+    synchronously; the caller owns the final state, this commits its own batches. Returns the count
+    of titles healed.
     """
     filled = 0
+    cursor: tuple[int, uuid.UUID] | None = None
     for _ in range(_MAX_RUNTIME_BATCHES):
-        rows = (
-            session.execute(
-                select(Title)
-                .where(Title.runtime_minutes.is_(None), Title.tmdb_id.is_not(None))
-                .order_by(Title.tmdb_id, Title.id)
-                .limit(_RUNTIME_BATCH)
-            )
-            .scalars()
-            .all()
+        query = (
+            select(Title)
+            .where(Title.runtime_minutes.is_(None), Title.tmdb_id.is_not(None))
+            .order_by(Title.tmdb_id, Title.id)
+            .limit(_RUNTIME_BATCH)
         )
+        if cursor is not None:
+            query = query.where(tuple_(Title.tmdb_id, Title.id) > cursor)
+        rows = session.execute(query).scalars().all()
         if not rows:
             break
+        cursor = (rows[-1].tmdb_id, rows[-1].id)  # type: ignore[assignment]  # tmdb_id filtered non-NULL
         by_id = {row.id: row for row in rows}
         batch_filled = 0
         for title_id, meta in fetch_metadata_parallel(source, rows).items():
@@ -101,10 +105,6 @@ def run_runtime_backfill(session: Session, source: MetadataProvider) -> int:
             "catalog.runtime_backfill.progress",
             extra={"batch_filled": batch_filled, "total_filled": filled},
         )
-        # A batch that filled nothing is titles TMDB won't return a runtime for; they'd be re-picked
-        # every batch, so stop rather than loop the same unfillable rows to the safety bound.
-        if batch_filled == 0:
-            break
     return filled
 
 
