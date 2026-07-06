@@ -176,6 +176,17 @@ computed from a skeletal document sits in a meaningless neighbourhood, so betwee
 the title simply doesn't match semantic queries (strictly better than matching everything). For the
 same reason, semantic search fill skips genre-less rows until the heal has enriched them.
 
+The same walk also **re-canonicalizes localized text**: `Title` rows must store canonical
+(language-neutral) text only (see [`data-model.md`](data-model.md), "Canonical vs localized text"),
+but rows upserted from a language-bound live search before that rule carry e.g. French overviews —
+which cluster the shared embedding space by *language* instead of meaning. The boot pass detects
+them cheaply (a compact French-function-word regex on the overview, two-plus hits), re-fetches the
+canonical form and — the one deliberate exception to the heal's fill-only rule — **overwrites** the
+row's `title`/`overview`, then drops its embeddings for lazy re-embedding. Convergence: rows whose
+`original_language` is `fr` are exempt (a French film's canonical overview may legitimately be
+French), an identical canonical text is a no-op, and unfixable rows cost at most a few no-op
+fetches per boot pass.
+
 **Staying fresh — new movies & TV.** Seeding is a point-in-time snapshot; new releases keep coming,
 and nothing on the read path can surface a title that isn't imported yet. So a background pass runs
 every `CATALOG_REFRESH_INTERVAL_SECONDS` (default daily; `0` to disable) and pulls TMDB's **current
@@ -205,10 +216,12 @@ needed, on two paths:
   title's **rating** (`vote_average` / `vote_count`), so it **heals a missing quality signal** at the
   same time (see below) when the row lacks one — one fetch, two repairs. Bounded by
   `READ_RUNTIME_CAP` (a code constant, mirroring the lazy embedding top-up).
-- **Title detail open.** Opening a title's detail sheet backfills *that* title's runtime if it's
-  still NULL, so the sheet shows it. The synopsis localization on the same request already fills the
-  runtime from its own TMDB fetch (a first open is a single round-trip); the dedicated fetch is only
-  spent when localization served from its warm cache but the runtime is still missing.
+- **Title detail open.** Opening a title's detail sheet heals *that* title's metadata gaps (runtime,
+  language, genres — credits and votes ride along) with a dedicated **language-neutral** fetch, so
+  the sheet shows the runtime and the canonical row completes. It's deliberately separate from the
+  synopsis-localization fetch on the same request: the localized response feeds *display only*
+  (persisting its French genre labels would break the English genre vocabulary). The heal fetch is
+  gated on the same gap sentinel as the bulk walker, so a completed row costs no extra call.
 
 Each fetch is permanent, so the catalog heals as it's used — no command, no manual step. All of it is
 best-effort: a TMDB hiccup during a detail open leaves the runtime NULL and the sheet still renders.

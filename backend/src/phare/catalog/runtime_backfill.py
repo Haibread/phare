@@ -25,7 +25,14 @@ from typing import Any
 from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from phare.catalog.heal import RateLimiter, apply_metadata_heal, fetch_metadata_parallel
+from phare.catalog.heal import (
+    RateLimiter,
+    apply_canonical_overwrite,
+    apply_metadata_heal,
+    fetch_metadata_parallel,
+    localized_text_predicate,
+    looks_localized,
+)
 from phare.core.config import Settings
 from phare.db.models import Title
 from phare.providers.types import MetadataProvider
@@ -113,6 +120,15 @@ def run_metadata_backfill(
     predicate. Split out from the thread wrapper so tests can drive it synchronously; the caller
     owns the final state, this commits its own batches. Returns the count of titles healed.
 
+    The walk also **re-canonicalizes** rows whose stored text is localized
+    (:func:`phare.catalog.heal.localized_text_predicate` — a French-reading overview on a
+    non-French-origin title): the same canonical fetch *overwrites* their ``title``/``overview``
+    and drops their embeddings, since a French document clusters the shared embedding space by
+    language instead of meaning. Convergence mirrors the gap side: French-origin rows are exempt in
+    the predicate, an identical canonical text is a no-op, and a row TMDB can't improve is passed
+    over by the keyset cursor — at worst a few dozen no-op fetches per pass, same trade-off the
+    poisoned-embeddings boot trigger accepts.
+
     Every fetch passes through a :class:`RateLimiter` (default ``_BULK_HEAL_RPS``) so this bulk
     walk stays well under TMDB's rps guidance — a 429 storm here would make the keyset cursor skip
     whole batches permanently until the next boot. Tests inject their own limiter or ``None``.
@@ -123,7 +139,10 @@ def run_metadata_backfill(
     for _ in range(_MAX_RUNTIME_BATCHES):
         query = (
             select(Title)
-            .where(_metadata_gap_predicate(), Title.tmdb_id.is_not(None))
+            .where(
+                or_(_metadata_gap_predicate(), localized_text_predicate()),
+                Title.tmdb_id.is_not(None),
+            )
             .order_by(Title.tmdb_id, Title.id)
             .limit(_RUNTIME_BATCH)
         )
@@ -136,7 +155,13 @@ def run_metadata_backfill(
         by_id = {row.id: row for row in rows}
         batch_filled = 0
         for title_id, meta in fetch_metadata_parallel(source, rows, limiter=limiter).items():
-            if apply_metadata_heal(by_id[title_id], meta):
+            row = by_id[title_id]
+            healed = apply_metadata_heal(row, meta)
+            # Heal first (it may just have filled original_language), THEN re-check localization —
+            # so a row the fetch reveals to be French-origin is exempted before any overwrite.
+            if looks_localized(row) and apply_canonical_overwrite(row, meta):
+                healed = True
+            if healed:
                 batch_filled += 1
         session.commit()
         filled += batch_filled

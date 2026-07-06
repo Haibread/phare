@@ -87,6 +87,53 @@ def test_enrich_runtimes_fills_pool_from_provider_and_persists(db_session: Sessi
     assert {tmdb for tmdb, _ in provider.calls} == {2000, 2001}  # only the missing ones fetched
 
 
+def test_enrich_runtimes_heals_through_the_canonical_provider_view(db_session: Session) -> None:
+    # The chat turn hands its request-language TMDB provider here; the heal fills genres, so a
+    # language=fr fetch would write French genre labels into the canonical row. _enrich_runtimes
+    # must resolve the provider's canonical() view before fetching.
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+    from phare.recommend.schema import Candidate
+
+    title = Title(kind=TitleKind.movie, title="Film", tmdb_id=2100, genres=[])
+    db_session.add(title)
+    db_session.flush()
+    canonical = FakeMetadataProvider(
+        titles={
+            (2100, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, title="Film", runtime_minutes=95, genres=["Drama"]
+            )
+        }
+    )
+
+    class _LanguageBound:
+        """Serves localized text unless the caller resolves canonical() first."""
+
+        def canonical(self) -> FakeMetadataProvider:
+            return canonical
+
+        def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata:
+            raise AssertionError("heal fetched through the localized provider")
+
+    cand = Candidate(
+        title_id=title.id,
+        title=title.title,
+        kind="movie",
+        year=None,
+        genres=[],
+        keywords=[],
+        runtime_minutes=None,
+        popularity=None,
+        overview=None,
+        similarity=0.5,
+    )
+    enriched = _service(db_session)._enrich_runtimes([cand], _LanguageBound())
+
+    assert enriched[0].runtime_minutes == 95
+    assert title.genres == ["Drama"]  # canonical labels, fetched via the canonical view
+    assert canonical.calls == [(2100, TitleKind.movie)]
+
+
 def test_enrich_runtimes_short_circuits_when_pool_is_already_filled(db_session: Session) -> None:
     # The common case once a taste's pool is enriched: nothing missing → return as-is, no provider
     # call and no (empty) DB query on the hot path.

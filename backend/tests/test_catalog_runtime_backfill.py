@@ -417,3 +417,113 @@ def test_heal_stack_recovers_from_a_single_429(db_session: Session) -> None:
     row = db_session.scalar(select(Title).where(Title.tmdb_id == 8800))
     assert row is not None and row.runtime_minutes == 100
     assert calls["n"] == 2  # 429 then success
+
+
+# A stored overview that reads as French — two-plus function-word hits for the detector. The
+# canonical form differs in both title and overview, like the measured "Amour éternel" rows.
+_FRENCH_OVERVIEW = "Une histoire d'amour qui traverse les années."
+_CANONICAL_META = TitleMetadata(
+    kind=TitleKind.movie,
+    title="Kara Sevda",
+    overview="A love story that spans the years.",
+)
+
+
+def _add_localized(
+    session: Session, *, tmdb_id: int, language: str | None = "en", embedded: bool = True
+) -> Title:
+    """A fully-covered row (no fill gap) whose stored text is French — re-canonicalization bait."""
+    row = _add(session, tmdb_id=tmdb_id, runtime=100, language=language, overview=_FRENCH_OVERVIEW)
+    row.title = "Amour éternel"  # _add stamps its own title, so localize it after
+    session.flush()
+    if embedded:
+        session.add(
+            TitleEmbedding(
+                title_id=row.id, model_version="fake-model", embedding=[0.1] * EMBEDDING_DIM
+            )
+        )
+        session.flush()
+    return row
+
+
+def test_run_backfill_recanonicalizes_localized_text_and_drops_embeddings(
+    db_session: Session,
+) -> None:
+    # Round-12 top relevance bug: rows upserted from a language-bound live search store French
+    # title/overview in the canonical row, so the shared embedding space clusters by language. The
+    # walk must overwrite the text with the canonical fetch (the one deliberate exception to
+    # fill-only) and drop the poisoned vector for lazy re-embedding.
+    row = _add_localized(db_session, tmdb_id=7000)
+    provider = FakeMetadataProvider(titles={(7000, TitleKind.movie): _CANONICAL_META})
+
+    assert rb.run_metadata_backfill(db_session, provider) == 1
+    assert row.title == "Kara Sevda"
+    assert row.overview == "A love story that spans the years."
+    assert (
+        db_session.scalar(select(TitleEmbedding).where(TitleEmbedding.title_id == row.id)) is None
+    )
+
+
+def test_run_backfill_leaves_french_origin_rows_alone(db_session: Session) -> None:
+    # Convergence guard: a French film's canonical overview may legitimately be French — those rows
+    # are exempt from the detector entirely (never even fetched when otherwise covered).
+    row = _add_localized(db_session, tmdb_id=7100, language="fr")
+    provider = FakeMetadataProvider(titles={(7100, TitleKind.movie): _CANONICAL_META})
+
+    assert rb.run_metadata_backfill(db_session, provider) == 0
+    assert provider.calls == []  # not selected at all
+    assert row.title == "Amour éternel" and row.overview == _FRENCH_OVERVIEW
+
+
+def test_run_backfill_converges_when_canonical_text_is_identical(db_session: Session) -> None:
+    # A non-French-origin title whose canonical TMDB overview *is* the same French text can't be
+    # improved: the overwrite is a no-op, the embedding survives, and the pass terminates (the
+    # keyset cursor passes over it) — one no-op fetch per pass, never a rewrite loop.
+    row = _add_localized(db_session, tmdb_id=7200)
+    same_text = TitleMetadata(kind=TitleKind.movie, title=row.title, overview=row.overview)
+    provider = FakeMetadataProvider(titles={(7200, TitleKind.movie): same_text})
+
+    assert rb.run_metadata_backfill(db_session, provider) == 0
+    assert len(provider.calls) == 1  # fetched once, passed over — no intra-pass spin
+    assert (
+        db_session.scalar(select(TitleEmbedding).where(TitleEmbedding.title_id == row.id))
+        is not None
+    )
+
+
+def test_recanonicalization_never_blanks_text_on_an_empty_canonical_fetch(
+    db_session: Session,
+) -> None:
+    # TMDB returns an empty overview when a title has no English translation — overwriting with
+    # that would starve the embedding document. Empty canonical fields never overwrite.
+    row = _add_localized(db_session, tmdb_id=7300)
+    empty = TitleMetadata(kind=TitleKind.movie, title="", overview=None)
+    provider = FakeMetadataProvider(titles={(7300, TitleKind.movie): empty})
+
+    assert rb.run_metadata_backfill(db_session, provider) == 0
+    assert row.title == "Amour éternel" and row.overview == _FRENCH_OVERVIEW
+
+
+def test_boot_gate_schedules_on_localized_text(db_session: Session) -> None:
+    # Mirror of the poisoned-embeddings trigger: ANY canonical row storing localized text corrupts
+    # retrieval for the whole language, so the boot gate schedules a walk regardless of the gap
+    # share. French-origin rows (legitimately French overviews) must not trip it.
+    _add(db_session, tmdb_id=7400, runtime=100)  # covered, English — healthy
+    _add_localized(db_session, tmdb_id=7401, language="fr", embedded=False)  # exempt
+    db_session.flush()
+    calls: list[bool] = []
+
+    import phare.catalog.runtime_backfill as mod
+
+    original = mod.schedule_runtime_backfill
+    mod.schedule_runtime_backfill = lambda settings, **_: calls.append(True) or True  # type: ignore[assignment]
+    try:
+        assert _schedule_runtime_heal_if_gapped(db_session, Settings(tmdb_api_key="x")) is False
+        assert calls == []
+
+        _add_localized(db_session, tmdb_id=7402, embedded=False)  # the contaminated row
+        db_session.flush()
+        assert _schedule_runtime_heal_if_gapped(db_session, Settings(tmdb_api_key="x")) is True
+        assert calls == [True]
+    finally:
+        mod.schedule_runtime_backfill = original  # type: ignore[assignment]

@@ -284,6 +284,9 @@ class ChatService:
     ) -> PreparedTurn:
         session = self.recommender.session
         settings = get_settings()
+        # Language-bound so live search *matches* titles typed in the user's language. The write
+        # paths downstream (search upserts, runtime heal) fetch through canonical_source(), so
+        # nothing localized ever lands in a canonical Title row.
         metadata = (
             TMDBMetadataProvider(
                 api_key=settings.tmdb_api_key,
