@@ -1,6 +1,10 @@
 {
   "openCard": "Ouvrir {{title}}{{year}}, {{fit}}",
   "openCardNoFit": "Ouvrir {{title}}{{year}}",
+  "card": {
+    "rating": "★ {{score}} · {{count}}",
+    "ratingNoCount": "★ {{score}}"
+  },
   "detail": {
     "whyThis": "Pourquoi ce titre",
     "synopsis": "Synopsis",

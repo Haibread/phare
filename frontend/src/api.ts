@@ -135,6 +135,10 @@ export const recommendationItemSchema = z.object({
   posterUrl: z.string().nullable(),
   components: z.record(z.number()),
   watched: z.boolean(),
+  // TMDB rating, filled on search results so the cards can show "★ 8.4 · 37k". Defaults tolerate
+  // an older backend that doesn't send them; null hides the rating line.
+  voteAverage: z.number().nullable().default(null),
+  voteCount: z.number().nullable().default(null),
 });
 export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 
@@ -397,7 +401,13 @@ export function setApiLanguage(language: string): void {
   apiLanguage = language;
 }
 
-async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+// Generic over the schema (not a bare T) so zod's input/output types stay distinct: a `.default()`
+// field is optional on the wire (older backend tolerated) but non-optional on the parsed value.
+async function request<S extends z.ZodTypeAny>(
+  path: string,
+  schema: S,
+  init?: RequestInit,
+): Promise<z.output<S>> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

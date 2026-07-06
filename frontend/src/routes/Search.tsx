@@ -67,7 +67,9 @@ export function Search(): React.JSX.Element {
               // Show the taste-fit gauge when the backend sends a real confidence (profile has a
               // taste + embeddings); `hideNullFit` keeps it absent otherwise (older backend / no
               // taste) rather than showing a misleading neutral sliver on a raw catalog search.
-              <PosterCard key={item.titleId} item={item} hideNullFit={true} />
+              // showRating: search is where junk and the real film share a title, so the compact
+              // TMDB rating disambiguates; home rows keep the fit gauge as their only signal.
+              <PosterCard key={item.titleId} item={item} hideNullFit={true} showRating={true} />
             ))}
           </div>
         </AvailabilityProvider>

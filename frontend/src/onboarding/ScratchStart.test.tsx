@@ -32,6 +32,8 @@ function result(over: Partial<RecommendationItem>): RecommendationItem {
     posterUrl: null,
     components: {},
     watched: false,
+    voteAverage: null,
+    voteCount: null,
     ...over,
   };
 }
