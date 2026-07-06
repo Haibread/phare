@@ -429,6 +429,33 @@
   font-size: 0.82rem;
 }
 
+/* TMDB rating line — sits with the year/genre metadata. The saffron star reads as a rating, the
+   number stays in the body text colour. */
+.detailRating {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+/* Soft "few ratings" hint for a barely-proven score — muted so it reads as a caveat, not the score. */
+.detailRatingHint {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Director / cast credit lines. Each is one compact line that ellipsizes rather than wrapping or
+   overflowing — `min-width: 0` lets the flex child shrink, `nowrap` + ellipsis keep it on 375px. */
+.detailCredit {
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Worded fit label in the detail sheet — the textual bucket wording the card gauge no longer shows
    inline (R6a). Tone mirrors the gauge colour so a strong fit reads saffron. */
 .detailFit {

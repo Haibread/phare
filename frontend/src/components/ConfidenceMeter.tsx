@@ -15,12 +15,22 @@ import styles from "./components.module.css";
 export function ConfidenceMeter({
   confidence,
   isSwing,
+  hideNullFit = false,
 }: {
   confidence: number | null;
   isSwing: boolean;
+  // When true, a `null` confidence renders no gauge at all instead of the neutral "worth a look"
+  // sliver. Search sets this: a card only earns a gauge once the profile has a taste + embeddings
+  // and the backend sends a real confidence; against an older backend (confidence still null) the
+  // gauge stays absent. Home rows keep the default (false) — their null-confidence sliver is a
+  // deliberate "worth a look" affordance, a different state from "no signal".
+  hideNullFit?: boolean;
 }): React.JSX.Element | null {
   const { t } = useTranslation("common");
   const degraded = useEmbeddingsDegraded();
+  if (hideNullFit && confidence === null && !isSwing) {
+    return null;
+  }
   const fit: Fit = fitFor(confidence, isSwing, degraded);
   if (fit.fill === null) {
     // Swing — the poster card carries the categorical badge; no scalar gauge.
