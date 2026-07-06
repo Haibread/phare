@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from phare.catalog.sample import seed_sample_catalog
@@ -85,6 +85,53 @@ def test_enrich_runtimes_fills_pool_from_provider_and_persists(db_session: Sessi
     assert titles[0].runtime_minutes == 90 and titles[1].runtime_minutes == 91  # persisted to DB
     assert titles[2].runtime_minutes is None  # never fetched — its candidate already had runtime
     assert {tmdb for tmdb, _ in provider.calls} == {2000, 2001}  # only the missing ones fetched
+
+
+def test_enrich_runtimes_heals_through_the_canonical_provider_view(db_session: Session) -> None:
+    # The chat turn hands its request-language TMDB provider here; the heal fills genres, so a
+    # language=fr fetch would write French genre labels into the canonical row. _enrich_runtimes
+    # must resolve the provider's canonical() view before fetching.
+    from phare.providers.fakes import FakeMetadataProvider
+    from phare.providers.types import TitleMetadata
+    from phare.recommend.schema import Candidate
+
+    title = Title(kind=TitleKind.movie, title="Film", tmdb_id=2100, genres=[])
+    db_session.add(title)
+    db_session.flush()
+    canonical = FakeMetadataProvider(
+        titles={
+            (2100, TitleKind.movie): TitleMetadata(
+                kind=TitleKind.movie, title="Film", runtime_minutes=95, genres=["Drama"]
+            )
+        }
+    )
+
+    class _LanguageBound:
+        """Serves localized text unless the caller resolves canonical() first."""
+
+        def canonical(self) -> FakeMetadataProvider:
+            return canonical
+
+        def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata:
+            raise AssertionError("heal fetched through the localized provider")
+
+    cand = Candidate(
+        title_id=title.id,
+        title=title.title,
+        kind="movie",
+        year=None,
+        genres=[],
+        keywords=[],
+        runtime_minutes=None,
+        popularity=None,
+        overview=None,
+        similarity=0.5,
+    )
+    enriched = _service(db_session)._enrich_runtimes([cand], _LanguageBound())
+
+    assert enriched[0].runtime_minutes == 95
+    assert title.genres == ["Drama"]  # canonical labels, fetched via the canonical view
+    assert canonical.calls == [(2100, TitleKind.movie)]
 
 
 def test_enrich_runtimes_short_circuits_when_pool_is_already_filled(db_session: Session) -> None:
@@ -284,6 +331,87 @@ def test_candidates_exclude_watched(db_session: Session) -> None:
     )
     assert candidates  # the catalog gives us something to recommend
     assert all(c.title_id not in watched for c in candidates)
+
+
+def test_facets_cached_across_requests_until_events_change(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The facet extraction is CPU-heavy, so it's cached across requests (service instances) keyed
+    # on a change-stamp of the profile's watch events: a fresh service hits the cache, a new event
+    # changes the stamp and recomputes — no explicit busting anywhere.
+    from phare.db.models import EventType, WatchEvent
+    from phare.recommend.taste_vector import taste_contributions as real
+
+    profile_id = _seeded_profile(db_session)
+    first = _service(db_session)
+    first.ensure_embeddings()
+
+    calls = {"n": 0}
+
+    def counting(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("phare.recommend.service.taste_contributions", counting)
+
+    first.recommend(profile_id)
+    assert calls["n"] == 1  # cold: extracted once
+    # A brand-new service instance (a new request) — same events, so the stamp matches and the
+    # process-wide cache serves the facets without re-reading the history.
+    _service(db_session).recommend(profile_id)
+    assert calls["n"] == 1
+    # A new watch event changes the stamp; the next request recomputes.
+    title = db_session.execute(select(Title).limit(1)).scalar_one()
+    db_session.add(
+        WatchEvent(profile_id=profile_id, title_id=title.id, type=EventType.liked, source="test")
+    )
+    db_session.flush()
+    _service(db_session).recommend(profile_id)
+    assert calls["n"] == 2
+
+
+def test_hard_avoids_are_excluded_in_the_ann_sql(db_session: Session) -> None:
+    # Live round-6 finding: a mood query's entire 86-candidate ANN pool was genre-avoided and
+    # dropped post-hoc in Python (``hard_avoids_emptied``) — the fetch was wasted and the slate
+    # empty even though matching titles existed farther out. Genre-taggable avoids are now pushed
+    # into the ANN WHERE (``NOT (genres && avoided_labels)``), so one fetch lands on titles the
+    # avoid filter won't erase. Geometry is hand-built: 40 Horror titles sit nearest the query
+    # vector — more than the whole over-fetch pool (limit*3 + len(avoids) + 10 = 26) — with 5
+    # comedies far away that the old code could never reach.
+    from phare.db.models import EMBEDDING_DIM, TitleEmbedding
+
+    profile = Profile(display_name="no horror")
+    db_session.add(profile)
+    db_session.flush()
+
+    near = [1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 2)  # the horror cluster = the query direction
+    far = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
+
+    def add(tmdb_id: int, name: str, genre: str, vector: list[float]) -> None:
+        title = Title(kind=TitleKind.movie, tmdb_id=tmdb_id, title=name, genres=[genre])
+        db_session.add(title)
+        db_session.flush()
+        db_session.add(
+            TitleEmbedding(title_id=title.id, model_version=LOCAL_MODEL_VERSION, embedding=vector)
+        )
+
+    for i in range(40):
+        add(5000 + i, f"Scary {i}", "Horror", near)
+    for i in range(5):
+        add(6000 + i, f"Funny {i}", "Comedy", far)
+    db_session.flush()
+
+    # Force an exact (sequential) scan: this test asserts the SQL WHERE clause, not HNSW recall.
+    # The suite's hundreds of rolled-back embedding inserts leave dead tuples in the shared HNSW
+    # graph (cleaned only by vacuum), and traversing them can exhaust ef_search before reaching
+    # the far comedy cluster — the pool then came back empty depending on how many embedding
+    # tests ran first (flaked ~1 run in 3 on the full suite, never in isolation).
+    db_session.execute(text("SET LOCAL enable_indexscan = off"))
+    candidates = generate_candidates(
+        db_session, profile.id, near, LOCAL_MODEL_VERSION, limit=5, hard_avoids=["horror"]
+    )
+    assert len(candidates) == 5  # above the floor in ONE fetch — previously emptied entirely
+    assert all(c.genres == ["Comedy"] for c in candidates)
 
 
 def test_candidates_respect_hard_avoids(db_session: Session) -> None:

@@ -186,6 +186,96 @@ def test_search_titles_upserts_live_matches(db_session: Session) -> None:
     assert db_session.scalar(select(Title).where(Title.tmdb_id == 555001)) is not None
 
 
+class _LocalizedLiveSource:
+    """A language-bound live source, like production's request-language TMDB provider.
+
+    ``search`` returns thin *localized* matches (French title/overview — how a French user finds a
+    title by its French name); the ``canonical()`` twin's ``get_title`` returns the canonical deep
+    form (English text + genres/credits/runtime). Counts deep fetches for the boundedness asserts.
+    """
+
+    def __init__(self, *, fail_deep: bool = False) -> None:
+        self.deep_calls: list[int] = []
+        self._fail_deep = fail_deep
+
+    def search(self, query: str, *, limit: int = 8) -> list[TitleMetadata]:
+        return [
+            TitleMetadata(
+                kind=TitleKind.show,
+                tmdb_id=14693,
+                title="Amour éternel",
+                overview="Une histoire d'amour qui traverse les années.",
+                vote_count=500,
+                popularity=9.0,
+            )
+        ]
+
+    def canonical(self) -> _CanonicalTwin:
+        return _CanonicalTwin(self)
+
+
+class _CanonicalTwin:
+    def __init__(self, parent: _LocalizedLiveSource) -> None:
+        self._parent = parent
+
+    def get_title(self, tmdb_id: int, kind: TitleKind) -> TitleMetadata | None:
+        self._parent.deep_calls.append(tmdb_id)
+        if self._parent._fail_deep:
+            raise RuntimeError("tmdb blip")
+        return TitleMetadata(
+            kind=TitleKind.show,
+            tmdb_id=tmdb_id,
+            title="Kara Sevda",
+            overview="A love story that spans the years.",
+            genres=["Drama", "Romance"],
+            directors=["Hilal Saral"],
+            runtime_minutes=120,
+            original_language="tr",
+            vote_count=500,
+            vote_average=7.4,
+        )
+
+
+def test_search_upsert_persists_canonical_deep_form_for_new_titles(db_session: Session) -> None:
+    # Round-12 top relevance bug: a language-bound live search upserted its localized results into
+    # the canonical Title row (French overviews cluster the embedding space by language). The
+    # localized match must still be *found*, but what's persisted is the canonical deep fetch —
+    # which also carries genres/credits/runtime, killing the skeletal-document problem at source.
+    results = search_titles(db_session, "Amour éternel", _LocalizedLiveSource())
+
+    assert any(t.tmdb_id == 14693 for t in results)  # findable via the localized name
+    row = db_session.scalar(select(Title).where(Title.tmdb_id == 14693))
+    assert row is not None
+    assert row.title == "Kara Sevda"  # canonical, not "Amour éternel"
+    assert row.overview == "A love story that spans the years."
+    assert row.genres == ["Drama", "Romance"]  # deep form: not a skeletal genre-less record
+    assert row.directors == ["Hilal Saral"]
+    assert row.runtime_minutes == 120
+
+
+def test_search_deep_fetch_is_spent_only_on_new_titles(db_session: Session) -> None:
+    source = _LocalizedLiveSource()
+    search_titles(db_session, "amour", source)
+    assert source.deep_calls == [14693]  # created → one canonical deep fetch
+
+    # A repeat search finds the title already known: no deep fetch, numbers-only refresh.
+    source.deep_calls.clear()
+    search_titles(db_session, "amour", source)
+    assert source.deep_calls == []
+    row = db_session.scalar(select(Title).where(Title.tmdb_id == 14693))
+    assert row is not None and row.title == "Kara Sevda"  # localized re-match never rewrites text
+
+
+def test_search_deep_fetch_failure_falls_back_to_the_thin_meta(db_session: Session) -> None:
+    # Best-effort: a TMDB blip on the canonical deep fetch must not sink the search — the thin
+    # (possibly localized) meta is persisted so the title stays findable/requestable now, and the
+    # boot re-canonicalization pass mops up the localized residue later.
+    results = search_titles(db_session, "amour", _LocalizedLiveSource(fail_deep=True))
+    assert any(t.tmdb_id == 14693 for t in results)
+    row = db_session.scalar(select(Title).where(Title.tmdb_id == 14693))
+    assert row is not None and row.title == "Amour éternel"
+
+
 def test_search_titles_empty_query_returns_nothing(db_session: Session) -> None:
     seed_sample_catalog(db_session)
     assert search_titles(db_session, "   ") == []

@@ -69,6 +69,9 @@ def search_catalog(
     if session.get(Profile, profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     settings = get_settings()
+    # Language-bound: live TMDB search must match a title typed in the user's language ("Amour
+    # éternel" → Kara Sevda). What gets *persisted* for a new title is canonical — search_titles
+    # deep-fetches through the provider's canonical() view before upserting.
     tmdb = (
         TMDBMetadataProvider(
             api_key=settings.tmdb_api_key,

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from phare.core.fallback import record_fallback
 from phare.db.models import Title, TitleEmbedding, TitleKind
 from phare.providers.embeddings_local import is_local_space
-from phare.providers.types import LLMProvider, MetadataProvider, TitleMetadata
+from phare.providers.types import LLMProvider, MetadataProvider, TitleMetadata, canonical_source
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,46 @@ def _semantic_fill(
     return fills
 
 
+def _canonicalized_for_upsert(
+    session: Session, metas: list[TitleMetadata], source: CatalogSearchSource
+) -> list[TitleMetadata]:
+    """Swap each *new* live match's thin (possibly localized) search meta for a canonical deep
+    fetch, so what lands in the canonical ``Title`` row is language-neutral and complete.
+
+    Live search results follow the request language — that's what lets a French user find "Amour
+    éternel" — but persisting that localized text into ``Title`` poisons the shared embedding space
+    (French documents cluster by language, not meaning) and, stored thin, leaves a skeletal
+    genre-less document behind. For titles not known locally yet, one ``get_title`` on the
+    provider's language-neutral view (:func:`canonical_source`) fetches the canonical form *and*
+    carries genres/credits/runtime/language in the same call — a complete document at creation.
+    Bounded: only NEW titles pay the fetch (a search creates at most a handful); known rows keep
+    their thin meta, which ``upsert_titles`` uses for numeric refresh only, never text. Best-effort:
+    a failed deep fetch falls back to the thin meta (the title stays findable/requestable now; the
+    boot re-canonicalization pass mops up any localized residue later).
+    """
+    fetch = getattr(canonical_source(source), "get_title", None)
+    if fetch is None:  # search-only source (some fakes) — nothing deeper to fetch
+        return metas
+    out: list[TitleMetadata] = []
+    for meta in metas:
+        if meta.tmdb_id is None:
+            out.append(meta)  # upsert_titles skips these anyway
+            continue
+        known = session.scalar(
+            select(Title.id).where(Title.tmdb_id == meta.tmdb_id, Title.kind == meta.kind)
+        )
+        if known is not None:
+            out.append(meta)
+            continue
+        try:
+            deep = fetch(meta.tmdb_id, meta.kind)
+        except Exception:  # noqa: BLE001 - a flaky deep fetch must not sink the search request
+            record_fallback("search", "canonical_fetch_failed", tmdb_id=meta.tmdb_id)
+            deep = None
+        out.append(deep or meta)
+    return out
+
+
 def search_titles(
     session: Session,
     query: str,
@@ -149,10 +189,12 @@ def search_titles(
     # locally, then rank everything below with the single lexical-tier + vote-count ordering.
     # Prepending TMDB's own order shadowed that ranking entirely whenever a key was configured
     # (production), which is how "Bikini Inception" outranked a 314-vote match live.
+    # The search itself may be language-bound (that's how a localized title is *found*), but what
+    # gets PERSISTED for a new title is the canonical deep form — see _canonicalized_for_upsert.
     tmdb_matches: list[Title] = []
     if metadata is not None:
         metas = metadata.search(query, limit=limit)
-        upsert_titles(session, metas)
+        upsert_titles(session, _canonicalized_for_upsert(session, metas, metadata))
         session.flush()
         for meta in metas:
             if meta.tmdb_id is None:

@@ -21,19 +21,23 @@ Design constraints (see ``CLAUDE.md`` principle 5 and the round-10 mission):
   mode; they're not clustered, they ride along in every facet centroid via the blended contribution
   math. Only positive contributions define the facets (what you like has structure; what you avoid
   is a blanket).
+- **Vectorized.** The clustering runs on numpy (contributions stacked once into an ``(n, d)``
+  float64 matrix, cosine = row-normalised matmul). The pure-Python original cost ~36 s per call on
+  a real ~900-title history; this is the same algorithm with the same tie-break semantics —
+  ``argmax``/``argmin`` pick the first extremum, exactly like the strict ``>``/``<`` comparisons
+  they replace — verified by a reference-implementation parity test.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from phare.recommend.taste_vector import (
-    TasteContribution,
-    blend_contributions,
-)
+import numpy as np
+
+from phare.recommend.taste_vector import TasteContribution
 
 logger = logging.getLogger(__name__)
 
@@ -81,86 +85,113 @@ class Facet:
     member_title_ids: tuple[uuid.UUID, ...] = ()
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
+def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     """Cosine similarity of two raw vectors (retrieval ranks by cosine, so cohesion must too)."""
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
+    av = np.asarray(a, dtype=np.float64)
+    bv = np.asarray(b, dtype=np.float64)
+    na = float(np.linalg.norm(av))
+    nb = float(np.linalg.norm(bv))
     if na == 0.0 or nb == 0.0:
         return 0.0
-    return dot / (na * nb)
+    return float(av @ bv) / (na * nb)
 
 
-def _assign(
-    contributions: list[TasteContribution], centroids: list[list[float]]
-) -> list[list[TasteContribution]]:
-    """Assign each contribution to its nearest (max-cosine) centroid. Ties break to the lowest
-    centroid index — deterministic, and the contributions themselves arrive pre-sorted."""
-    clusters: list[list[TasteContribution]] = [[] for _ in centroids]
-    for c in contributions:
-        best_idx = 0
-        best_sim = -2.0
-        for idx, centroid in enumerate(centroids):
-            sim = _cosine(c.embedding, centroid)
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = idx
-        clusters[best_idx].append(c)
-    return clusters
+def _stack(contributions: list[TasteContribution]) -> np.ndarray:
+    """The contributions' embeddings as one ``(n, d)`` float64 matrix (``(0, 0)`` when empty)."""
+    if not contributions:
+        return np.zeros((0, 0), dtype=np.float64)
+    return np.array([c.embedding for c in contributions], dtype=np.float64)
 
 
-def _farthest_point_init(contributions: list[TasteContribution], k: int) -> list[list[float]]:
-    """Deterministic k seeds by farthest-point (max-min cosine distance) from a stable start.
+def _unit_rows(matrix: np.ndarray) -> np.ndarray:
+    """Rows scaled to unit norm; all-zero rows stay zero (their cosine to anything is 0.0, matching
+    the historical zero-norm guard)."""
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    return matrix / np.where(norms == 0.0, 1.0, norms)
+
+
+def _assign(unit: np.ndarray, centroids: np.ndarray) -> np.ndarray:
+    """Nearest (max-cosine) centroid label per row of the unit matrix. Ties break to the lowest
+    centroid index (``argmax`` returns the first maximum — same as the historical strict ``>``),
+    and the contributions themselves arrive pre-sorted."""
+    return np.argmax(unit @ _unit_rows(centroids).T, axis=1)
+
+
+def _farthest_point_init(unit: np.ndarray, k: int) -> np.ndarray:
+    """Deterministic k seed *indices* by farthest-point (max-min cosine distance) from a stable
+    start.
 
     Seed 0 is the first contribution in the (title-id-sorted) order — no RNG. Each subsequent seed
     is the contribution *least similar* to the seeds chosen so far, so the seeds land on distinct
-    modes rather than clumping. Ties break to the earlier contribution in the stable order."""
-    seeds: list[list[float]] = [list(contributions[0].embedding)]
+    modes rather than clumping. Ties break to the earlier contribution in the stable order
+    (``argmin`` returns the first minimum — same as the historical strict ``<``)."""
+    seeds = [0]
+    max_sims = unit @ unit[0]  # per-row max similarity to any seed so far
     while len(seeds) < k:
-        best_c: TasteContribution | None = None
-        best_score = 2.0  # we minimise the max-similarity-to-any-seed; lower = farther
-        for c in contributions:
-            max_sim = max(_cosine(c.embedding, s) for s in seeds)
-            if max_sim < best_score:
-                best_score = max_sim
-                best_c = c
-        if best_c is None:  # pragma: no cover - contributions is non-empty here
-            break
-        seeds.append(list(best_c.embedding))
-    return seeds
+        nxt = int(np.argmin(max_sims))
+        seeds.append(nxt)
+        max_sims = np.maximum(max_sims, unit @ unit[nxt])
+    return np.array(seeds, dtype=np.intp)
 
 
-def _kmeans(contributions: list[TasteContribution], k: int) -> list[list[TasteContribution]]:
+def _blend_rows(raw: np.ndarray, weights: np.ndarray, idx: np.ndarray) -> np.ndarray | None:
+    """Signed, weight-normalised blend of the selected rows — the centroid of a cluster. Uses
+    ``sum |weight|`` as the denominator (a mix of positive and negative signals must not cancel the
+    scale), the same math as ``taste_vector.blend_contributions``. ``None`` if the weights net to
+    nothing (or ``idx`` is empty)."""
+    total_abs = float(np.abs(weights[idx]).sum())
+    if total_abs == 0.0:
+        return None
+    return weights[idx] @ raw[idx] / total_abs
+
+
+def _kmeans(unit: np.ndarray, raw: np.ndarray, weights: np.ndarray, k: int) -> list[np.ndarray]:
     """Deterministic Lloyd's k-means over the contribution embeddings, farthest-point seeded, fixed
-    iteration count, weight-blended centroids. Returns the non-empty clusters."""
-    centroids = _farthest_point_init(contributions, k)
-    clusters = _assign(contributions, centroids)
+    iteration count, weight-blended centroids. Returns the non-empty clusters as index arrays (in
+    contribution order — ``flatnonzero`` is ascending, same as the historical append-in-order)."""
+    seeds = raw[_farthest_point_init(unit, k)]
+    labels = _assign(unit, seeds)
     for _ in range(_LLOYD_ITERS):
-        new_centroids: list[list[float]] = []
-        for cluster, prev in zip(clusters, centroids, strict=True):
-            blended = blend_contributions(cluster) if cluster else None
-            new_centroids.append(blended if blended is not None else prev)
-        reassigned = _assign(contributions, new_centroids)
-        if [[c.title_id for c in cl] for cl in reassigned] == [
-            [c.title_id for c in cl] for cl in clusters
-        ]:
-            clusters = reassigned
+        # An empty (or net-zero) cluster keeps its original seed as centroid — the historical code
+        # zipped against the *initial* centroid list, never the previous iteration's.
+        centroids = seeds.copy()
+        for j in range(k):
+            blended = _blend_rows(raw, weights, np.flatnonzero(labels == j))
+            if blended is not None:
+                centroids[j] = blended
+        new_labels = _assign(unit, centroids)
+        converged = bool(np.array_equal(new_labels, labels))
+        labels = new_labels
+        if converged:
             break
-        clusters = reassigned
-    return [cl for cl in clusters if cl]
+    clusters = [np.flatnonzero(labels == j) for j in range(k)]
+    return [idx for idx in clusters if idx.size]
 
 
-def _mean_intra_sim(cluster: list[TasteContribution], centroid: list[float]) -> float:
+def _mean_intra_sim(unit_members: np.ndarray, centroid: np.ndarray) -> float:
     """Mean cosine of a cluster's members to its centroid — how cohesive the mode is (1 = identical
-    directions). A single-member cluster is perfectly cohesive by definition."""
-    if not cluster:
+    directions). A single-member cluster is perfectly cohesive by definition; an empty one is 1.0
+    and a zero-norm centroid reads 0.0, matching the historical per-pair zero guard."""
+    if unit_members.shape[0] == 0:
         return 1.0
-    return sum(_cosine(c.embedding, centroid) for c in cluster) / len(cluster)
+    norm = float(np.linalg.norm(centroid))
+    if norm == 0.0:
+        return 0.0
+    return float((unit_members @ (np.asarray(centroid, dtype=np.float64) / norm)).mean())
 
 
-def _least_cohesive_k(
-    contributions: list[TasteContribution],
-) -> list[list[TasteContribution]]:
+def _cluster_cohesion(
+    unit: np.ndarray, raw: np.ndarray, weights: np.ndarray, idx: np.ndarray
+) -> float:
+    """A cluster's mean intra-similarity to its own blended centroid (first member as the fallback
+    anchor when the blend nets to nothing — the historical ``or cl[0].embedding``)."""
+    centroid = _blend_rows(raw, weights, idx)
+    if centroid is None:
+        centroid = raw[idx[0]]
+    return _mean_intra_sim(unit[idx], centroid)
+
+
+def _least_cohesive_k(unit: np.ndarray, raw: np.ndarray, weights: np.ndarray) -> list[np.ndarray]:
     """Pick k by growing it until every cluster is cohesive (or ``_MAX_FACETS`` is hit).
 
     Start at k=2 and increase: at each k, run k-means and check the *least* cohesive cluster's mean
@@ -168,14 +199,12 @@ def _least_cohesive_k(
     cleanly separated — stop. This is silhouette-lite: cheap, deterministic, and it stops as soon as
     splitting stops buying separation, so a two-mode taste yields 2 facets and a coherent one would
     have already been caught by the k=1 cohesion check upstream."""
-    best_clusters = _kmeans(contributions, 2)
+    best_clusters: list[np.ndarray] = []
     for k in range(2, _MAX_FACETS + 1):
-        clusters = _kmeans(contributions, k)
+        clusters = _kmeans(unit, raw, weights, k)
         if len(clusters) < k:  # k-means collapsed empties — no point growing further
             return clusters
-        worst = min(
-            _mean_intra_sim(cl, blend_contributions(cl) or cl[0].embedding) for cl in clusters
-        )
+        worst = min(_cluster_cohesion(unit, raw, weights, idx) for idx in clusters)
         best_clusters = clusters
         if worst >= _COHESION_THRESHOLD:
             break
@@ -196,35 +225,48 @@ def extract_facets(contributions: list[TasteContribution]) -> list[Facet]:
     so a mode backed by 60% of the history gets ~60% of the retrieval budget (``facet_budgets``)."""
     if not contributions:
         return []
-    positives = [c for c in contributions if c.weight > 0.0]
-    negatives = [c for c in contributions if c.weight < 0.0]
+    raw = _stack(contributions)
+    weights = np.array([c.weight for c in contributions], dtype=np.float64)
+    pos_rows = np.flatnonzero(weights > 0.0)
+    neg_rows = np.flatnonzero(weights < 0.0)
+    positives = [contributions[i] for i in pos_rows]
     # Negatives blend into every facet centroid — reconstruct the full contribution set per cluster.
-    full_centroid = blend_contributions(contributions)
-    if full_centroid is None:  # positives and negatives cancelled — no direction to search
+    full = _blend_rows(raw, weights, np.arange(len(contributions)))
+    if full is None:  # positives and negatives cancelled — no direction to search
         return []
+    full_centroid = full.tolist()
+    pos_raw = raw[pos_rows]
+    pos_unit = _unit_rows(pos_raw)
+    pos_weights = weights[pos_rows]
 
-    def _facet_from(cluster_positives: list[TasteContribution]) -> Facet:
-        members = [*cluster_positives, *negatives]
-        centroid = blend_contributions(members) or full_centroid
-        pos_mass = sum(c.weight for c in cluster_positives)
+    def _facet_from(cluster: np.ndarray) -> Facet:
+        # ``cluster`` indexes into the positives; blend positives + every negative for the centroid.
+        member_rows = pos_rows[cluster]
+        blended = _blend_rows(raw, weights, np.concatenate([member_rows, neg_rows]))
+        centroid = blended.tolist() if blended is not None else full_centroid
+        # Cohesion is measured against the *positives-only* blend (the mode itself, negatives
+        # excluded), falling back to the facet centroid — the historical anchor choice.
+        own = _blend_rows(pos_raw, pos_weights, cluster)
+        anchor = own if own is not None else np.asarray(centroid, dtype=np.float64)
+        cluster_positives = [positives[i] for i in cluster]
         return Facet(
             centroid=centroid,
-            weight=pos_mass,
+            weight=sum(c.weight for c in cluster_positives),
             size=len(cluster_positives),
-            mean_intra_sim=_mean_intra_sim(
-                cluster_positives, blend_contributions(cluster_positives) or centroid
-            ),
+            mean_intra_sim=_mean_intra_sim(pos_unit[cluster], anchor),
             member_title_ids=tuple(c.title_id for c in cluster_positives),
         )
 
-    single = [_facet_from(positives)]
+    all_positives = np.arange(len(positives), dtype=np.intp)
+    single = [_facet_from(all_positives)]
     if len(positives) < _MIN_TITLES_FOR_SPLIT:
         return _normalise_weights(single)
-    whole_cohesion = _mean_intra_sim(positives, blend_contributions(positives) or full_centroid)
-    if whole_cohesion >= _COHESION_THRESHOLD:
+    whole_blend = _blend_rows(pos_raw, pos_weights, all_positives)
+    whole_anchor = whole_blend if whole_blend is not None else np.asarray(full_centroid)
+    if _mean_intra_sim(pos_unit, whole_anchor) >= _COHESION_THRESHOLD:
         return _normalise_weights(single)
 
-    clusters = _least_cohesive_k(positives)
+    clusters = _least_cohesive_k(pos_unit, pos_raw, pos_weights)
     if len(clusters) <= 1:
         return _normalise_weights(single)
     facets = _normalise_weights([_facet_from(cl) for cl in clusters])

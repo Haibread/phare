@@ -166,6 +166,19 @@ def db_session(engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_facets_cache() -> None:
+    """Clear the cross-request facet cache between tests.
+
+    The cache key includes an event-count/max-ingested stamp, but two tests can legitimately build
+    identical (profile, version, stamp) states with *different* fixture data — under pytest-randomly
+    a stale entry then serves the previous test's facets (bitten: the SQL hard-avoid test flaked
+    only in randomized full-suite order)."""
+    from phare.recommend.service import _FACETS_CACHE
+
+    _FACETS_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
 def _sync_embedding_backfill(request: pytest.FixtureRequest) -> None:
     """Keep the "background" embedding backfill synchronous and on the test's own session.
 

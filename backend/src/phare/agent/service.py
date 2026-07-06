@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -33,6 +34,11 @@ from phare.recommend.schema import Candidate, Recommendation
 from phare.recommend.service import RecommendationService
 
 logger = logging.getLogger(__name__)
+
+
+def _elapsed_ms(t0: float) -> float:
+    """Elapsed milliseconds since ``t0`` (a ``time.monotonic()`` mark), rounded for logging."""
+    return round((time.monotonic() - t0) * 1000.0, 1)
 
 
 @dataclass
@@ -222,13 +228,26 @@ class ChatService:
         ``compose_prompt`` through the agent model. ``history`` is the recent conversation (bounded
         by the formatter); ``active_intent`` is the filters already in effect — both fed to the
         planner so a follow-up like "even shorter" refines the prior turn instead of starting cold.
+
+        Emits ONE ``chat.turn.timing`` INFO line per turn with the per-stage elapsed ms (embed
+        top-up, plan, tool execution, fallback recommend). The retrieve/filter/rerank split inside
+        a recommend lands on the engine's own ``recommend.timing`` line; the compose stage streams
+        *after* prepare() returns, so it can't be measured here.
         """
+        t_start = time.monotonic()
+        timings: dict[str, float] = {}
+        t_stage = time.monotonic()
         self.recommender.ensure_embeddings()
+        timings["embed_ms"] = _elapsed_ms(t_stage)
         if self.chat_llm is None:
-            return self._prepare_offline(profile_id, message)
-        return self._prepare_with_tools(
-            profile_id, message, now or datetime.now(UTC), history or [], active_intent
-        )
+            prepared = self._prepare_offline(profile_id, message)
+        else:
+            prepared = self._prepare_with_tools(
+                profile_id, message, now or datetime.now(UTC), history or [], active_intent, timings
+            )
+        timings["total_ms"] = _elapsed_ms(t_start)
+        logger.info("chat.turn.timing", extra={"profile_id": str(profile_id), **timings})
+        return prepared
 
     def _prepare_offline(self, profile_id: uuid.UUID, message: str) -> PreparedTurn:
         intent = keyword_intent(message)  # offline floor; no writes without the LLM
@@ -261,9 +280,13 @@ class ChatService:
         now: datetime,
         history: list[ChatMessage],
         active_intent: ChatIntent | None = None,
+        timings: dict[str, float] | None = None,
     ) -> PreparedTurn:
         session = self.recommender.session
         settings = get_settings()
+        # Language-bound so live search *matches* titles typed in the user's language. The write
+        # paths downstream (search upserts, runtime heal) fetch through canonical_source(), so
+        # nothing localized ever lands in a canonical Title row.
         metadata = (
             TMDBMetadataProvider(
                 api_key=settings.tmdb_api_key,
@@ -285,6 +308,8 @@ class ChatService:
         # natural-language reply. Planning is mechanical JSON, so it runs on the cheaper workhorse
         # (falling back to the agent model only if no workhorse is wired).
         planner_llm = self.recommender.chat_llm or self.chat_llm
+        timings = timings if timings is not None else {}
+        t_stage = time.monotonic()
         agent_plan = planner.plan(
             session,
             profile_id,
@@ -294,6 +319,7 @@ class ChatService:
             history=history,
             active_intent=active_intent,
         )
+        timings["plan_ms"] = _elapsed_ms(t_stage)
         # An explicit empty plan is the planner declining an off-topic message. Answer with a
         # deterministic steer-back instead of spending the (big) agent model just to say no — this
         # is also the path a prompt-injection probe hammers, so it must not cost a model call.
@@ -321,7 +347,9 @@ class ChatService:
                 suggestions=_clarify_suggestions(clarify.args, self.recommender.language),
                 language=self.recommender.language,
             )
+        t_stage = time.monotonic()
         result = execute_plan(ctx, agent_plan)
+        timings["execute_ms"] = _elapsed_ms(t_stage)
         # Never hand back a title the user named in this turn (e.g. "I saw Dune and loved it").
         result.items = _drop_mentioned(result.items, message)
         if result.items and not result.suppress_logging:
@@ -344,9 +372,11 @@ class ChatService:
         # A surfaced tool note (e.g. "couldn't find 'Zxqyt'") is kept verbatim instead — burying it
         # under an unrelated slate would be the dishonest move.
         if not result.items and not result.actions and not result.notes:
+            t_stage = time.monotonic()
             fallback = _drop_mentioned(
                 self.recommender.recommend(profile_id, vote_mix=True), message
             )
+            timings["fallback_ms"] = _elapsed_ms(t_stage)
             if fallback:
                 log_chat(session, profile_id, fallback)
                 result.items = fallback

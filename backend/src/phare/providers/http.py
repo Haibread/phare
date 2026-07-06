@@ -115,6 +115,11 @@ class TTLCache:
             while len(self._store) > self._maxsize:
                 self._store.popitem(last=False)
 
+    def clear(self) -> None:
+        """Drop every entry (test isolation for module-level caches; unused on the read path)."""
+        with self._lock:
+            self._store.clear()
+
     def get_or_set(self, key: Hashable, factory: Callable[[], T]) -> T:
         if self._ttl <= 0:
             return factory()
