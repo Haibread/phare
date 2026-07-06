@@ -12,6 +12,31 @@ filters) → re-ranker → explanations (LLM)`.
   watched, apply hard-avoids, apply chat intent filters). The pgvector HNSW index is *approximate*,
   so the search widens `hnsw.ef_search` and breaks distance ties on the stable catalog id — the
   same profile gets the same candidates every load, keeping the re-ranker below deterministic.
+  - **Multi-facet taste retrieval (round 10).** A profile's taste is rarely one thing — someone
+    can love cerebral sci-fi *and* dark action *and* prestige drama. Averaging all their liked-title
+    vectors into **one** centroid yields a blurry mid-point that is near *none* of those modes, so
+    retrieval fetches generic mid-space titles and the genuinely on-taste picks from each mode lose
+    (measured across rounds 5–9; embedding-side fixes were exhausted). So instead of one centroid,
+    Phare clusters the positively-weighted watched-title vectors into **1–4 taste facets** (a simple,
+    deterministic k-means: farthest-point seeded from a stable title-id ordering, fixed iterations,
+    no RNG — pgvector is already approximate, the clustering must not add a second source of
+    flicker). `k` is adaptive: it grows only while splitting keeps buying separation (a cohesion
+    threshold on each cluster's mean intra-similarity), so a genuinely one-note taste stays `k=1`.
+    Each facet gets its own ANN query with a share of the retrieval budget **proportional to its
+    event mass** (a mode backed by 60 % of the history gets ~60 % of the slots); the budget is
+    *split* across facets, not multiplied, so the merged pool stays the same size as the old single
+    query (~`k*4+10`). Pools merge with dedup, keeping each candidate's **best** similarity across
+    facets. The re-ranker, mood nudge, and constraint-aware re-fetch all compose unchanged — mood
+    nudges each facet, the re-fetch runs per facet. **Negatives** (abandonment / dislike) are *not*
+    clustered: they push the whole taste away, so they ride into every facet centroid, never seed
+    their own.
+    - **k=1 degradation.** A small history (< ~8 positively-weighted titles) or an already-cohesive
+      taste collapses to a single facet whose centroid **equals** the historical one — so N=1 and
+      single-mode profiles behave exactly as before (principle 5). Rewatch rows and title-anchored
+      "because you watched X" rows are single-vector by nature and skip faceting entirely. Facets
+      are computed per request (cached for the request's fan-out of row queries) from the vectors —
+      no persistent state, no schema change. A `taste.facets` structured log records `k`, the facet
+      sizes, and each facet's mean intra-similarity.
   - **Adaptive constraint-aware re-fetch.** The first pass retrieves the nearest-to-centroid slice
     and prunes it with the intent filter *after* the fact. For a taste centred elsewhere than the
     requested genre (a thriller fan asking for a light comedy), almost none of those neighbours

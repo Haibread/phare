@@ -31,7 +31,16 @@ from phare.recommend.explain import _EXPLANATION_CACHE, Explainer
 from phare.recommend.log import log_rows
 from phare.recommend.reranker import rerank
 from phare.recommend.schema import Candidate, Recommendation, Row
-from phare.recommend.taste_vector import compute_taste_centroid
+from phare.recommend.taste_facets import (
+    Facet,
+    extract_facets,
+    facet_budgets,
+    log_facets,
+)
+from phare.recommend.taste_vector import (
+    compute_taste_centroid,
+    taste_contributions,
+)
 from phare.taste.service import effective_profile
 
 logger = logging.getLogger(__name__)
@@ -168,6 +177,10 @@ class RecommendationService:
         # the same centroid, and computing it re-reads every watch event. One service instance is
         # built per request (see api.deps), so this stays correct.
         self._centroid_cache: dict[uuid.UUID, list[float] | None] = {}
+        # Facets (round 10) share the same per-request lifetime: extracting them re-reads and
+        # clusters the watch history, so cache it alongside the centroid. No persistent state — the
+        # split is cheap enough to recompute per request (mission constraint).
+        self._facets_cache: dict[uuid.UUID, list[Facet]] = {}
 
     def ensure_embeddings(self) -> int:
         """Non-blocking top-up of missing vectors for the active space. Returns titles embedded now.
@@ -272,6 +285,19 @@ class RecommendationService:
             )
         return self._centroid_cache[profile_id]
 
+    def _facets(self, profile_id: uuid.UUID) -> list[Facet]:
+        """Memoized taste *facets* for this request — the profile's distinct taste modes, each a
+        query vector with a share of the retrieval budget (round 10). Falls back to a single facet
+        (== the centroid) for small/cohesive histories, so k=1 reproduces the historical behaviour.
+        Empty when there's no usable signal (same condition as ``_centroid`` returning ``None``)."""
+        if profile_id not in self._facets_cache:
+            contributions = taste_contributions(self.session, profile_id, self.embed_model_version)
+            facets = extract_facets(contributions)
+            if facets:
+                log_facets(str(profile_id), facets)
+            self._facets_cache[profile_id] = facets
+        return self._facets_cache[profile_id]
+
     def load_taste(self, profile_id: uuid.UUID) -> dict[str, object]:
         """The effective taste profile (structured + sticky overrides), or {} if none yet."""
         taste = self.session.scalar(
@@ -329,17 +355,29 @@ class RecommendationService:
         """
         if taste is None:
             taste = self._load_taste(profile_id)
-        centroid = self._centroid(profile_id)
-        if centroid is None:
+        # Per-facet retrieval (round 10): the profile's taste is split into distinct modes, each a
+        # query vector, instead of one averaged (blurry) centroid. A single-facet split reproduces
+        # the historical centroid path exactly. ``rewatch`` keeps the single centroid — a comfort
+        # rewatch draws from an already-narrow watched set, faceting it buys nothing and the pool is
+        # tiny; and title-anchored rows never route through here.
+        facets = self._facets(profile_id)
+        if not facets:
             return []
-        if mood:
-            centroid = self._bias_toward_mood(centroid, mood)
+        if rewatch:
+            centroid = self._centroid(profile_id)
+            if centroid is None:
+                return []
+            facets = [Facet(centroid=centroid, weight=1.0, size=1, mean_intra_sim=1.0)]
+        query_vectors = [
+            self._bias_toward_mood(f.centroid, mood) if mood else f.centroid for f in facets
+        ]
 
         avoids = [*(taste.get("hard_avoids") or []), *extra_hard_avoids]
         k = k if k is not None else self.row_size
         candidates = self._constrained_candidates(
             profile_id,
-            centroid,
+            query_vectors,
+            budgets=facet_budgets(facets, k * 4 + 10),
             k=k,
             avoids=avoids,
             rewatch=rewatch,
@@ -359,11 +397,50 @@ class RecommendationService:
         exp = explainer or self._explainer(with_llm=explain_with_llm)
         return exp.explain(recs, taste)
 
+    def _merge_facet_pools(
+        self,
+        profile_id: uuid.UUID,
+        query_vectors: Sequence[Sequence[float]],
+        budgets: Sequence[int],
+        *,
+        avoids: Sequence[str],
+        rewatch: bool,
+        genre_constraints: Sequence[genres.GenreConstraint],
+        max_runtime: int | None,
+    ) -> list[Candidate]:
+        """Run one ANN per facet and merge into a single pool, deduped on ``title_id`` keeping each
+        candidate's *best* similarity across facets (mission point 2). Candidates arrive from each
+        facet already nearest-first; the merged list is re-sorted by similarity descending with a
+        stable ``title_id`` tie-break so the downstream reranker sees a deterministic pool (pgvector
+        HNSW is approximate — order is our anchor). A single query vector is the historical path:
+        one ``generate_candidates`` call, no merge overhead."""
+        best: dict[uuid.UUID, Candidate] = {}
+        for centroid, limit in zip(query_vectors, budgets, strict=True):
+            pool = generate_candidates(
+                self.session,
+                profile_id,
+                centroid,
+                self.embed_model_version,
+                limit=limit,
+                hard_avoids=avoids,
+                from_watched=rewatch,
+                genre_constraints=genre_constraints,
+                max_runtime=max_runtime,
+            )
+            for cand in pool:
+                incumbent = best.get(cand.title_id)
+                if incumbent is None or cand.similarity > incumbent.similarity:
+                    best[cand.title_id] = cand
+        merged = list(best.values())
+        merged.sort(key=lambda c: (-c.similarity, c.title_id.bytes))
+        return merged
+
     def _constrained_candidates(
         self,
         profile_id: uuid.UUID,
-        centroid: list[float],
+        query_vectors: Sequence[Sequence[float]],
         *,
+        budgets: Sequence[int],
         k: int,
         avoids: Sequence[str],
         rewatch: bool,
@@ -375,14 +452,20 @@ class RecommendationService:
         """Retrieve + filter the candidate pool, adaptively re-searching the constrained subspace
         when the post-hoc filter starves it (round-7 finding 1).
 
-        First pass is the historical one: pull the ~nearest-to-centroid titles, backfill missing
+        Per-facet retrieval (round 10): ``query_vectors`` is one query vector per taste facet, with
+        a matching ``budgets`` split (summing to ~the historical ``k*4+10`` — the budget is divided
+        across facets, not multiplied, so the merged pool stays the same size). Each facet's ANN
+        runs independently and the pools merge with dedup, keeping each candidate's *best* (max)
+        similarity across facets. A single-facet split is exactly the historical centroid behaviour.
+
+        First pass is the historical one: pull the ~nearest-to-facet titles, backfill missing
         runtimes, then apply the opaque ``candidate_filter``. If that leaves fewer than ``k`` — a
         taste centred elsewhere than the requested genre yields almost no matches in the nearest
-        slice — and there's a structured constraint to push down, re-run the ANN with the genre /
-        runtime constraint in SQL, so it ranks the nearest titles *within the matching subspace*
-        rather than hoping the global-nearest slice contained matches. The re-fetched pool goes
-        through the same runtime enrichment + filter, and we keep whichever pool the filter left
-        larger — never padding with weak matches, so a genuinely thin catalog stays honestly thin.
+        slice — and there's a structured constraint to push down, re-run each facet's ANN with the
+        genre / runtime constraint in SQL, so it ranks the nearest titles *within the matching
+        subspace* rather than hoping the global-nearest slice contained matches. The re-fetched pool
+        goes through the same runtime enrichment + filter, and we keep whichever pool the filter
+        left larger — never padding with weak matches, so a genuinely thin catalog stays honest.
 
         One wrinkle: the chat intent filter's zero-match safety keeps the *whole* pool when a
         requested genre matches nothing in it (A3 — a thin catalog shouldn't return nothing). As a
@@ -396,14 +479,12 @@ class RecommendationService:
         def retrieve(
             genre_constraints: Sequence[genres.GenreConstraint], runtime_cap: int | None
         ) -> list[Candidate]:
-            pool = generate_candidates(
-                self.session,
+            pool = self._merge_facet_pools(
                 profile_id,
-                centroid,
-                self.embed_model_version,
-                limit=k * 4 + 10,
-                hard_avoids=avoids,
-                from_watched=rewatch,
+                query_vectors,
+                budgets,
+                avoids=avoids,
+                rewatch=rewatch,
                 genre_constraints=genre_constraints,
                 max_runtime=runtime_cap,
             )

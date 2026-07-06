@@ -59,6 +59,34 @@ def test_degenerate_slate_is_flagged_by_metrics() -> None:
 # --- persona guardrail suite (DB-backed, offline embedder) ------------------
 
 
+def test_facets_beat_single_centroid_on_mixed_taste(db_session: Session) -> None:
+    # Round 10: the multi-facet retrieval must carry BOTH taste modes into the slate, which the
+    # single averaged centroid (the pre-round-10 behaviour) demonstrably fails on a two-mode taste.
+    # Runs on the two-mode embedder — the offline hash space is too degenerate to separate modes, so
+    # a check there would prove nothing (see facet_discrimination module docstring).
+    from phare.eval.facet_discrimination import (
+        _MIN_PER_MODE,
+        evaluate_facet_discrimination,
+    )
+
+    result = evaluate_facet_discrimination(db_session)
+    # The taste cleanly splits into its two modes.
+    assert result.facet_count == 2, (
+        f"expected 2 facets, got {result.facet_count} ({result.facet_sizes})"
+    )
+    # Facets surface both modes...
+    assert result.facets_pass, (
+        f"facet slate missed a mode: A={result.facet_a_cousins} B={result.facet_b_cousins} "
+        f"(need >= {_MIN_PER_MODE} each)"
+    )
+    # ...and the single averaged centroid does NOT — the regression this round removes. Without this
+    # assertion the check could pass both ways and prove nothing (mission mandate).
+    assert result.single_centroid_fails, (
+        "the single averaged centroid also surfaced both modes — the check does not discriminate: "
+        f"A={result.single_a_cousins} B={result.single_b_cousins}"
+    )
+
+
 def test_all_personas_pass_guardrails(db_session: Session) -> None:
     results = evaluate_all(
         db_session,

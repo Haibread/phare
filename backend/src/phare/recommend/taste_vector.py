@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -102,14 +103,31 @@ def watched_title_ids(session: Session, profile_id: uuid.UUID) -> set[uuid.UUID]
     return set(rows)
 
 
-def compute_taste_centroid(
+@dataclass(frozen=True)
+class TasteContribution:
+    """One title's net contribution to the taste query: its embedding, the *signed* recency-scaled
+    weight it carries (positive = liked/rewatched, negative = abandoned/disliked), and the id it
+    came from. The facet clusterer consumes these; ``compute_taste_centroid`` just sums them."""
+
+    title_id: uuid.UUID
+    embedding: list[float]
+    weight: float
+
+
+def taste_contributions(
     session: Session,
     profile_id: uuid.UUID,
     model_version: str,
     *,
     now: datetime | None = None,
-) -> list[float] | None:
-    """Recency-weighted, signed blend of engaged-title embeddings. ``None`` if no usable signal."""
+) -> list[TasteContribution]:
+    """One signed, recency-scaled contribution per engaged title (the shared basis of the centroid
+    and the taste facets). Same weighting the centroid has always used — watched events collapse to
+    a single rewatch/abandon/engagement signal, ratings/watchlist stay per-event — summed per title
+    so each title yields exactly one contribution. Empty when there's no usable signal.
+
+    Deterministic order: sorted by ``title_id`` so any downstream clustering seeded from a stable
+    ordering is reproducible run-to-run (pgvector HNSW is approximate — order is our anchor)."""
     now = now or datetime.now(UTC)
     rows = session.execute(
         select(WatchEvent, TitleEmbedding.embedding)
@@ -120,9 +138,8 @@ def compute_taste_centroid(
             TitleEmbedding.model_version == model_version,
         )
     ).all()
-
     if not rows:
-        return None
+        return []
 
     # Group events by title so watched events can collapse into one derived rewatch/abandon signal
     # (a title's embedding is the same across all its events).
@@ -130,22 +147,9 @@ def compute_taste_centroid(
     for event, embedding in rows:
         by_title.setdefault(event.title_id, (embedding, []))[1].append(event)
 
-    # Each contribution is (weight, occurred_at) against the title's embedding.
-    accumulator: list[float] | None = None
-    total_abs_weight = 0.0
-
-    def add(weight: float, occurred_at: datetime | None, embedding: list[float]) -> None:
-        nonlocal accumulator, total_abs_weight
-        weight *= recency_factor(occurred_at, now)
-        if weight == 0.0:
-            return
-        if accumulator is None:
-            accumulator = [0.0] * len(embedding)
-        for i, value in enumerate(embedding):
-            accumulator[i] += weight * value
-        total_abs_weight += abs(weight)
-
-    for embedding, events in by_title.values():
+    contributions: list[TasteContribution] = []
+    for title_id, (embedding, events) in by_title.items():
+        net = 0.0
         watched = [e for e in events if e.type is EventType.watched]
         rated = [e for e in events if e.type is EventType.rated]
         # Watched events collapse into a single rewatch/abandon/engagement signal, dated by the
@@ -153,18 +157,53 @@ def compute_taste_centroid(
         if watched:
             last_watch = max((e.occurred_at for e in watched if e.occurred_at), default=None)
             weight = collapsed_watch_weight(watched, has_rating=bool(rated), now=now)
-            add(weight, last_watch, embedding)
+            net += weight * recency_factor(last_watch, now)
         # Ratings and everything else (watchlist, …) stay per-event — explicit, distinct signals.
         for event in events:
             if event.type is EventType.watched:
                 continue
             rating = float(event.rating) if event.rating is not None else None
-            add(event_weight(event.type, rating), event.occurred_at, embedding)
+            net += event_weight(event.type, rating) * recency_factor(event.occurred_at, now)
+        if net != 0.0:
+            contributions.append(
+                TasteContribution(title_id=title_id, embedding=embedding, weight=net)
+            )
+    # Stable ordering for deterministic downstream clustering (see docstring).
+    contributions.sort(key=lambda c: c.title_id.bytes)
+    return contributions
 
-    if accumulator is None or total_abs_weight == 0.0:
+
+def blend_contributions(contributions: list[TasteContribution]) -> list[float] | None:
+    """Signed, weight-normalised blend of a set of contributions — the centroid of a cluster. Uses
+    ``sum |weight|`` as the denominator (a mix of positive and negative signals must not cancel the
+    scale), matching the historical centroid math. ``None`` if the weights net to nothing."""
+    if not contributions:
         return None
-    centroid = [value / total_abs_weight for value in accumulator]
-    logger.debug(
-        "recommend.centroid", extra={"profile_id": str(profile_id), "signal_events": len(rows)}
-    )
+    dim = len(contributions[0].embedding)
+    accumulator = [0.0] * dim
+    total_abs = 0.0
+    for c in contributions:
+        for i, value in enumerate(c.embedding):
+            accumulator[i] += c.weight * value
+        total_abs += abs(c.weight)
+    if total_abs == 0.0:
+        return None
+    return [value / total_abs for value in accumulator]
+
+
+def compute_taste_centroid(
+    session: Session,
+    profile_id: uuid.UUID,
+    model_version: str,
+    *,
+    now: datetime | None = None,
+) -> list[float] | None:
+    """Recency-weighted, signed blend of engaged-title embeddings. ``None`` if no usable signal."""
+    contributions = taste_contributions(session, profile_id, model_version, now=now)
+    centroid = blend_contributions(contributions)
+    if centroid is not None:
+        logger.debug(
+            "recommend.centroid",
+            extra={"profile_id": str(profile_id), "signal_titles": len(contributions)},
+        )
     return centroid
