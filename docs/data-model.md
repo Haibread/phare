@@ -15,6 +15,26 @@ unrelated show (1398 is both *Stalker* and *The Sopranos*) — so a title is uni
 *are* globally unique, so `imdb_id` stays singularly unique.) Getting this wrong silently merged a
 movie and a show and mis-attached watch history — review H3a.
 
+## Title metadata columns
+
+Beyond identity, a title carries display + steering metadata, all filled from TMDB (import or the
+lazy/background heal, never guessed): `overview`, `genres`, `keywords`, `runtime_minutes`,
+`popularity`, `vote_count` (how *many* rated it — a known-ness proxy), `vote_average` (how *well* —
+a crude quality floor). Round 8 adds:
+
+- **`directors`** / **`top_cast`** — plain-name arrays (director(s) for a movie, creator(s) for a
+  show; first ~5 billed cast). Empty by default; fetched via TMDB `append_to_response=credits`
+  (movies) / `created_by` + `aggregate_credits` (TV) in the *same* detail request, so credits cost
+  no extra HTTP call. Surfaced on the title-detail API (`directors`, `topCast`), not yet embedded.
+- **`original_language`** — TMDB ISO-639-1 origin code (`en`, `ja`, …), nullable. Wired through the
+  broad *discover* import (it carries the field) so new imports get it for free, and healed for
+  older rows. This is what makes "anime" a real constraint — Animation **and** `ja` origin — in
+  both the intent filter and the SQL re-fetch (see `recommend/genres.py` and
+  [`design.md`](design.md), "Origin-scoped genres").
+
+The heal never clobbers a non-empty value — it only fills holes (a NULL scalar or an empty credit
+array), so it's idempotent across re-runs.
+
 ## TV is a tree
 
 `show → season → episode`. **Recommend at show level**; collect signal at every level and roll

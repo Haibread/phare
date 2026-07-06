@@ -101,6 +101,15 @@ class Title(Base):
     poster_path: Mapped[str | None] = mapped_column(String(255))
     genres: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     keywords: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    # Plain-name credit arrays (never cross an id): ``directors`` is the director(s) for a movie /
+    # the creator(s) for a show; ``top_cast`` is the first ~5 billed actors. Empty by default,
+    # filled by import/heal — the detail sheet's "who made it" line. Not embedded (a later round).
+    directors: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, server_default="{}")
+    top_cast: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, server_default="{}")
+    # TMDB ISO-639-1 original-language code (e.g. "en", "ja") — the language a title was produced
+    # in. Nullable: filled by import/heal, never guessed. Groundwork for true anime handling
+    # (Animation + "ja" origin) once coverage is backfilled.
+    original_language: Mapped[str | None] = mapped_column(String(8))
     popularity: Mapped[float | None] = mapped_column(Float)
     # TMDB rating count — proxy for how well-known a title is; used to tier chat recommendations.
     vote_count: Mapped[int | None] = mapped_column(Integer)

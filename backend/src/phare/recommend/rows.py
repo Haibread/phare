@@ -34,7 +34,7 @@ def _recency_confidence(last: datetime | None, *, now: datetime) -> float:
     return round(0.5 ** (days / _CONTINUE_HALF_LIFE_DAYS), 4)
 
 
-def _popular_confidences(
+def confidences_for_ordered_titles(
     session: Session,
     titles: Sequence[Title],
     *,
@@ -42,18 +42,19 @@ def _popular_confidences(
     taste: dict[str, object],
     model_version: str,
 ) -> list[float | None]:
-    """Honest per-title taste fit for the *popularity-ordered* popular row (lot R6b).
+    """Honest per-title taste fit for an *externally-ordered* list of titles, order untouched.
 
-    The row is still selected and ordered by popularity — that's its identity — but its fit gauge
-    must read real taste, not popularity magnitude (the old ``_popularity_confidence`` mapped log
-    popularity into ``confidence``, so "Scary Movie" read 0.92 for a cerebral-sci-fi profile: lie).
-    So each popular title is scored against the profile's actual taste: cosine similarity of its
-    embedding to the taste centroid, folded with the graded affinity through the canonical
-    :func:`confidence_for_pool` blend (unproven cap included, since popular skews recent).
+    The shared stamping primitive behind the popularity-ordered popular row (lot R6b) and search
+    results (round 8): both surface titles in an order that isn't taste (popularity / lexical
+    relevance), but the fit gauge must still read *real taste*, not that ordering signal. Each title
+    is scored against the profile's actual taste — cosine similarity of its embedding to the taste
+    centroid, folded with the graded affinity through the canonical :func:`confidence_for_pool`
+    blend (unproven cap included, since both rows skew recent/obscure).
 
     Degrades to ``None`` (→ UI's neutral "worth a look") for every title when there's no taste
     centroid (cold start), and per-title when a specific title has no embedding in the active space
-    — never a fabricated score. Ordering is untouched; only ``confidence`` changes.
+    — never a fabricated score. Ordering is untouched; only ``confidence`` is returned, positionally
+    aligned to ``titles``.
     """
     if centroid is None or not titles:
         return [None] * len(titles)
@@ -248,7 +249,7 @@ def popular_row(
     ).all()
     if avoids:
         rows = [title for title in rows if not _is_hard_avoided(title, avoids)][:limit]
-    confidences = _popular_confidences(
+    confidences = confidences_for_ordered_titles(
         session,
         rows,
         centroid=centroid,

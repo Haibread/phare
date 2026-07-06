@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from typing import Protocol
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from phare.db.models import Title, TitleKind
@@ -77,8 +77,11 @@ def search_titles(
     query = query.strip()
     if not query:
         return []
-    results: list[Title] = []
-    seen: set[uuid.UUID] = set()
+    # TMDB is a *discovery* source, not an ordering source: upsert its matches so they exist
+    # locally, then rank everything below with the single lexical-tier + vote-count ordering.
+    # Prepending TMDB's own order shadowed that ranking entirely whenever a key was configured
+    # (production), which is how "Bikini Inception" outranked a 314-vote match live.
+    tmdb_matches: list[Title] = []
     if metadata is not None:
         metas = metadata.search(query, limit=limit)
         upsert_titles(session, metas)
@@ -89,14 +92,22 @@ def search_titles(
             title = session.scalar(
                 select(Title).where(Title.tmdb_id == meta.tmdb_id, Title.kind == meta.kind)
             )
-            if title is not None and title.id not in seen:
-                seen.add(title.id)
-                results.append(title)
+            if title is not None:
+                tmdb_matches.append(title)
+    results: list[Title] = []
+    seen: set[uuid.UUID] = set()
     # Escape LIKE wildcards in the user's query so "%" / "_" match literally, not as patterns.
     like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    # Rank a word-start match (the title begins with the query, or a word inside it does) above a
-    # mid-word substring match, then by popularity — so typing "tenet" leads with *Tenet*, not with
-    # an obscure title that merely contains the letters mid-word. Boolean desc puts True first.
+    # Rank lexical relevance FIRST, then break ties by known-ness (vote_count) — so an obscure exact
+    # title still leads its lexical tier, and only *within* a tier does the better-known title win
+    # (kills the junk tail: "Bikini Inception" / soundtrack albums that share a word-start with the
+    # good match but have ~no votes). Popularity is dropped as the tiebreak: vote_count is the
+    # honest known-ness signal and the one the chat title-resolver already trusts; popularity is a
+    # transient TMDB trending number. Tiers, highest first (booleans → desc puts True first):
+    #   1. exact title match (the whole title equals the query)
+    #   2. word-start match (title begins with the query, or a word inside it does)
+    #   3. mid-word substring (the fallback the WHERE clause allows)
+    exact = func.lower(Title.title) == query.lower()
     word_start = or_(
         Title.title.ilike(f"{like}%", escape="\\"),
         Title.title.ilike(f"% {like}%", escape="\\"),
@@ -104,10 +115,21 @@ def search_titles(
     local = session.scalars(
         select(Title)
         .where(Title.title.ilike(f"%{like}%", escape="\\"))
-        .order_by(word_start.desc(), Title.popularity.desc().nulls_last())
+        .order_by(
+            exact.desc(),
+            word_start.desc(),
+            Title.vote_count.desc().nulls_last(),
+            Title.tmdb_id.asc().nulls_last(),  # stable final tie-break
+        )
         .limit(limit)
     ).all()
     for title in local:
+        if title.id not in seen:
+            seen.add(title.id)
+            results.append(title)
+    # Fuzzy TMDB matches whose stored title doesn't literally contain the query (translations,
+    # alternate titles) aren't in the ranked query above — append them after every lexical match.
+    for title in tmdb_matches:
         if title.id not in seen:
             seen.add(title.id)
             results.append(title)
@@ -139,6 +161,10 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
             # Backfill a poster when we didn't have one; it doesn't affect embeddings.
             if existing.poster_path is None and meta.poster_path is not None:
                 existing.poster_path = meta.poster_path
+            # Backfill original language when missing — a re-import (discover carries it) fills the
+            # column for free without a heal fetch. Never clobber a known value.
+            if existing.original_language is None and meta.original_language is not None:
+                existing.original_language = meta.original_language
             continue
         session.add(
             Title(
@@ -152,6 +178,9 @@ def upsert_titles(session: Session, metas: Iterable[TitleMetadata]) -> int:
                 poster_path=meta.poster_path,
                 genres=meta.genres,
                 keywords=meta.keywords,
+                directors=meta.directors,
+                top_cast=meta.top_cast,
+                original_language=meta.original_language,
                 popularity=meta.popularity,
                 vote_count=meta.vote_count,
                 vote_average=meta.vote_average,

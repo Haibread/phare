@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import or_, select, text, true
+from sqlalchemy import and_, or_, select, text, true
 from sqlalchemy.orm import Session
 
 from phare.core.fallback import record_fallback
@@ -44,7 +44,7 @@ def generate_candidates(
     limit: int = 50,
     hard_avoids: Sequence[str] = (),
     from_watched: bool = False,
-    genre_labels: Sequence[str] = (),
+    genre_constraints: Sequence[genres.GenreConstraint] = (),
     max_runtime: int | None = None,
 ) -> list[Candidate]:
     """Nearest titles to the centroid, hard-avoids removed.
@@ -53,14 +53,18 @@ def generate_candidates(
     ``from_watched=True`` the source flips to titles the profile *has* watched — the candidate pool
     for a rewatch, ranked the same way (nearest the taste centroid).
 
-    ``genre_labels`` / ``max_runtime`` push a constraint into SQL so the ANN searches the *right*
-    subspace instead of the taste-nearest slice that may contain few matches (round-7 finding 1).
-    ``genre_labels`` are canonical catalog genre strings (already alias-resolved by the caller — see
-    :func:`resolve_catalog_genres`); a title matches when its ``genres`` array overlaps them. A
-    ``max_runtime`` keeps titles at/under the cap **or** with an unknown (NULL) runtime — the
-    runtime heal runs on the retrieved pool afterwards, so a still-NULL row is a candidate the cap
-    can't yet judge, not one to exclude. Ranking (distance to centroid + stable tie-break) is
-    unchanged, so the filtered result is the true nearest matches, deterministic under wide search.
+    ``genre_constraints`` / ``max_runtime`` push a constraint into SQL so the ANN searches the
+    *right* subspace instead of the taste-nearest slice that may contain few matches (round-7
+    finding 1). Each :class:`genres.GenreConstraint` carries canonical catalog genre labels
+    (already alias-resolved by the caller — see :func:`genres.resolve_catalog_constraints`) and an
+    optional origin language ("anime" → Animation + ``ja``): a title matches a constraint when its
+    ``genres`` array overlaps the labels AND (when set) its ``original_language`` equals the
+    required origin; it matches the set when it matches any one (OR — same semantics as the
+    in-memory filter). A ``max_runtime`` keeps titles at/under the cap **or** with an unknown
+    (NULL) runtime — the runtime heal runs on the retrieved pool afterwards, so a still-NULL row is
+    a candidate the cap can't yet judge, not one to exclude. Ranking (distance to centroid + stable
+    tie-break) is unchanged, so the filtered result is the true nearest matches, deterministic
+    under wide search.
     """
     watched = watched_title_ids(session, profile_id)
     if from_watched and not watched:
@@ -72,10 +76,17 @@ def generate_candidates(
     else:
         scope = true()
     constraints = [scope]
-    if genre_labels:
-        # Array overlap (``&&``): keep titles tagged with at least one of the resolved labels. The
-        # labels are canonical, so this honours the same alias semantics as ``genres.matches_any``.
-        constraints.append(Title.genres.op("&&")(list(genre_labels)))
+    if genre_constraints:
+        # Array overlap (``&&``) per constraint, plus the origin-language equality when the
+        # constraint carries one; OR across constraints. Labels are canonical, so this honours the
+        # same alias semantics as ``genres.matches_any``.
+        clauses = []
+        for gc in genre_constraints:
+            clause = Title.genres.op("&&")(list(gc.labels))
+            if gc.original_language is not None:
+                clause = and_(clause, Title.original_language == gc.original_language)
+            clauses.append(clause)
+        constraints.append(or_(*clauses))
     if max_runtime is not None:
         constraints.append(
             or_(Title.runtime_minutes.is_(None), Title.runtime_minutes <= max_runtime)
@@ -120,6 +131,7 @@ def generate_candidates(
                 popularity=title.popularity,
                 vote_count=title.vote_count,
                 vote_average=title.vote_average,
+                original_language=title.original_language,
                 overview=title.overview,
                 poster_path=title.poster_path,
                 similarity=1.0 - float(dist),

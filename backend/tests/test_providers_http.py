@@ -25,7 +25,23 @@ _MOVIE = {
     "popularity": 123.4,
     "imdb_id": "tt1160419",
     "poster_path": "/dune.jpg",
+    "original_language": "en",
     "keywords": {"keywords": [{"id": 1, "name": "desert"}]},
+    "credits": {
+        "crew": [
+            {"job": "Director", "name": "Denis Villeneuve"},
+            {"job": "Editor", "name": "Joe Walker"},  # non-director crew ignored
+            {"job": "Director", "name": "Co Director"},  # a second director kept, in order
+        ],
+        "cast": [
+            {"name": "Timothée Chalamet"},
+            {"name": "Rebecca Ferguson"},
+            {"name": "Oscar Isaac"},
+            {"name": "Josh Brolin"},
+            {"name": "Stellan Skarsgård"},
+            {"name": "Zendaya"},  # 6th billed — beyond the top-5 cap, dropped
+        ],
+    },
 }
 
 
@@ -65,6 +81,8 @@ def test_embed_sends_dimensions_only_when_configured() -> None:
 def test_tmdb_get_movie() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/movie/438631"
+        # Credits are appended to the same request — no extra round-trip.
+        assert "credits" in request.url.params["append_to_response"]
         return httpx.Response(200, json=_MOVIE)
 
     provider = _tmdb(handler)
@@ -78,6 +96,50 @@ def test_tmdb_get_movie() -> None:
     assert meta.keywords == ["desert"]
     assert meta.imdb_id == "tt1160419"
     assert meta.poster_path == "/dune.jpg"
+    assert meta.original_language == "en"
+    # Only job=Director crew, in payload order; top_cast is the first 5 billed (6th dropped).
+    assert meta.directors == ["Denis Villeneuve", "Co Director"]
+    assert meta.top_cast == [
+        "Timothée Chalamet",
+        "Rebecca Ferguson",
+        "Oscar Isaac",
+        "Josh Brolin",
+        "Stellan Skarsgård",
+    ]
+
+
+def test_tmdb_get_show_uses_created_by_and_aggregate_credits() -> None:
+    show = {
+        "id": 1399,
+        "name": "Game of Thrones",
+        "first_air_date": "2011-04-17",
+        "episode_run_time": [60],
+        "overview": "Westeros.",
+        "genres": [{"id": 1, "name": "Sci-Fi & Fantasy"}],
+        "original_language": "en",
+        "keywords": {"results": [{"id": 1, "name": "dragons"}]},
+        "external_ids": {"imdb_id": "tt0944947"},
+        # TV has no series-level crew — the "directors" slot takes the show's creators, and cast
+        # comes from aggregate_credits (both appended into the one fetch).
+        "created_by": [{"name": "David Benioff"}, {"name": "D. B. Weiss"}],
+        "aggregate_credits": {
+            "cast": [{"name": f"Actor {i}"} for i in range(7)],  # 7 → capped at 5
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/tv/1399"
+        append = request.url.params["append_to_response"]
+        assert "aggregate_credits" in append  # cast bundled, no separate call
+        return httpx.Response(200, json=show)
+
+    meta = _tmdb(handler).get_title(1399, TitleKind.show)
+
+    assert meta is not None
+    assert meta.runtime_minutes == 60
+    assert meta.original_language == "en"
+    assert meta.directors == ["David Benioff", "D. B. Weiss"]  # creators fill the directors slot
+    assert meta.top_cast == ["Actor 0", "Actor 1", "Actor 2", "Actor 3", "Actor 4"]
 
 
 def test_tmdb_language_is_sent_and_localises_the_response() -> None:
@@ -120,6 +182,7 @@ def test_tmdb_discover_resolves_genres_and_passes_filters() -> None:
                         "overview": "Emotion is a crime.",
                         "genre_ids": [28, 999],  # 999 is unknown -> dropped
                         "popularity": 21.0,
+                        "original_language": "en",
                     }
                 ]
             },
@@ -131,6 +194,7 @@ def test_tmdb_discover_resolves_genres_and_passes_filters() -> None:
     assert metas[0].title == "Equilibrium"
     assert metas[0].year == 2002
     assert metas[0].genres == ["Action"]  # resolved id->name, unknown id ignored
+    assert metas[0].original_language == "en"  # discover carries language even in the thin parse
 
 
 def test_tmdb_search_movies_and_shows() -> None:

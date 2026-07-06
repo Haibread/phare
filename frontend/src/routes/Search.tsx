@@ -64,7 +64,10 @@ export function Search(): React.JSX.Element {
         <AvailabilityProvider value={availabilityCtx}>
           <div className={styles.searchGrid} data-testid="search-results">
             {results.map((item) => (
-              <PosterCard key={item.titleId} item={item} showFit={false} />
+              // Show the taste-fit gauge when the backend sends a real confidence (profile has a
+              // taste + embeddings); `hideNullFit` keeps it absent otherwise (older backend / no
+              // taste) rather than showing a misleading neutral sliver on a raw catalog search.
+              <PosterCard key={item.titleId} item={item} hideNullFit={true} />
             ))}
           </div>
         </AvailabilityProvider>

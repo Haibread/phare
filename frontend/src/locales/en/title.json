@@ -6,7 +6,12 @@
     "synopsis": "Synopsis",
     "loading": "Loading…",
     "noSynopsis": "No synopsis available.",
-    "externalLink": "{{name}} (opens in a new tab)"
+    "externalLink": "{{name}} (opens in a new tab)",
+    "rating": "★ {{score}} · {{count}} votes",
+    "ratingFew": "few ratings",
+    "directedBy_one": "Directed by {{names}}",
+    "directedBy_other": "Directors: {{names}}",
+    "cast": "With {{names}}"
   },
   "availability": {
     "available": "Available",

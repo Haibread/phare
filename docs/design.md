@@ -21,6 +21,17 @@ filters) → re-ranker → explanations (LLM)`.
     plus `runtime_minutes <= cap OR runtime IS NULL`), so it ranks the nearest titles *within the
     matching subspace* instead of hoping the global-nearest slice contained matches. It keeps the
     honest relevance floor — a genuinely thin catalog stays thin, never padded with weak matches.
+    A first pass that *looks* full but contains **no genre match** (the intent filter's zero-match
+    safety keeps the whole pool) still counts as starved, and a re-fetched pool that genuinely
+    matches the genre wins regardless of size — otherwise the fallback pool masked the starvation.
+  - **Origin-scoped genres ("anime").** "Anime" is not a TMDB genre but *Animation made in Japan*:
+    the word (and its French forms) resolves to a structured constraint — genre `Animation` **and**
+    `original_language = 'ja'` — enforced identically in the in-memory intent filter and the SQL
+    re-fetch (both read the single mapping in `recommend/genres.py`). Plain "animation" / "dessin
+    animé" stays a genre-only ask. A NULL-language title does **not** pass an anime request (honest
+    thin slate); only when the catalog has *zero* `original_language` coverage (pre-heal / offline)
+    does the ask degrade to plain Animation, recorded as a `anime_language_unknown` fallback —
+    never a silent "anime becomes animation".
 - **Re-ranker (deterministic — where steering happens):** similarity × profile affinity ×
   **recency-decayed** taste, then **anti-degeneracy**: cap popularity, apply a **quality floor**
   (penalise titles rated below ~6/10 on TMDB, never boost above it), enforce diversity,
@@ -117,6 +128,27 @@ rows expose an honest signal of their *own* kind, not a fake taste score:
 
 Items the profile has already watched carry a `watched` flag, so the UI badges them "Watched" — most
 visibly in **search**, where a title you've seen can turn up and should say so (review A11).
+
+**Search relevance + fit.** Catalog search ranks by *lexical* relevance first — an exact title
+match, then a word-start match, then a mid-word substring — and only **within a lexical tier** does
+it break ties by `vote_count` (NULLS LAST). So an obscure exact title still leads over a far
+better-known title that merely starts with the query, while the junk tail (soundtrack albums,
+"Bikini Inception") that shares a word-start but has ~no votes sinks below the real match. Search
+results also carry an **honest taste-fit confidence** — the *same* blend as the popular row
+(similarity to the taste centroid + graded affinity, unproven-vote cap included), stamped without
+re-ordering — so the UI shows the fit gauge on search too. It degrades to `null` (gauge hidden) with
+no taste centroid (cold start) or no embedding for a given title; never a fabricated score.
+
+Search cards also show the **fit gauge** when the backend attaches a per-item `confidence` (the
+profile has a taste + embeddings). Against an older backend, or a profile with no taste, `confidence`
+is `null` and the gauge is **omitted** on search (rather than the neutral "worth a look" sliver the
+home rows show for a null) — a raw catalog search shouldn't imply an affinity the engine can't back.
+
+The **title detail sheet** surfaces the richer TMDB metadata a title carries once it's backfilled:
+the star **rating** (`★ 7.8 · 12 400 votes`, locale-formatted; a soft "few ratings" hint appears
+under ~200 votes, mirroring the reranker's unproven-cap honesty) and the **credits** (director(s),
+top cast). Every one of these fields can be absent on an un-healed row — the metadata backfills in
+the background over hours — so each renders only when present and its line simply disappears otherwise.
 
 Because `continue_watching`'s confidence is recency warmth ("how far into the show you are") and not
 a *taste-fit* signal, the UI **doesn't render the fit gauge** on that row — the same gauge meaning

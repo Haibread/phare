@@ -12,10 +12,15 @@ import styles from "./components.module.css";
 export function PosterCard({
   item,
   showFit = true,
+  hideNullFit = false,
   anchorTitleId = null,
 }: {
   item: RecommendationItem;
   showFit?: boolean;
+  // When true, a `null` confidence suppresses the fit gauge/label entirely (rather than the neutral
+  // "worth a look" sliver). Search sets this so cards only show a gauge once the backend sends a real
+  // confidence; home rows keep the default. See ConfidenceMeter for the rationale.
+  hideNullFit?: boolean;
   // Seed title of a "because you watched X" row, when this card lives in one — passed to the detail
   // sheet so the "why this" reason can open from that concrete link.
   anchorTitleId?: string | null;
@@ -27,6 +32,10 @@ export function PosterCard({
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const showPoster = item.posterUrl !== null && !imgFailed;
+  // Effective fit visibility: a card that's told to show fit but has no confidence signal (Search
+  // against an older backend / a profile without taste) reads as "no fit" everywhere — gauge, aria
+  // name, and detail label — so the three stay consistent.
+  const fitVisible = showFit && !(hideNullFit && item.confidence === null && !item.isSwing);
 
   // A card has exactly one action: open the detail sheet. The destructive "not interested" signal
   // (round 3) and the request/availability action (round 4) both moved into the sheet, off the
@@ -41,7 +50,7 @@ export function PosterCard({
         className={styles.cardOpen}
         data-testid="rec-card-open"
         aria-label={
-          showFit
+          fitVisible
             ? t("openCard", {
                 title: item.title,
                 year: item.year !== null ? ` (${item.year})` : "",
@@ -103,13 +112,19 @@ export function PosterCard({
           {item.genres[0] !== undefined && ` · ${translateGenre(item.genres[0], i18n.language)}`}
         </div>
       </button>
-      {showFit && <ConfidenceMeter confidence={item.confidence} isSwing={item.isSwing} />}
+      {showFit && (
+        <ConfidenceMeter
+          confidence={item.confidence}
+          isSwing={item.isSwing}
+          hideNullFit={hideNullFit}
+        />
+      )}
       <TitleDetailSheet
         item={item}
         open={detailOpen}
         onOpenChange={setDetailOpen}
         anchorTitleId={anchorTitleId}
-        showFit={showFit}
+        showFit={fitVisible}
       />
     </article>
   );

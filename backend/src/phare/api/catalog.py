@@ -6,6 +6,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.api.deps import Embedder, get_embedder, get_language
@@ -16,10 +17,13 @@ from phare.catalog.service import import_from_tmdb, search_titles
 from phare.core.config import Settings, get_settings
 from phare.core.i18n import Language
 from phare.db.base import get_session
-from phare.db.models import Profile, Title
+from phare.db.models import Profile, TasteProfile, Title
 from phare.embeddings.service import EmbeddingService
+from phare.embeddings.version import embedding_model_version
 from phare.providers.tmdb import TMDBMetadataProvider
-from phare.recommend.taste_vector import watched_title_ids
+from phare.recommend.rows import confidences_for_ordered_titles
+from phare.recommend.taste_vector import compute_taste_centroid, watched_title_ids
+from phare.taste.service import effective_profile
 
 router = APIRouter(tags=["Catalog"])
 
@@ -32,7 +36,9 @@ class SearchResponse(ApiModel):
     results: list[RecommendationItem]
 
 
-def _to_search_item(title: Title, *, watched: bool) -> RecommendationItem:
+def _to_search_item(
+    title: Title, *, watched: bool, confidence: float | None = None
+) -> RecommendationItem:
     return RecommendationItem(
         title_id=title.id,
         title=title.title,
@@ -41,7 +47,7 @@ def _to_search_item(title: Title, *, watched: bool) -> RecommendationItem:
         genres=list(title.genres),
         score=0.0,
         is_swing=False,
-        confidence=None,
+        confidence=confidence,
         explanation=None,
         poster_url=_poster_url(title.poster_path),
         components={},
@@ -73,7 +79,22 @@ def search_catalog(
     titles = search_titles(session, body.q, tmdb, limit=12)
     session.commit()  # persist any titles upserted from TMDB
     watched = watched_title_ids(session, profile_id)  # badge the ones you've already seen (A11)
-    return SearchResponse(results=[_to_search_item(t, watched=t.id in watched) for t in titles])
+    # Stamp honest taste-fit on the results, same blend as the popular row — search order is lexical
+    # relevance, but the fit gauge reads real taste. Degrades to null (UI hides the gauge) with no
+    # taste profile / no embeddings. Small pool (~12), no per-item LLM, one embedding query.
+    model_version = embedding_model_version(get_settings())
+    centroid = compute_taste_centroid(session, profile_id, model_version)
+    taste_row = session.scalar(select(TasteProfile).where(TasteProfile.profile_id == profile_id))
+    taste = effective_profile(taste_row) if taste_row is not None else {}
+    confidences = confidences_for_ordered_titles(
+        session, titles, centroid=centroid, taste=taste, model_version=model_version
+    )
+    return SearchResponse(
+        results=[
+            _to_search_item(t, watched=t.id in watched, confidence=confidence)
+            for t, confidence in zip(titles, confidences, strict=True)
+        ]
+    )
 
 
 @router.post("/catalog/sample", response_model=CatalogSummary)

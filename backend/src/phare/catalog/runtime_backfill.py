@@ -20,42 +20,66 @@ import logging
 import threading
 import uuid
 from collections.abc import Callable
+from typing import Any
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from phare.catalog.heal import apply_metadata_heal, fetch_metadata_parallel
+from phare.catalog.heal import RateLimiter, apply_metadata_heal, fetch_metadata_parallel
 from phare.core.config import Settings
 from phare.db.models import Title
 from phare.providers.types import MetadataProvider
 
 logger = logging.getLogger(__name__)
 
-# Above this share of runtime-less titles the runtime cap operates on a ghost catalog, so the boot
-# path schedules a bulk heal. Mirrors ``_MAX_RATING_GAP`` — a gap gauge that fires once after a
-# broad seed, then never again as coverage stays healthy.
-_MAX_RUNTIME_GAP = 0.5
+# Client-side request cap for the *bulk* walker against TMDB. Their guidance is ~50 rps; the
+# 8-worker fan-out measured ~176 rps live on a warm CDN — enough to trip a 429 storm the keyset
+# cursor would then permanently skip whole batches over until the next boot. 30 rps keeps a
+# comfortable margin; wall-clock is irrelevant for a background job. The read path is never capped.
+_BULK_HEAL_RPS = 30.0
+
+
+def _metadata_gap_predicate() -> Any:
+    """A title has a fillable metadata gap when it's missing a runtime *or* an original language.
+
+    A single detail fetch carries runtime, votes, credits *and* language, so this one predicate
+    walks every row a heal could still improve — crucially, one whose runtime was already healed
+    live but that never got credits/language (a runtime-only predicate would skip all of those).
+    Language is the honest sentinel for "never deep-fetched": credits arrive in the same call, so a
+    row with a language also has whatever credits TMDB had. ``vote`` gaps aren't included — they're
+    a bonus of the same fetch, not a reason to walk the catalog again."""
+    return or_(Title.runtime_minutes.is_(None), Title.original_language.is_(None))
+
+
+# Above this share of gapped titles the catalog is missing enough metadata (runtime/credits/
+# language) that the boot path schedules a bulk heal. Mirrors ``_MAX_RATING_GAP`` — a gap gauge that
+# fires once after a broad seed, then never again as coverage stays healthy.
+_MAX_METADATA_GAP = 0.5
 # Rows healed per batch (one commit each) so a large catalog makes steady, observable progress and a
 # crash loses at most one batch. Each row is one TMDB detail call, fanned out at the shared worker
 # concurrency; the batch bounds memory + commit size, not the fan-out width.
 _RUNTIME_BATCH = 64
 # Safety bound on a single boot's heal so a pathological catalog can't spin the thread forever; the
-# next boot resumes where this left off (idempotent — it only ever re-queries NULL runtimes).
+# next boot resumes where this left off (idempotent — it only ever re-queries gapped rows).
 _MAX_RUNTIME_BATCHES = 200
 
 _lock = threading.Lock()
 _running = False
 
 
-def runtime_gap(session: Session) -> float:
-    """Share of titles with no ``runtime_minutes`` — the data a runtime cap needs to filter on."""
+def metadata_gap(session: Session) -> float:
+    """Share of titles with a fillable metadata gap (:func:`_metadata_gap_predicate`).
+
+    Drives the boot gate: a catalog freshly seeded from *discover* has almost every row missing
+    runtime and/or original language, so the gauge is high and one background pass is scheduled;
+    once the walker has deep-fetched the catalog it drops to ~0 and never fires again. A catalog
+    that got its runtimes healed live but has 0% credits/language still reads a large gap (language
+    is NULL), so it still triggers a pass — the round-8 requirement."""
     total = session.scalar(select(func.count()).select_from(Title)) or 0
     if total == 0:
         return 0.0
     missing = (
-        session.scalar(
-            select(func.count()).select_from(Title).where(Title.runtime_minutes.is_(None))
-        )
+        session.scalar(select(func.count()).select_from(Title).where(_metadata_gap_predicate()))
         or 0
     )
     return missing / total
@@ -67,24 +91,32 @@ def runtime_backfill_running() -> bool:
         return _running
 
 
-def run_runtime_backfill(session: Session, source: MetadataProvider) -> int:
-    """Fill missing runtimes (+ any missing quality signal) for NULL-runtime titles with a tmdb_id.
+def run_metadata_backfill(
+    session: Session, source: MetadataProvider, *, limiter: RateLimiter | None = None
+) -> int:
+    """Fill missing metadata (runtime, votes, credits, original language) for gapped titles.
 
-    Walks the backlog in batches behind a keyset cursor on ``(tmdb_id, id)``, committing each batch
-    so progress survives a crash and is observable in the logs. The cursor is what makes one pass
-    terminate: a title TMDB returns no runtime for (TV without a fixed episode length, stale ids)
-    stays NULL but is *passed over*, never re-selected — measured live, an early all-unfillable
-    batch otherwise stalled the heal at 609/7400. Idempotent across boots: filled rows drop out of
-    the NULL-runtime predicate. Split out from the thread wrapper so tests can drive it
-    synchronously; the caller owns the final state, this commits its own batches. Returns the count
-    of titles healed.
+    Selects rows with a fillable gap (:func:`_metadata_gap_predicate` — missing runtime *or*
+    language; one detail fetch carries both plus credits + votes) and a ``tmdb_id``. Walks the
+    backlog in batches behind a keyset cursor on ``(tmdb_id, id)``, committing each batch so
+    progress survives a crash and is observable in the logs. The cursor is what makes one pass
+    terminate: a title TMDB can't improve (no runtime *and* no language for it — a stale id) is
+    *passed over*, never re-selected — measured live, an early all-unfillable batch otherwise
+    stalled the heal at 609/7400. Idempotent across boots: healed rows drop out of the gap
+    predicate. Split out from the thread wrapper so tests can drive it synchronously; the caller
+    owns the final state, this commits its own batches. Returns the count of titles healed.
+
+    Every fetch passes through a :class:`RateLimiter` (default ``_BULK_HEAL_RPS``) so this bulk
+    walk stays well under TMDB's rps guidance — a 429 storm here would make the keyset cursor skip
+    whole batches permanently until the next boot. Tests inject their own limiter or ``None``.
     """
+    limiter = limiter if limiter is not None else RateLimiter(_BULK_HEAL_RPS)
     filled = 0
     cursor: tuple[int, uuid.UUID] | None = None
     for _ in range(_MAX_RUNTIME_BATCHES):
         query = (
             select(Title)
-            .where(Title.runtime_minutes.is_(None), Title.tmdb_id.is_not(None))
+            .where(_metadata_gap_predicate(), Title.tmdb_id.is_not(None))
             .order_by(Title.tmdb_id, Title.id)
             .limit(_RUNTIME_BATCH)
         )
@@ -96,13 +128,13 @@ def run_runtime_backfill(session: Session, source: MetadataProvider) -> int:
         cursor = (rows[-1].tmdb_id, rows[-1].id)  # type: ignore[assignment]  # tmdb_id filtered non-NULL
         by_id = {row.id: row for row in rows}
         batch_filled = 0
-        for title_id, meta in fetch_metadata_parallel(source, rows).items():
+        for title_id, meta in fetch_metadata_parallel(source, rows, limiter=limiter).items():
             if apply_metadata_heal(by_id[title_id], meta):
                 batch_filled += 1
         session.commit()
         filled += batch_filled
         logger.info(
-            "catalog.runtime_backfill.progress",
+            "catalog.metadata_backfill.progress",
             extra={"batch_filled": batch_filled, "total_filled": filled},
         )
     return filled
@@ -148,10 +180,10 @@ def _run_backfill(settings: Settings) -> None:
             cache_ttl=settings.tmdb_cache_ttl_seconds,
         )
         with get_session_factory()() as session:
-            filled = run_runtime_backfill(session, source)
-        logger.info("catalog.runtime_backfill.done", extra={"filled_count": filled})
+            filled = run_metadata_backfill(session, source)
+        logger.info("catalog.metadata_backfill.done", extra={"filled_count": filled})
     except Exception:  # noqa: BLE001 - a backfill must never crash the process
-        logger.exception("catalog.runtime_backfill.failed")
+        logger.exception("catalog.metadata_backfill.failed")
     finally:
         with _lock:
             _running = False

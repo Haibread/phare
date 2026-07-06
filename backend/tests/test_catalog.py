@@ -216,6 +216,62 @@ def test_search_titles_ranks_word_start_above_midword(db_session: Session) -> No
     assert ids.index(word_start.id) < ids.index(midword.id)
 
 
+def test_search_vote_count_breaks_ties_within_a_lexical_tier(db_session: Session) -> None:
+    # Round-8: among equally-lexical matches (both word-start on "inception"), the better-known one
+    # (higher vote_count) leads and the junk tail sinks — kills "Bikini Inception" ranking next to
+    # the real film. NULLS LAST so an unknown-vote junk title never floats above a voted one.
+    good = Title(kind=TitleKind.movie, tmdb_id=880001, title="Inception", vote_count=34000)
+    junk = Title(kind=TitleKind.movie, tmdb_id=880002, title="Inception Bikini", vote_count=3)
+    unknown = Title(kind=TitleKind.movie, tmdb_id=880003, title="Inception Redux", vote_count=None)
+    db_session.add_all([junk, unknown, good])
+    db_session.flush()
+
+    ids = [t.id for t in search_titles(db_session, "inception")]
+    assert ids.index(good.id) < ids.index(junk.id)  # well-known leads its lexical tier
+    assert ids.index(junk.id) < ids.index(unknown.id)  # a voted junk title still beats NULL votes
+
+
+def test_search_obscure_exact_match_beats_high_vote_word_start(db_session: Session) -> None:
+    # Vote count must NOT beat lexical relevance: an obscure *exact* title still leads over a much
+    # better-known title that merely starts with the query.
+    exact = Title(kind=TitleKind.movie, tmdb_id=881001, title="Her", vote_count=5)
+    prefix = Title(kind=TitleKind.movie, tmdb_id=881002, title="Hercules", vote_count=90000)
+    db_session.add_all([prefix, exact])
+    db_session.flush()
+
+    ids = [t.id for t in search_titles(db_session, "her")]
+    assert ids.index(exact.id) < ids.index(prefix.id)  # exact tier wins despite far fewer votes
+
+
+class _JunkFirstSearchSource:
+    """A live source whose own ordering is junk-first — the merged ranking must override it."""
+
+    def search(self, query: str, *, limit: int = 8) -> list[TitleMetadata]:
+        return [
+            TitleMetadata(
+                kind=TitleKind.movie,
+                tmdb_id=882002,
+                title="Inception Bikini",
+                vote_count=5,
+            ),
+            TitleMetadata(
+                kind=TitleKind.movie,
+                tmdb_id=882001,
+                title="Inception",
+                vote_count=34000,
+            ),
+        ]
+
+
+def test_search_reranks_live_matches_instead_of_trusting_their_order(db_session: Session) -> None:
+    # Live R8 repro: with a TMDB key configured, live matches used to be *prepended in TMDB's own
+    # order*, shadowing the lexical-tier + vote-count ranking on every production search. The live
+    # source is a discovery source only — the merged result must follow our ranking.
+    results = search_titles(db_session, "inception", _JunkFirstSearchSource())
+    tmdb_ids = [t.tmdb_id for t in results]
+    assert tmdb_ids.index(882001) < tmdb_ids.index(882002)  # votes rank it, not TMDB order
+
+
 def test_import_guard_blocks_dev_without_confirm() -> None:
     with pytest.raises(HTTPException) as exc:
         ensure_import_allowed(Settings(environment="development"), confirm=False)
