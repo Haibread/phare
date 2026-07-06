@@ -19,8 +19,13 @@ How we know recommendations are good with no crowd to A/B test.
   fails on the same persona — a check that passed both ways would prove nothing. It can't run on the
   offline hash embedder (whose cosine geometry is degenerate — no two modes are ever separated), so
   it uses a small deterministic **two-mode embedder** that places each mode in an orthogonal
-  subspace, the way the real embedder separates modes semantically. `phare evaluate` reports it as
-  the `mixed-taste-facets` line regardless of the deployed model.
+  subspace, the way the real embedder separates modes semantically. The two modes carry deliberately
+  **asymmetric similarity scales** (one dense, high-cosine and populous; one sparse and
+  systematically lower-cosine — the real production geometry, measured live on a 4-facet profile
+  that rendered a 10/10 single-mode slate): merging raw cross-facet similarities provably fills the
+  whole slate from the dense mode, so this same check also pins the cross-facet normalisation
+  fairness fix. `phare evaluate` reports it as the `mixed-taste-facets` line regardless of the
+  deployed model.
 - **`phare evaluate` — the same suite against the *deployed* instance.** CI runs the persona suite
   hermetically with fake providers, so it only protects the *code*. `phare evaluate` runs it against
   your real database with your **configured** embedding/LLM models, and asserts the alignment

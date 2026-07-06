@@ -105,18 +105,22 @@ def test_negatives_do_not_form_facets_but_ride_into_centroids() -> None:
     assert sum(f.size for f in facets) == 12  # size counts positives only
 
 
-def test_budgets_sum_to_total_and_respect_floor() -> None:
+def test_budgets_respect_depth_floor_and_weight() -> None:
     facets = [
         Facet(centroid=[1.0], weight=0.8, size=8, mean_intra_sim=0.9),
         Facet(centroid=[1.0], weight=0.2, size=2, mean_intra_sim=0.9),
     ]
-    total = 58  # k*4+10 for k=12
-    budgets = facet_budgets(facets, total)
-    assert sum(budgets) == total
-    assert all(b > 0 for b in budgets)
-    assert budgets[0] > budgets[1]  # the heavier facet gets more
+    k = 12
+    budgets = facet_budgets(facets, k)
+    floor = max(2 * k, 24)
+    # Every facet retrieves at least the depth floor (live round-10 finding: a proportional-only
+    # split starved the light facets below what survives filters + quality floor + MMR)...
+    assert all(b >= floor for b in budgets)
+    # ...and the heavier facet still retrieves at least as deep as the lighter one.
+    assert budgets[0] >= budgets[1]
+    assert budgets[0] == max(int(0.8 * (k * 4 + 10)), floor)
 
 
-def test_single_facet_budget_is_the_whole_limit() -> None:
+def test_single_facet_budget_is_the_historical_limit() -> None:
     facets = [Facet(centroid=[1.0], weight=1.0, size=10, mean_intra_sim=1.0)]
-    assert facet_budgets(facets, 58) == [58]
+    assert facet_budgets(facets, 12) == [12 * 4 + 10]

@@ -29,7 +29,7 @@ from phare.recommend import rows as row_builders
 from phare.recommend.candidates import generate_candidates
 from phare.recommend.explain import _EXPLANATION_CACHE, Explainer
 from phare.recommend.log import log_rows
-from phare.recommend.reranker import rerank
+from phare.recommend.reranker import _relative_similarities, rerank
 from phare.recommend.schema import Candidate, Recommendation, Row
 from phare.recommend.taste_facets import (
     Facet,
@@ -377,7 +377,7 @@ class RecommendationService:
         candidates = self._constrained_candidates(
             profile_id,
             query_vectors,
-            budgets=facet_budgets(facets, k * 4 + 10),
+            budgets=facet_budgets(facets, k),
             k=k,
             avoids=avoids,
             rewatch=rewatch,
@@ -393,6 +393,8 @@ class RecommendationService:
             k=k,
             swing_slots=swing_slots if swing_slots is not None else default_swings,
             vote_mix=vote_mix,
+            # The facet-share guarantee: one dominant mode must not sweep the slate (round 10).
+            facet_weights=[f.weight for f in facets] if len(facets) > 1 else None,
         )
         exp = explainer or self._explainer(with_llm=explain_with_llm)
         return exp.explain(recs, taste)
@@ -409,14 +411,27 @@ class RecommendationService:
         max_runtime: int | None,
     ) -> list[Candidate]:
         """Run one ANN per facet and merge into a single pool, deduped on ``title_id`` keeping each
-        candidate's *best* similarity across facets (mission point 2). Candidates arrive from each
-        facet already nearest-first; the merged list is re-sorted by similarity descending with a
-        stable ``title_id`` tie-break so the downstream reranker sees a deterministic pool (pgvector
-        HNSW is approximate — order is our anchor). A single query vector is the historical path:
-        one ``generate_candidates`` call, no merge overhead."""
-        best: dict[uuid.UUID, Candidate] = {}
-        for centroid, limit in zip(query_vectors, budgets, strict=True):
-            pool = generate_candidates(
+        candidate's *best facet-relative* similarity (mission point 2 + the live round-10 finding).
+
+        Raw cosines are NOT comparable across facets: different regions of a real embedding space
+        carry different similarity scales (a dense action neighbourhood reads systematically higher
+        than a sparser drama one), so merging raw cosines lets the dominant facet occupy the whole
+        top of the merged range and the reranker's pool-relative ``sim_rel`` squashes every other
+        mode out — measured live as a 10/10 single-mode slate on a 4-facet profile. So each facet's
+        pool is normalised *within itself* first (the same pool-relative z-score mapping the
+        reranker uses), then mapped back onto the cosine range: "top of facet B" now competes
+        fairly with "top of facet A". The honest raw cosine survives on ``raw_similarity`` (the
+        confidence blend's absolute band and swing novelty read it), and ``facet`` records which
+        facet won the candidate. The merged list is sorted by the normalised similarity descending
+        with a stable ``title_id`` tie-break so the downstream reranker sees a deterministic pool
+        (pgvector HNSW is approximate — order is our anchor).
+
+        A single query vector is the historical path: one ``generate_candidates`` call, raw
+        similarity untouched, no facet tags — byte-identical to the pre-facet behaviour."""
+        single = len(query_vectors) == 1
+
+        def retrieve_one(centroid: Sequence[float], limit: int) -> list[Candidate]:
+            return generate_candidates(
                 self.session,
                 profile_id,
                 centroid,
@@ -427,7 +442,24 @@ class RecommendationService:
                 genre_constraints=genre_constraints,
                 max_runtime=max_runtime,
             )
-            for cand in pool:
+
+        if single:
+            return retrieve_one(query_vectors[0], budgets[0])
+
+        best: dict[uuid.UUID, Candidate] = {}
+        for facet_idx, (centroid, limit) in enumerate(zip(query_vectors, budgets, strict=True)):
+            pool = retrieve_one(centroid, limit)
+            # Facet-relative placement in [0, 1] (neutral 0.5 when the pool is too small/flat to
+            # normalise), mapped back to the cosine range [-1, 1] so downstream invariants hold.
+            rels = _relative_similarities([c.similarity for c in pool])
+            for cand, rel in zip(pool, rels, strict=True):
+                cand = cand.model_copy(
+                    update={
+                        "similarity": 2.0 * rel - 1.0,
+                        "raw_similarity": cand.similarity,
+                        "facet": facet_idx,
+                    }
+                )
                 incumbent = best.get(cand.title_id)
                 if incumbent is None or cand.similarity > incumbent.similarity:
                     best[cand.title_id] = cand
