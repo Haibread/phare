@@ -216,7 +216,7 @@ def test_keyword_intent_negation_excludes_genre() -> None:
 def test_composer_prompt_titles_follow_the_displayed_order() -> None:
     # B1: the composer and the strip are the same ordered list now (score order, since M1.1), so the
     # reply leads with what's actually on top of the strip — no more "why these?" naming positions
-    # 4-6. Lock that the prompt lists the leading items in payload order.
+    # 4-6. Lock that the prompt lists the leading items in payload order (one facts line per item).
     items = [
         Recommendation(
             title_id=uuid.uuid4(), title=t, kind="movie", year=2020, genres=["Drama"], score=s
@@ -224,7 +224,8 @@ def test_composer_prompt_titles_follow_the_displayed_order() -> None:
         for t, s in [("Alpha", 0.9), ("Beta", 0.8), ("Gamma", 0.7), ("Delta", 0.6)]
     ]
     prompt = build_compose_prompt("something good", ExecutionResult(items=items))
-    assert "Alpha, Beta, Gamma, Delta" in prompt  # displayed order, verbatim
+    for title in ("Alpha", "Beta", "Gamma", "Delta"):
+        assert f"- {title} (2020): movie; Drama" in prompt  # each pick, with its citable facts
     assert prompt.index("Alpha") < prompt.index("Beta") < prompt.index("Gamma")
 
 

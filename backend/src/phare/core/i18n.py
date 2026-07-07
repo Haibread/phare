@@ -123,6 +123,21 @@ _MESSAGES: dict[str, dict[Language, str]] = {
             "mais dites-moi ce que vous avez envie de regarder et je trouverai quelque chose."
         ),
     },
+    # Spoiler-specific decline: an ending/plot-reveal ask IS the movie domain (never the generic
+    # off-topic steer-back), but spoiler safety (guardrail 1) refuses it — warmly, offering the
+    # spoiler-free verdict instead. Deterministic: the planner routes here, no agent-model call.
+    "chat.spoilerDecline": {
+        "en": (
+            "I'd love to talk about it, but I keep endings and twists unspoiled — they're yours "
+            "to discover. I can tell you whether it's worth watching, spoiler-free, or find you "
+            "something in the same vein."
+        ),
+        "fr": (
+            "J'adorerais en parler, mais je garde les fins et les rebondissements secrets — ils "
+            "sont à vous de les découvrir. Je peux vous dire si ça vaut le coup, sans rien "
+            "divulgâcher, ou vous trouver quelque chose dans la même veine."
+        ),
+    },
     "chat.gotIt": {"en": "Got it — {actions}.", "fr": "C'est noté — {actions}."},
     "chat.herePicks": {
         "en": "Here are a few picks you might enjoy.",

@@ -24,13 +24,14 @@ from phare.api.deps import (
     get_optional_agent_llm,
     get_optional_chat_llm,
 )
-from phare.api.recommend import build_recommender, require_profile, to_item
+from phare.api.recommend import build_recommender, localize_items, require_profile, to_item
 from phare.api.schemas import (
     AgentActionResponse,
     ChatIntentResponse,
     ChatOpeningResponse,
     ChatReplyResponse,
     ChatRequest,
+    RecommendationItem,
     UndoRequest,
     UndoResponse,
 )
@@ -81,6 +82,8 @@ def chat(
         profile_id, body.message, history=_history(body), active_intent=_active_intent(body)
     )
     session.commit()
+    items = [to_item(item) for item in reply.items]
+    localize_items(session, language, items)  # display names for the item cards (bulk, cached)
     return ChatReplyResponse(
         reply_text=reply.reply_text,
         intent=ChatIntentResponse(
@@ -89,7 +92,7 @@ def chat(
             exclude_genres=reply.intent.exclude_genres,
             mood=reply.intent.mood,
         ),
-        items=[to_item(item) for item in reply.items],
+        items=items,
         actions=[
             AgentActionResponse(kind=a.kind, summary=a.summary, undo_token=a.undo_token)
             for a in reply.actions
@@ -119,7 +122,7 @@ def _planning_label(message: str, language: Language) -> str:
     return translate(language, "chat.statusWorking")
 
 
-def _meta_payload(prepared: PreparedTurn) -> dict[str, object]:
+def _meta_payload(prepared: PreparedTurn, items: list[RecommendationItem]) -> dict[str, object]:
     return {
         "intent": ChatIntentResponse(
             max_runtime=prepared.intent.max_runtime,
@@ -127,7 +130,7 @@ def _meta_payload(prepared: PreparedTurn) -> dict[str, object]:
             exclude_genres=prepared.intent.exclude_genres,
             mood=prepared.intent.mood,
         ).model_dump(by_alias=True, mode="json"),
-        "items": [to_item(item).model_dump(by_alias=True, mode="json") for item in prepared.items],
+        "items": [item.model_dump(by_alias=True, mode="json") for item in items],
         "actions": [
             AgentActionResponse(kind=a.kind, summary=a.summary, undo_token=a.undo_token).model_dump(
                 by_alias=True, mode="json"
@@ -176,7 +179,9 @@ def chat_stream(
             yield _sse("delta", {"text": "Sorry — something went wrong. Please try again."})
             yield _sse("done", {})
             return
-        yield _sse("meta", _meta_payload(prepared))  # picks + write-chips, the moment they exist
+        items = [to_item(item) for item in prepared.items]
+        localize_items(session, language, items)  # display names for the cards (bulk, cached)
+        yield _sse("meta", _meta_payload(prepared, items))  # picks + chips, the moment they exist
         yield _sse(
             "status",
             {"stage": "composing", "label": translate(language, "chat.statusComposing")},

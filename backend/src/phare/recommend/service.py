@@ -718,28 +718,59 @@ class RecommendationService:
         )
         return [float(x) for x in embedding] if embedding is not None else None
 
+    def similar_to_title(
+        self,
+        profile_id: uuid.UUID,
+        title_id: uuid.UUID,
+        *,
+        k: int | None = None,
+        taste: dict[str, object] | None = None,
+        explainer: Explainer | None = None,
+        vote_mix: bool = False,
+    ) -> list[Recommendation]:
+        """Catalog picks nearest to *one title's* embedding — the seeded-retrieval primitive behind
+        the home "because you watched X" rows and the chat agent's post-signal follow-ups. Sharing
+        it is what keeps a "similar to X" claim honest: anything phrased that way was genuinely
+        retrieved from X's neighborhood, never stitched onto generic taste retrieval after the fact.
+
+        Similarity-led (no swing slots — a neighbor strip is never a discovery gamble).
+        ``vote_mix=True`` (the chat path) composes by known-ness and applies the chat relevance
+        floor, so weak neighbors are dropped rather than padded — an empty result is the honest
+        "nothing decent near this title". Empty too when the seed has no embedding in the active
+        space (degrade gracefully)."""
+        if taste is None:
+            taste = self._load_taste(profile_id)
+        vector = self._title_vector(title_id)
+        if vector is None:
+            return []
+        candidates = generate_candidates(
+            self.session,
+            profile_id,
+            vector,
+            self.embed_model_version,
+            limit=self.row_size * 3 + 6,
+            hard_avoids=list(taste.get("hard_avoids") or []),
+        )
+        recs = rerank(
+            candidates,
+            taste,
+            k=k if k is not None else self.row_size,
+            swing_slots=0,
+            vote_mix=vote_mix,
+        )
+        exp = explainer or self._explainer(with_llm=False)
+        return exp.explain(recs, taste)
+
     def because_you_watched_rows(
         self, profile_id: uuid.UUID, *, max_rows: int = 3, explainer: Explainer | None = None
     ) -> list[Row]:
-        """One row per loved title: catalog picks nearest to *that title's* embedding. Similarity-
-        led (no swing slots) so the row reads honestly as "because you watched X"."""
+        """One row per loved title: catalog picks nearest to *that title's* embedding (see
+        :meth:`similar_to_title`), so the row reads honestly as "because you watched X"."""
         taste = self._load_taste(profile_id)
-        avoids = list(taste.get("hard_avoids") or [])
         exp = explainer or self._explainer(with_llm=True)
         rows: list[Row] = []
         for seed in row_builders.loved_seed_titles(self.session, profile_id, limit=max_rows):
-            vector = self._title_vector(seed.id)
-            if vector is None:
-                continue
-            candidates = generate_candidates(
-                self.session,
-                profile_id,
-                vector,
-                self.embed_model_version,
-                limit=self.row_size * 3 + 6,
-                hard_avoids=avoids,
-            )
-            items = exp.explain(rerank(candidates, taste, k=self.row_size, swing_slots=0), taste)
+            items = self.similar_to_title(profile_id, seed.id, taste=taste, explainer=exp)
             if items:
                 rows.append(
                     Row(

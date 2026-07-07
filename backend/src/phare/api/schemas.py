@@ -212,6 +212,11 @@ class EmbedSummary(ApiModel):
 class RecommendationItem(ApiModel):
     title_id: uuid.UUID
     title: str
+    # Localized display name from the title_localization cache ("Amour éternel" for Kara Sevda),
+    # set when the request language isn't English and a cached localization exists; null otherwise.
+    # Additive: `title` stays canonical (embedding space + genre vocabulary are language-neutral),
+    # the frontend shows `displayTitle ?? title`. Filled in bulk — never a per-card TMDB fetch.
+    display_title: str | None = None
     kind: str
     year: int | None = None
     genres: list[str]
@@ -233,6 +238,9 @@ class TitleDetail(ApiModel):
 
     title_id: uuid.UUID
     title: str
+    # Localized display name (same contract as RecommendationItem.display_title): non-null only
+    # when the request language isn't English and a localization is cached or freshly fetched.
+    display_title: str | None = None
     kind: str
     year: int | None = None
     runtime_minutes: int | None = None

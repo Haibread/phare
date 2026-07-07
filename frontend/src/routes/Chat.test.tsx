@@ -40,6 +40,7 @@ function item(overrides: Partial<RecommendationItem> = {}): RecommendationItem {
   return {
     titleId: crypto.randomUUID(),
     title: "Arrival",
+    displayTitle: null,
     kind: "movie",
     year: 2016,
     genres: [],
@@ -101,6 +102,35 @@ describe("chat pick citation matching", () => {
     // No throw, and the literal titles still match when named.
     expect(citedTitleIds("I loved Amélie (2001).", items).has("a")).toBe(true);
     expect(citedTitleIds("Ever seen [REC]?", items).has("c")).toBe(true);
+  });
+
+  it("matches a localized displayTitle cited in the reply (round 12 follow-up)", () => {
+    // The composer replies in the UI language, so a French reply cites the localized name — the
+    // matcher must recognize it even though `title` holds the canonical form.
+    const items = [
+      item({ titleId: "ks", title: "Kara Sevda", displayTitle: "Amour éternel" }),
+      item({ titleId: "m", title: "Moon", displayTitle: null }),
+    ];
+    const cited = citedTitleIds("Je vous conseille Amour éternel, une romance intense.", items);
+    expect(cited.has("ks")).toBe(true);
+    expect(cited.has("m")).toBe(false);
+  });
+
+  it("still matches the canonical title when the item carries a displayTitle", () => {
+    // The agent's slate context uses canonical names, so an English-leaning reply may cite those.
+    const items = [item({ titleId: "ks", title: "Kara Sevda", displayTitle: "Amour éternel" })];
+    expect(citedTitleIds("Kara Sevda should hit the spot.", items).has("ks")).toBe(true);
+  });
+
+  it("cites an item once even when the reply names both of its titles", () => {
+    // Both names in one reply must not double-consume spans that other titles could match.
+    const items = [
+      item({ titleId: "ks", title: "Kara Sevda", displayTitle: "Amour éternel" }),
+      item({ titleId: "other", title: "Sevda" }),
+    ];
+    const cited = citedTitleIds("Amour éternel (Kara Sevda) puis Sevda.", items);
+    expect(cited.has("ks")).toBe(true);
+    expect(cited.has("other")).toBe(true);
   });
 
   it("floats cited items to the front, stable otherwise", () => {
@@ -385,6 +415,7 @@ describe("Chat write actions", () => {
             {
               titleId: "t1",
               title: "Paddington 2",
+              displayTitle: null,
               kind: "movie",
               year: 2017,
               genres: ["comedy"],

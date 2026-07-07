@@ -22,6 +22,7 @@ function result(over: Partial<RecommendationItem>): RecommendationItem {
   return {
     titleId: crypto.randomUUID(),
     title: "Arrival",
+    displayTitle: null,
     kind: "movie",
     year: 2016,
     genres: [],
