@@ -20,7 +20,11 @@ movie and a show and mis-attached watch history — review H3a.
 Beyond identity, a title carries display + steering metadata, all filled from TMDB (import or the
 lazy/background heal, never guessed): `overview`, `genres`, `keywords`, `runtime_minutes`,
 `popularity`, `vote_count` (how *many* rated it — a known-ness proxy), `vote_average` (how *well* —
-a crude quality floor). Round 8 adds:
+a crude quality floor). `runtime_minutes` is the movie's length for a movie and **per-episode for
+shows** — parsed from TMDB's `episode_run_time` (first entry), falling back to
+`last_episode_to_air.runtime` (modern shows often ship an empty `episode_run_time` list), else
+NULL. Everything that displays or filters runtime — the detail sheet's "N min", the chat agent's
+`max_runtime` cap — reads it with that per-episode meaning for shows. Round 8 adds:
 
 - **`directors`** / **`top_cast`** — plain-name arrays (director(s) for a movie, creator(s) for a
   show; first ~5 billed cast). Empty by default; fetched via TMDB `append_to_response=credits`
