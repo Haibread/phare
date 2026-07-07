@@ -265,12 +265,16 @@ def evaluate_facet_discrimination(session: Session, *, k: int = 12) -> FacetDisc
     facet_recs = service.recommend(profile_id, taste=MIXED_TASTE, k=k, swing_slots=0, vote_mix=True)
     facet_a, facet_b = _mode_counts(facet_recs)
 
-    # Force the historical single averaged centroid by overwriting the facet cache with one facet.
+    # Force the historical single averaged centroid by overwriting the taste bundle with one facet.
+    # Keep the negative centroid from the facet run so only the facet split differs between the two
+    # slates (the repulsion penalty, if any, stays identical and can't skew the comparison).
     centroid = compute_taste_centroid(session, profile_id, _MODEL_VERSION)
     assert centroid is not None  # the persona always has signal
-    service._facets_cache[profile_id] = [
-        Facet(centroid=centroid, weight=1.0, size=2 * _SEEDS_PER_MODE, mean_intra_sim=1.0)
-    ]
+    negative = service._negative_centroid(profile_id)
+    service._taste_bundle_cache[profile_id] = (
+        [Facet(centroid=centroid, weight=1.0, size=2 * _SEEDS_PER_MODE, mean_intra_sim=1.0)],
+        negative,
+    )
     single_recs = service.recommend(
         profile_id, taste=MIXED_TASTE, k=k, swing_slots=0, vote_mix=True
     )

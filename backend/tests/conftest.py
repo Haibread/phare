@@ -165,17 +165,39 @@ def db_session(engine: Engine) -> Iterator[Session]:
         connection.close()
 
 
+_vacuum_counter = itertools.count()
+# How often (in DB tests) to reclaim HNSW dead tuples. Small enough that recall never degrades far,
+# large enough that the VACUUM cost is negligible over a full run.
+_VACUUM_EVERY = 20
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_embedding_index(engine: Engine) -> None:
+    """Bound HNSW dead-tuple accumulation across the suite so approximate-NN recall stays ~exact.
+
+    Every DB test's embedding inserts are rolled back, but the dead index tuples they leave in the
+    shared ``ix_title_embedding_hnsw`` graph are reclaimed only by VACUUM. Left to pile up they
+    degrade recall, so a test late in a *randomized* run can miss a title that genuinely exists —
+    the SQL hard-avoid and negative-repulsion tests flaked only in full-suite order for exactly this
+    reason. VACUUM periodically on a fresh autocommit connection (it can't run inside the per-test
+    transaction; this fixture sets up *before* the test's ``db_session`` opens, so nothing is
+    mid-transaction). Cheap: the test catalog is tiny and this runs once every ``_VACUUM_EVERY``."""
+    if next(_vacuum_counter) % _VACUUM_EVERY == 0:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM title_embedding"))
+
+
 @pytest.fixture(autouse=True)
 def _fresh_facets_cache() -> None:
-    """Clear the cross-request facet cache between tests.
+    """Clear the cross-request taste cache (facets + negative centroid) between tests.
 
     The cache key includes an event-count/max-ingested stamp, but two tests can legitimately build
     identical (profile, version, stamp) states with *different* fixture data — under pytest-randomly
     a stale entry then serves the previous test's facets (bitten: the SQL hard-avoid test flaked
     only in randomized full-suite order)."""
-    from phare.recommend.service import _FACETS_CACHE
+    from phare.recommend.service import _TASTE_CACHE
 
-    _FACETS_CACHE.clear()
+    _TASTE_CACHE.clear()
 
 
 @pytest.fixture(autouse=True)

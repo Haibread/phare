@@ -39,6 +39,11 @@ class Candidate(BaseModel):
     # ``similarity`` is the raw cosine as it always was.
     raw_similarity: float | None = None
     facet: int | None = None
+    # Cosine similarity to the *negative* taste centroid — the disliked-embedding average (see
+    # taste_vector.negative_centroid) — in [-1, 1]. The re-ranker turns a high value into a bounded
+    # repulsion penalty (``neg_penalty`` in the score breakdown). None when the profile has no
+    # negative signal, or on retrieval paths that don't compute it → no penalty applied.
+    neg_similarity: float | None = None
 
 
 class Anchor(BaseModel):

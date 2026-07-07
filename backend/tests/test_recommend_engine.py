@@ -432,6 +432,121 @@ def test_candidates_respect_hard_avoids(db_session: Session) -> None:
     assert all("Horror" not in c.genres for c in candidates)
 
 
+def test_generate_candidates_computes_neg_similarity_from_negative_centroid(
+    db_session: Session,
+) -> None:
+    # Round 16 plumbing: the SQL second cosine column. A candidate near the negative centroid reads
+    # a high neg_similarity, one far from it a low one — and it's None when no negative centroid is
+    # given (the historical path, no penalty downstream).
+    from phare.db.models import EMBEDDING_DIM, TitleEmbedding
+
+    profile = Profile(display_name="dislikes")
+    db_session.add(profile)
+    db_session.flush()
+
+    query = [1.0, 0.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+    disliked_dir = [0.0, 1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+
+    def add(tmdb_id: int, name: str, vector: list[float]) -> None:
+        title = Title(kind=TitleKind.movie, tmdb_id=tmdb_id, title=name, genres=["Drama"])
+        db_session.add(title)
+        db_session.flush()
+        db_session.add(
+            TitleEmbedding(title_id=title.id, model_version=LOCAL_MODEL_VERSION, embedding=vector)
+        )
+
+    add(8000, "In the disliked neighbourhood", disliked_dir)
+    add(8001, "Far from the dislikes", query)
+    db_session.flush()
+
+    # Assert on the values, not HNSW recall: force an exact scan so the two titles always return
+    # regardless of dead-tuple state (see the vacuum fixture + the hard-avoid test's note).
+    db_session.execute(text("SET LOCAL enable_indexscan = off"))
+    cands = generate_candidates(
+        db_session, profile.id, query, LOCAL_MODEL_VERSION, limit=10, negative_centroid=disliked_dir
+    )
+    by_title = {c.title: c for c in cands}
+    near = by_title["In the disliked neighbourhood"].neg_similarity
+    far = by_title["Far from the dislikes"].neg_similarity
+    assert near is not None and far is not None
+    assert near > far  # closer to what the profile avoids
+
+    plain = generate_candidates(db_session, profile.id, query, LOCAL_MODEL_VERSION, limit=10)
+    assert all(c.neg_similarity is None for c in plain)  # absent without a negative centroid
+
+
+def test_negative_repulsion_demotes_a_disliked_neighbourhood_pick(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Round-16 guardrail: a candidate in the profile's *disliked* neighbourhood is demoted, and the
+    # penalty is targeted — a control pick clear of that neighbourhood is untouched. Isolated by
+    # toggling only the negative centroid (same likes → same retrieval → same pool), so the effect
+    # is the rerank-side repulsion alone. It runs post-retrieval, so it bites regardless of how many
+    # facets the profile has (facet query vectors never carry the negatives — the whole point).
+    from phare.db.models import EMBEDDING_DIM, EventType, TitleEmbedding, WatchEvent
+
+    profile = Profile(display_name="picky")
+    db_session.add(profile)
+    db_session.flush()
+
+    def add(tmdb_id: int, name: str, vector: list[float]) -> Title:
+        title = Title(
+            kind=TitleKind.movie,
+            tmdb_id=tmdb_id,
+            title=name,
+            genres=["Drama"],
+            vote_count=5_000,
+            vote_average=7.0,
+        )
+        db_session.add(title)
+        db_session.flush()
+        db_session.add(
+            TitleEmbedding(title_id=title.id, model_version=LOCAL_MODEL_VERSION, embedding=vector)
+        )
+        return title
+
+    like_dir = [1.0, 0.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+    dislike_dir = [0.0, 1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+    reject_adjacent = [0.8, 0.6, 0.0] + [0.0] * (EMBEDDING_DIM - 3)  # near likes AND near dislikes
+    control = [0.95, 0.0, 0.31] + [0.0] * (EMBEDDING_DIM - 3)  # near likes, clear of dislikes
+
+    # History: liked titles at like_dir (the centroid), one disliked at dislike_dir (defines the
+    # negative centroid without shifting the centroid far off the likes, so both candidates below
+    # stay retrievable).
+    for i in range(3):
+        loved = add(8100 + i, f"Loved {i}", like_dir)
+        db_session.add(
+            WatchEvent(
+                profile_id=profile.id, title_id=loved.id, type=EventType.liked, source="test"
+            )
+        )
+    hated = add(8200, "Hated", dislike_dir)
+    db_session.add(
+        WatchEvent(profile_id=profile.id, title_id=hated.id, type=EventType.disliked, source="test")
+    )
+    add(8300, "Reject adjacent", reject_adjacent)  # unwatched candidates
+    add(8301, "Control", control)
+    db_session.flush()
+    # Force an exact scan so both candidates always retrieve — this test asserts the repulsion
+    # penalty on the score, not HNSW recall (see the vacuum fixture note).
+    db_session.execute(text("SET LOCAL enable_indexscan = off"))
+
+    def scores(*, repulsion_on: bool) -> dict[str, float]:
+        service = _service(db_session)
+        if not repulsion_on:  # simulate the pre-round-16 behaviour: no negative centroid
+            monkeypatch.setattr(service, "_negative_centroid", lambda _pid: None)
+        return {r.title: r.score for r in service.recommend(profile.id, k=8, swing_slots=0)}
+
+    with_repulsion = scores(repulsion_on=True)
+    without_repulsion = scores(repulsion_on=False)
+
+    assert "Reject adjacent" in with_repulsion and "Control" in with_repulsion
+    # The reject-adjacent pick is demoted by the repulsion...
+    assert with_repulsion["Reject adjacent"] < without_repulsion["Reject adjacent"]
+    # ...while the control pick, clear of the disliked neighbourhood, is untouched.
+    assert with_repulsion["Control"] == without_repulsion["Control"]
+
+
 def test_rows_include_you_might_like_with_explanations(db_session: Session) -> None:
     profile_id = _seeded_profile(db_session)
     rows = _service(db_session).rows(profile_id)

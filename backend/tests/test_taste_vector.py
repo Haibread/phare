@@ -17,9 +17,36 @@ from phare.db.models import EventType, Profile, Title, TitleEmbedding, TitleKind
 from phare.embeddings.service import EmbeddingService
 from phare.providers.embeddings_local import LOCAL_MODEL_VERSION, LocalHashEmbeddingProvider
 from phare.recommend.candidates import _is_hard_avoided
-from phare.recommend.taste_vector import collapsed_watch_weight, compute_taste_centroid
+from phare.recommend.taste_vector import (
+    TasteContribution,
+    collapsed_watch_weight,
+    compute_taste_centroid,
+    negative_centroid,
+)
 
 _NOW = datetime(2026, 6, 20, tzinfo=UTC)
+
+
+def _contrib(embedding: list[float], weight: float) -> TasteContribution:
+    return TasteContribution(title_id=uuid.uuid4(), embedding=embedding, weight=weight)
+
+
+def test_negative_centroid_averages_only_disliked_titles() -> None:
+    # The negative centroid points *toward* the disliked embeddings only — positives are ignored,
+    # and the magnitudes are flipped positive so it averages toward what you avoid (a point to
+    # measure closeness to), not the negated direction the signed centroid would give.
+    contributions = [
+        _contrib([1.0, 0.0], 1.0),  # liked — ignored
+        _contrib([0.0, 1.0], -1.0),  # disliked
+        _contrib([0.0, 3.0], -1.0),  # disliked
+    ]
+    neg = negative_centroid(contributions)
+    assert neg == [0.0, 2.0]  # magnitude-weighted average of the two disliked embeddings
+
+
+def test_negative_centroid_is_none_without_negative_signal() -> None:
+    assert negative_centroid([_contrib([1.0, 0.0], 1.0)]) is None  # only positives
+    assert negative_centroid([]) is None
 
 
 def _watch(*, episode_id: uuid.UUID | None, days_ago: int) -> WatchEvent:

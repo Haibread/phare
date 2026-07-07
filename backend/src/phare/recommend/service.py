@@ -41,6 +41,7 @@ from phare.recommend.taste_facets import (
 )
 from phare.recommend.taste_vector import (
     compute_taste_centroid,
+    negative_centroid,
     taste_contributions,
 )
 from phare.taste.service import effective_profile
@@ -106,14 +107,16 @@ READ_EMBED_TIME_BUDGET_S = 2.0
 # catalog as it's used. The cap is a safety bound; the pool is already small (~k*4+10).
 READ_RUNTIME_CAP = 64
 
-# Cross-request facet cache. Extracting facets re-reads and clusters the whole watch history —
-# CPU-bound work that only changes when the profile's events or embeddings change, yet it used to
-# run on EVERY chat turn and home-rows request. The key carries a cheap change-stamp (non-excluded
-# event count + latest ``ingested_at``, one indexed query), so any event write — new sync, exclude
-# toggle — misses naturally; no explicit busting. The TTL bounds staleness from the one change the
-# stamp can't see: a background embedding backfill adding vectors for already-watched titles. Sized
-# for a handful of profiles (one account = one user; the app is a single process).
-_FACETS_CACHE = TTLCache(ttl=900.0, maxsize=8)
+# Cross-request taste cache. Both the taste facets (round 10) and the negative centroid (round 16)
+# derive from one read+cluster of the whole watch history — CPU-bound work that only changes when
+# the profile's events or embeddings change, yet it used to run on EVERY chat turn and home-rows
+# request. They share one entry (computed from the same contributions, so one history read serves
+# both). The key carries a cheap change-stamp (non-excluded event count + latest ``ingested_at``,
+# one indexed query), so any event write — new sync, exclude toggle — misses naturally; no explicit
+# busting. The TTL bounds staleness from the one change the stamp can't see: a background embedding
+# backfill adding vectors for already-watched titles. Sized for a handful of profiles (one account
+# = one user; the app is a single process).
+_TASTE_CACHE = TTLCache(ttl=900.0, maxsize=8)
 
 
 def _ms(t0: float) -> float:
@@ -201,11 +204,11 @@ class RecommendationService:
         # the same centroid, and computing it re-reads every watch event. One service instance is
         # built per request (see api.deps), so this stays correct.
         self._centroid_cache: dict[uuid.UUID, list[float] | None] = {}
-        # Facets (round 10) share the same per-request lifetime: extracting them re-reads and
-        # clusters the watch history, so memoize alongside the centroid. A process-wide second
-        # layer (``_FACETS_CACHE``, change-stamp keyed) carries the result across requests; this
+        # Taste bundle (facets + negative centroid) share one per-request lifetime: both derive from
+        # one read+cluster of the watch history, so memoize them together. A process-wide second
+        # layer (``_TASTE_CACHE``, change-stamp keyed) carries the result across requests; this
         # request-scoped dict just avoids re-querying the stamp on every recommend() of a fan-out.
-        self._facets_cache: dict[uuid.UUID, list[Facet]] = {}
+        self._taste_bundle_cache: dict[uuid.UUID, tuple[list[Facet], list[float] | None]] = {}
 
     def ensure_embeddings(self) -> int:
         """Non-blocking top-up of missing vectors for the active space. Returns titles embedded now.
@@ -327,20 +330,23 @@ class RecommendationService:
         ).one()
         return int(count), str(latest)
 
-    def _facets(self, profile_id: uuid.UUID) -> list[Facet]:
-        """Memoized taste *facets* — the profile's distinct taste modes, each a query vector with a
-        share of the retrieval budget (round 10). Falls back to a single facet (== the centroid) for
-        small/cohesive histories, so k=1 reproduces the historical behaviour. Empty when there's no
-        usable signal (same condition as ``_centroid`` returning ``None``).
+    def _taste_bundle(self, profile_id: uuid.UUID) -> tuple[list[Facet], list[float] | None]:
+        """Memoized (taste facets, negative centroid) for this request — both derived from one
+        read+cluster of the watch history, so a single ``taste_contributions`` call serves both.
+
+        Facets (round 10) are the profile's distinct taste modes (a single facet == the centroid for
+        a small/cohesive history, so k=1 reproduces the historical behaviour); the negative centroid
+        (round 16) is the disliked-embedding average the re-ranker demotes toward (``None`` with no
+        negative signal). Both are empty/None when there's no usable signal.
 
         Two cache layers: the per-request memo (rows()/dynamic_rows fan out many recommend() calls)
-        and the process-wide ``_FACETS_CACHE`` keyed on (profile, embedding space, change-stamp) so
+        and the process-wide ``_TASTE_CACHE`` keyed on (profile, embedding space, change-stamp) so
         the extraction doesn't rerun on every request — it only changes when events or embeddings
         do (see the cache comment above)."""
-        if profile_id not in self._facets_cache:
+        if profile_id not in self._taste_bundle_cache:
             key = (profile_id, self.embed_model_version, *self._facets_stamp(profile_id))
-            facets = _FACETS_CACHE.get(key)
-            hit = facets is not None
+            bundle = _TASTE_CACHE.get(key)
+            hit = bundle is not None
             if not hit:
                 contributions = taste_contributions(
                     self.session, profile_id, self.embed_model_version
@@ -348,13 +354,25 @@ class RecommendationService:
                 facets = extract_facets(contributions)
                 if facets:
                     log_facets(str(profile_id), facets)
-                _FACETS_CACHE.set(key, facets)
+                bundle = (facets, negative_centroid(contributions))
+                _TASTE_CACHE.set(key, bundle)
             logger.debug(
                 "taste.facets.cache",
                 extra={"profile_id": str(profile_id), "cache": "hit" if hit else "miss"},
             )
-            self._facets_cache[profile_id] = facets
-        return self._facets_cache[profile_id]
+            self._taste_bundle_cache[profile_id] = bundle
+        return self._taste_bundle_cache[profile_id]
+
+    def _facets(self, profile_id: uuid.UUID) -> list[Facet]:
+        """The profile's taste facets (see :meth:`_taste_bundle`)."""
+        return self._taste_bundle(profile_id)[0]
+
+    def _negative_centroid(self, profile_id: uuid.UUID) -> list[float] | None:
+        """The profile's negative (disliked-embedding) centroid — the repulsion signal the re-ranker
+        demotes toward. ``None`` when the profile has no negative signal, in which case candidates
+        carry no ``neg_similarity`` and no penalty is applied (degrade gracefully). See
+        :meth:`_taste_bundle`."""
+        return self._taste_bundle(profile_id)[1]
 
     def load_taste(self, profile_id: uuid.UUID) -> dict[str, object]:
         """The effective taste profile (structured + sticky overrides), or {} if none yet."""
@@ -513,6 +531,8 @@ class RecommendationService:
         similarity untouched, no facet tags — byte-identical to the pre-facet behaviour."""
         single = len(query_vectors) == 1
 
+        negative = self._negative_centroid(profile_id)
+
         def retrieve_one(centroid: Sequence[float], limit: int) -> list[Candidate]:
             return generate_candidates(
                 self.session,
@@ -524,6 +544,7 @@ class RecommendationService:
                 from_watched=rewatch,
                 genre_constraints=genre_constraints,
                 max_runtime=max_runtime,
+                negative_centroid=negative,
             )
 
         if single:
@@ -750,6 +771,7 @@ class RecommendationService:
             self.embed_model_version,
             limit=self.row_size * 3 + 6,
             hard_avoids=list(taste.get("hard_avoids") or []),
+            negative_centroid=self._negative_centroid(profile_id),
         )
         recs = rerank(
             candidates,

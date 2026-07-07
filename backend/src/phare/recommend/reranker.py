@@ -35,6 +35,13 @@ _W_SIMILARITY = 1.0
 _W_AFFINITY = 0.6
 _W_POPULARITY = 0.3
 _W_QUALITY = 0.2
+# Negative-taste repulsion (round 16). A candidate that sits close to the profile's *disliked*
+# centroid (the average of what it abandoned / rated low — see taste_vector.negative_centroid) is
+# demoted. Kept modest, on the order of the quality floor: a nudge that reorders comparable picks
+# and pushes a dislike-adjacent title down, never a hard filter (hard-avoids are the filter). Only
+# bites when the candidate carries a ``neg_similarity`` — a profile with no negative signal, or a
+# retrieval path that doesn't compute it, is unaffected.
+_W_NEG = 0.25
 # Popularity at/above this counts as "blockbuster" and takes the full penalty.
 _POPULARITY_CAP = 80.0
 # TMDB mean rating below this takes a proportional quality penalty (0 at the floor, full at 0/10).
@@ -275,6 +282,22 @@ def _quality_penalty(candidate: Candidate) -> float:
     return max(0.0, (_QUALITY_FLOOR - candidate.vote_average) / _QUALITY_FLOOR)
 
 
+def _neg_penalty(candidate: Candidate) -> float:
+    """Repulsion from the disliked-taste centroid, in ``[0, _W_NEG]``. 0 when the candidate carries
+    no ``neg_similarity`` (no negative signal / a path that doesn't compute it) or sits outside the
+    disliked neighbourhood; up to ``_W_NEG`` for one squarely inside it. The cosine is rescaled over
+    the embedder's compressed band (the same :func:`_sim_abs_strength` mapping the confidence blend
+    uses) so it *discriminates* — near-0 for the many titles unrelated to the dislikes, rising only
+    for the genuinely dislike-adjacent — instead of reading a flat mid-value for the whole pool.
+
+    Score-only: it demotes, but is never folded into displayed confidence — a pick isn't *less
+    likely to fit you* for resembling a dislike, it's just ranked below its neighbours (honesty)."""
+    if candidate.neg_similarity is None:
+        return 0.0
+    neg_norm = (candidate.neg_similarity + 1.0) / 2.0
+    return _W_NEG * _sim_abs_strength(neg_norm)
+
+
 def _raw_similarity(candidate: Candidate) -> float:
     """The candidate's honest raw cosine. Facet-merged candidates carry it on ``raw_similarity``
     (their ``similarity`` is the facet-relative placement); single-vector candidates carry it on
@@ -320,11 +343,13 @@ def score_candidate(
     affinity_norm = (affinity + 1.0) / 2.0  # [-1,1] -> [0,1], 0.5 = neutral
     pop_penalty = _popularity_penalty(candidate)
     quality_penalty = _quality_penalty(candidate)
+    neg_penalty = _neg_penalty(candidate)
     score = (
         _W_SIMILARITY * sim_effective
         + _W_AFFINITY * affinity_norm
         - _W_POPULARITY * pop_penalty
         - _W_QUALITY * quality_penalty
+        - neg_penalty
     )
     components = {
         "similarity": round(sim_norm, 4),  # absolute (kept for existing readers of the breakdown)
@@ -334,6 +359,8 @@ def score_candidate(
         "quality_penalty": round(quality_penalty, 4),
         "score": round(score, 4),
     }
+    if candidate.neg_similarity is not None:  # repulsion from the disliked centroid (round 16)
+        components["neg_penalty"] = round(neg_penalty, 4)
     if candidate.facet is not None:  # transparency: which taste facet surfaced this pick
         components["facet"] = float(candidate.facet)
     return score, components
