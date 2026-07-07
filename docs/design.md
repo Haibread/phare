@@ -108,6 +108,17 @@ filters) → re-ranker → explanations (LLM)`.
     stays at the neutral 0.5 — vocabulary silence is never punished (honesty, principle 4);
     **negative** affinities pull the score down proportionally; and hard-avoids remain a **separate
     upstream filter**, untouched by this term. Deterministic, cheap, no LLM.
+  - **Franchise de-duplication** (round-14 live finding: a chat slate carried both *Rush Hour 2*
+    and *Rush Hour 3*). At most one instalment of a franchise per slate — two sequels in twelve
+    slots is a wasted pick that genre-diversity MMR can't catch (sequels sit close in embedding
+    space, but not close enough to be squashed). There is no franchise id in the data, so the key
+    is approximated from the title (drop the subtitle after `:`/` - `, strip trailing instalment
+    markers — small arabic numerals, roman numerals, "Part/Vol/Chapter"), and it's **deliberately
+    conservative**: a lone short word ("It") never counts as a franchise (so it can't swallow *It
+    Follows*), a large trailing number is treated as meaningful, not a sequel index (*Blade Runner
+    2049* stays whole), while *Alien*/*Aliens* still fold together. The best-scored instalment is
+    kept; the freed slot goes to an unrelated title. Applied before the slate is composed, so it
+    covers the home rows, the chat slate, **and** swings uniformly.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
 - **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.
