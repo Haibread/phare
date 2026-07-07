@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from phare.api.deps import Embedder, get_embedder, get_language
+from phare.api.deps import Embedder, get_embedder, get_language, get_optional_chat_llm
 from phare.api.recommend import _poster_url
 from phare.api.schemas import ApiModel, CatalogSummary, EmbedSummary, RecommendationItem
 from phare.catalog.sample import seed_sample_catalog
@@ -20,6 +20,7 @@ from phare.db.base import get_session
 from phare.db.models import Profile, TasteProfile, Title
 from phare.embeddings.service import EmbeddingService
 from phare.providers.tmdb import TMDBMetadataProvider
+from phare.providers.types import LLMProvider
 from phare.recommend.rows import confidences_for_ordered_titles
 from phare.recommend.taste_vector import compute_taste_centroid, watched_title_ids
 from phare.taste.service import effective_profile
@@ -64,6 +65,7 @@ def search_catalog(
     session: Annotated[Session, Depends(get_session)],
     language: Annotated[Language, Depends(get_language)],
     embedder: Annotated[Embedder, Depends(get_embedder)],
+    chat_llm: Annotated[LLMProvider | None, Depends(get_optional_chat_llm)],
 ) -> SearchResponse:
     """Search the catalog (and live TMDB when configured) so a title can be found + requested."""
     if session.get(Profile, profile_id) is None:
@@ -84,6 +86,8 @@ def search_catalog(
     )
     # The embedder powers the semantic fill tier ("ghibli" → Spirited Away) when lexical results
     # are weak; ``read_version`` is the *served* space, the same one the fit stamping queries.
+    # The workhorse LLM translates a non-English query to English before the fill embeds it
+    # (catalog documents are English); cached in-process, and never called on English requests.
     titles = search_titles(
         session,
         body.q,
@@ -91,6 +95,8 @@ def search_catalog(
         limit=12,
         embedder=embedder.provider,
         embedding_version=embedder.read_version,
+        translator=chat_llm,
+        language=language,
     )
     session.commit()  # persist any titles upserted from TMDB
     watched = watched_title_ids(session, profile_id)  # badge the ones you've already seen (A11)
