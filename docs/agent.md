@@ -67,14 +67,18 @@ execution → reply`
   measure a spread; a small or flat pool reads neutral for every candidate and nothing is trimmed
   (degrade gracefully). A slate trimmed below the requested size records a
   `reranker.chat_slate_trimmed` fallback, so a shorter slate is a visible, deliberate call.
-- **Runtime cap honesty.** "under 2 hours" (a `max_runtime` on the recommend tool) is a **hard
-  cap**. A candidate with a *known* runtime must fit it; a candidate with an **unknown** runtime is
-  a coin flip, so on a capped turn Phare first backfills the pool's missing runtimes from TMDB (see
-  the runtime backfill below), then **drops** any still-unknown-runtime candidate — a 167-minute
-  film with a NULL runtime no longer slips into an "under 2 hours" slate. If dropping the unknowns
-  would empty the slate (e.g. offline, no metadata provider to backfill with), the unknown-runtime
-  pool is kept instead and the loosened cap is flagged `intent_filter.runtime_cap_unenforced`
-  rather than returning nothing.
+- **Runtime cap honesty (degrade, don't starve).** "under 2 hours" (a `max_runtime` on the
+  recommend tool) is a **hard cap** for any candidate with a *known* runtime — known-over-cap is
+  always dropped. A candidate with an **unknown** runtime is a coin flip, so on a capped turn
+  Phare first backfills the pool's missing runtimes from TMDB (see the runtime backfill below);
+  candidates still unknown after that form a **lower tier**: never preferred over a title that
+  provably fits, but used to fill the slate slots the known-under-cap tier can't fill by itself.
+  (TV rows often lack an episode runtime even after the heal — *dropping* unknowns once reduced a
+  "short crime show" ask to only the kids' cartoons with well-known 22-minute episodes.) Filler
+  use is recorded as `intent_filter.runtime_unknown_kept`, and the offline reply drops its "under
+  N minutes" claim when unknown-runtime picks made the slate. With no known-fitting title at all
+  (e.g. offline, no metadata provider to backfill with) the whole unknown-runtime pool is kept and
+  the unenforced cap flagged `intent_filter.runtime_cap_unenforced` rather than returning nothing.
 - **Recent conversation** — the planner and the composer both receive the last few turns of the
   chat so a turn isn't a cold start: references resolve ("even shorter" knows what it's shortening)
   and the reply builds on what was said instead of re-pitching the same titles. It's **short-term,

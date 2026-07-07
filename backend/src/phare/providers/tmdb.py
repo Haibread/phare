@@ -333,7 +333,13 @@ class TMDBMetadataProvider:
     @staticmethod
     def _parse_show(data: dict[str, Any]) -> TitleMetadata:
         keywords = data.get("keywords", {}).get("results", [])
+        # For a show, ``runtime_minutes`` is the EPISODE length (docs/data-model.md). TMDB's
+        # ``episode_run_time`` list is often empty on modern shows; ``last_episode_to_air.runtime``
+        # is more reliably present, so it backs the list up. Without it TV rows stayed
+        # runtime-less and a chat runtime cap starved their whole pool (the Scooby-Doo slate).
         runtimes = data.get("episode_run_time") or []
+        last_episode = data.get("last_episode_to_air") or {}
+        episode_runtime = runtimes[0] if runtimes else last_episode.get("runtime")
         # TV has no series-level crew, so the "directors" slot uses the show's creators
         # (``created_by``); cast comes from ``aggregate_credits`` (cross-season billing) — both in
         # the one appended fetch.
@@ -344,7 +350,7 @@ class TMDBMetadataProvider:
             imdb_id=data.get("external_ids", {}).get("imdb_id"),
             title=data.get("name") or data.get("original_name", ""),
             year=_year(data.get("first_air_date")),
-            runtime_minutes=runtimes[0] if runtimes else None,
+            runtime_minutes=episode_runtime,
             overview=data.get("overview"),
             poster_path=data.get("poster_path"),
             genres=TMDBMetadataProvider._genres(data),

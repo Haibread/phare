@@ -208,7 +208,7 @@ def tool_recommend(ctx: ToolContext, args: dict, result: ExecutionResult) -> Non
     result.items = ctx.recommender.recommend(
         ctx.profile_id,
         extra_hard_avoids=intent.exclude_genres,
-        candidate_filter=intent_filter(intent),
+        candidate_filter=intent_filter(intent, slate_size=ctx.recommender.row_size),
         # Structured form of the same constraint: lets the engine push genre/runtime into SQL and
         # re-search the matching subspace when the post-hoc filter starves the pool (finding 1).
         include_genres=intent.include_genres,
