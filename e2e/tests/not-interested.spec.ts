@@ -1,23 +1,29 @@
 import { expect, test } from "@playwright/test";
 import { ensureOnboarded } from "./helpers";
 
-test('"not interested" removes a card and undo brings it back', async ({ page }) => {
+test('"not interested" removes a title from the detail sheet and undo restores it', async ({
+  page,
+}) => {
   await ensureOnboarded(page);
 
+  // The "not interested" control lives in the detail sheet now (round 3 moved it off the card so a
+  // stray tap can't fire the destructive signal). Open the first recommendation's sheet.
   const row = page.locator('[data-row-key="you_might_like"]');
   await expect(row).toBeVisible({ timeout: 20_000 });
-  const firstCard = row.getByTestId("rec-card").first();
-  await expect(firstCard).toBeVisible();
+  await row.getByTestId("rec-card-open").first().click();
 
-  // Reject the pick from the card. It leaves the row for an undo slot.
-  await firstCard.getByTestId("not-interested").click();
-  await expect(firstCard.getByTestId("rec-card-removed")).toBeVisible();
-  await expect(firstCard.getByTestId("not-interested")).toHaveCount(0);
+  const sheet = page.getByTestId("title-detail");
+  await expect(sheet).toBeVisible();
 
-  // Undo restores the full card (and reverses the write, leaving the shared DB as we found it).
-  const undo = firstCard.getByTestId("undo-not-interested");
+  // Reject the title. The control flips to a confirmation + undo in place.
+  await sheet.getByTestId("detail-not-interested").click();
+  await expect(sheet.getByTestId("detail-removed")).toBeVisible();
+  await expect(sheet.getByTestId("detail-not-interested")).toHaveCount(0);
+
+  // Undo reverses the write, leaving the shared DB as we found it.
+  const undo = sheet.getByTestId("detail-undo");
   await expect(undo).toBeEnabled({ timeout: 10_000 });
   await undo.click();
-  await expect(firstCard.getByTestId("not-interested")).toBeVisible();
-  await expect(firstCard.getByTestId("rec-card-removed")).toHaveCount(0);
+  await expect(sheet.getByTestId("detail-not-interested")).toBeVisible();
+  await expect(sheet.getByTestId("detail-removed")).toHaveCount(0);
 });

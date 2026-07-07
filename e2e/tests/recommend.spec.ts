@@ -4,12 +4,15 @@ import { ensureOnboarded } from "./helpers";
 test("recommendations show honest fit labels and reserve swing picks", async ({ page }) => {
   await ensureOnboarded(page);
 
-  // The product row is populated and every card carries a worded fit label.
+  // The product row renders with at least one card.
   const row = page.locator('[data-row-key="you_might_like"]');
   await expect(row).toBeVisible({ timeout: 20_000 });
-  const firstCard = row.getByTestId("rec-card").first();
-  await expect(firstCard).toBeVisible();
-  await expect(firstCard.getByTestId("fit")).toBeVisible();
+  await expect(row.getByTestId("rec-card").first()).toBeVisible();
+
+  // A non-swing card carries a worded fit label (the gauge). Swings wear a badge instead of a gauge,
+  // and a thin row can be a lone swing, so assert the label on a card that actually has one — the
+  // "because you watched" rows are full of taste-fit cards.
+  await expect(page.getByTestId("fit").first()).toBeVisible();
 
   // A personalized "because you watched X" row renders, anchored on a loved title.
   const because = page.locator('[data-row-key^="because:"]').first();
