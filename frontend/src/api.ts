@@ -150,6 +150,10 @@ const tasteFacetsSchema = z.object({ facets: z.array(tasteFacetSchema) });
 export const recommendationItemSchema = z.object({
   titleId: z.string(),
   title: z.string(),
+  // Localized display name from the backend's localization cache ("Amour éternel" for Kara Sevda),
+  // sent only when the UI language isn't English and a localization is cached. `title` stays
+  // canonical; cards render `displayTitle ?? title`. Defaulted so an older backend still parses.
+  displayTitle: z.string().nullable().default(null),
   kind: z.string(),
   year: z.number().nullable(),
   genres: z.array(z.string()),
@@ -170,6 +174,8 @@ export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
 export const titleDetailSchema = z.object({
   titleId: z.string(),
   title: z.string(),
+  // Same contract as recommendationItemSchema.displayTitle — the sheet header shows it when set.
+  displayTitle: z.string().nullable().default(null),
   kind: z.string(),
   year: z.number().nullable(),
   runtimeMinutes: z.number().nullable(),

@@ -18,7 +18,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from phare.api.deps import (
@@ -29,10 +28,11 @@ from phare.api.deps import (
 from phare.api.recommend import _poster_url, require_profile
 from phare.api.schemas import TitleDetail
 from phare.catalog.heal import apply_metadata_heal, has_metadata_gap
+from phare.catalog.localization import upsert_localization
 from phare.core.auth import get_current_user
 from phare.core.config import get_settings
 from phare.core.fallback import record_fallback
-from phare.core.i18n import Language
+from phare.core.i18n import DEFAULT_LANGUAGE, Language
 from phare.db.base import get_session
 from phare.db.models import (
     TasteProfile,
@@ -55,36 +55,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Titles"])
 
 
-def _localized_overview_genres(
+def _localized_text(
     session: Session,
     title: Title,
     language: Language,
     provider: MetadataProvider | None,
-) -> tuple[str | None, list[str]]:
-    """The synopsis + genres in the request language, cache-first.
+) -> tuple[str | None, str | None, list[str]]:
+    """The display name + synopsis + genres in the request language, cache-first.
 
     Stored catalog metadata is canonical (language-neutral), so the detail view wants the localized
     version. Fetching it from TMDB live on every open cost ~6 s (review C2), so it's cached per
     (title, language) in ``title_localization`` with a long TTL. A copy inside the TTL is served
     without touching TMDB; past the TTL (or on a first open) it's re-fetched and the cache
-    refreshed. When TMDB is unreachable — or unconfigured — any stored copy (even stale) is served
-    over the canonical base metadata, so the sheet always renders.
+    refreshed. A cached row *without* a localized name (filled before the ``title`` column existed)
+    counts as expired, so old rows heal on the next open. When TMDB is unreachable — or
+    unconfigured — any stored copy (even stale) is served over the canonical base metadata, so the
+    sheet always renders.
 
     Display-only: the localized fetch feeds the response and the localization cache, never the
     canonical ``Title`` row — a ``language=fr`` fetch carries French genre labels, and persisting
     those would break every genre filter (see docs/data-model.md, "Canonical vs localized text").
     Canonical healing is :func:`_heal_metadata_gaps`' job, on its own language-neutral fetch.
     """
-    stored = (title.overview, list(title.genres))
+    stored = (None, title.overview, list(title.genres))
     cached = session.get(TitleLocalization, {"title_id": title.id, "language": language})
 
-    def _from_cache() -> tuple[str | None, list[str]]:
+    def _from_cache() -> tuple[str | None, str | None, list[str]]:
         # A cached field may be empty (TMDB had none) — fall back to the base metadata there.
-        return (cached.overview or title.overview, list(cached.genres) or list(title.genres))
+        return (
+            cached.title,
+            cached.overview or title.overview,
+            list(cached.genres) or list(title.genres),
+        )
 
     now = datetime.now(UTC)
     ttl = timedelta(seconds=get_settings().title_localization_ttl_seconds)
-    if cached is not None and now - cached.fetched_at < ttl:
+    if cached is not None and cached.title is not None and now - cached.fetched_at < ttl:
         return _from_cache()
     if provider is None or title.tmdb_id is None:
         # No way to refresh — serve any stored copy (even stale) over the canonical base text.
@@ -98,24 +104,19 @@ def _localized_overview_genres(
         return _from_cache() if cached is not None else stored
     if meta is None:
         return _from_cache() if cached is not None else stored
-    _upsert_localization(session, title.id, language, meta.overview, list(meta.genres), now)
-    return (meta.overview or title.overview, list(meta.genres) or list(title.genres))
-
-
-def _upsert_localization(
-    session: Session,
-    title_id: uuid.UUID,
-    language: Language,
-    overview: str | None,
-    genres: list[str],
-    when: datetime,
-) -> None:
-    """Cache (or refresh) a title's localized synopsis + genres. The caller owns the commit."""
-    values = {"overview": overview, "genres": genres, "fetched_at": when}
-    session.execute(
-        pg_insert(TitleLocalization)
-        .values(title_id=title_id, language=language, **values)
-        .on_conflict_do_update(index_elements=["title_id", "language"], set_=values)
+    upsert_localization(
+        session,
+        title.id,
+        language,
+        title=meta.title,
+        overview=meta.overview,
+        genres=list(meta.genres),
+        when=now,
+    )
+    return (
+        meta.title or None,
+        meta.overview or title.overview,
+        list(meta.genres) or list(title.genres),
     )
 
 
@@ -171,12 +172,15 @@ def get_title(
     title = session.get(Title, title_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Title not found")
-    overview, genres = _localized_overview_genres(session, title, language, provider)
+    localized_title, overview, genres = _localized_text(session, title, language, provider)
     _heal_metadata_gaps(title, provider)
     session.commit()  # persist the localization cache fill and any metadata heal
     return TitleDetail(
         title_id=title.id,
         title=title.title,
+        # The sheet header shows the localized name; English requests keep it null (canonical IS
+        # the display text there), same contract as the card DTOs.
+        display_title=localized_title if language != DEFAULT_LANGUAGE else None,
         kind=title.kind.value,
         year=title.year,
         runtime_minutes=title.runtime_minutes,

@@ -36,6 +36,8 @@ export function PosterCard({
   const [imgFailed, setImgFailed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const showPoster = item.posterUrl !== null && !imgFailed;
+  // Localized display name when the backend has one cached ("Amour éternel"), canonical otherwise.
+  const displayTitle = item.displayTitle ?? item.title;
   // Effective fit visibility: a card that's told to show fit but has no confidence signal (Search
   // against an older backend / a profile without taste) reads as "no fit" everywhere — gauge, aria
   // name, and detail label — so the three stay consistent.
@@ -75,12 +77,12 @@ export function PosterCard({
         aria-label={
           fitVisible
             ? t("openCard", {
-                title: item.title,
+                title: displayTitle,
                 year: item.year !== null ? ` (${item.year})` : "",
                 fit: tCommon(fitFor(item.confidence, item.isSwing, degraded).labelKey),
               })
             : t("openCardNoFit", {
-                title: item.title,
+                title: displayTitle,
                 year: item.year !== null ? ` (${item.year})` : "",
               })
         }
@@ -124,12 +126,12 @@ export function PosterCard({
             // instead of a blank grey box or the raw title caption doubled with the label below
             // (round 7, fixes 4 & 6).
             <span className={styles.posterFallback} data-testid="poster-fallback">
-              <span className={styles.posterFallbackTitle}>{item.title}</span>
+              <span className={styles.posterFallbackTitle}>{displayTitle}</span>
               {item.year !== null && <span className={styles.posterFallbackYear}>{item.year}</span>}
             </span>
           )}
         </div>
-        <div className={styles.cardTitle}>{item.title}</div>
+        <div className={styles.cardTitle}>{displayTitle}</div>
         <div className={styles.cardMeta}>
           {item.year ?? "—"}
           {item.genres[0] !== undefined && ` · ${translateGenre(item.genres[0], i18n.language)}`}

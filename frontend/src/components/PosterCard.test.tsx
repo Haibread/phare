@@ -23,6 +23,7 @@ function recItem(overrides: Partial<RecommendationItem>): RecommendationItem {
   return {
     titleId: crypto.randomUUID(),
     title: "Arrival",
+    displayTitle: null,
     kind: "movie",
     year: 2016,
     genres: ["Science Fiction", "Drama"],
@@ -118,6 +119,33 @@ describe("PosterCard", () => {
     expect(enTitle.badge.swingHelp.length).toBeGreaterThan(0);
     expect(frTitle.badge.swingHelp.length).toBeGreaterThan(0);
     expect(frTitle.badge.swingHelp).not.toBe(enTitle.badge.swingHelp);
+  });
+
+  describe("localized display title (round 12 follow-up)", () => {
+    it("renders displayTitle when the backend sends one, keeping canonical off the card", () => {
+      renderCard(
+        <PosterCard item={recItem({ title: "Kara Sevda", displayTitle: "Amour éternel" })} />,
+      );
+      expect(screen.getAllByText("Amour éternel").length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText("Kara Sevda")).toBeNull();
+    });
+
+    it("falls back to the canonical title when displayTitle is null", () => {
+      renderCard(<PosterCard item={recItem({ title: "Kara Sevda", displayTitle: null })} />);
+      expect(screen.getAllByText("Kara Sevda").length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("uses the localized name in the open button's accessible name and the poster fallback", () => {
+      renderCard(
+        <PosterCard
+          item={recItem({ title: "Kara Sevda", displayTitle: "Amour éternel", posterUrl: null })}
+        />,
+      );
+      expect(screen.getByTestId("rec-card-open").getAttribute("aria-label")).toContain(
+        "Amour éternel",
+      );
+      expect(screen.getByTestId("poster-fallback")).toHaveTextContent("Amour éternel");
+    });
   });
 
   it("badges a title the profile has already watched (A11)", () => {

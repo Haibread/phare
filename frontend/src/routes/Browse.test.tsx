@@ -8,6 +8,7 @@ function item(titleId: string, isSwing: boolean): RecommendationItem {
   return {
     titleId,
     title: titleId,
+    displayTitle: null,
     kind: "movie",
     year: 2020,
     genres: ["Drama"],
