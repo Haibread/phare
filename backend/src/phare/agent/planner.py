@@ -64,6 +64,11 @@ Tools (emit a JSON array under "calls", each {"tool","args"}):
   film tonight", "a series to binge"); omit it when they'd take either. Set rewatch=true when they
   want to REVISIT something they've already seen (a rewatch, "comfort watch", "something I've seen
   before", "watch again") — it draws from their own history instead of new titles.
+  max_runtime is a HARD filter, so set it only from an explicit duration the user names ("under
+  two hours" → 120, "max 1h45" → 105, "episodes under 30 min" → 30). For shows it means minutes
+  PER EPISODE, and a standard drama episode runs 40-60 — never set it below 60 for a show unless
+  the user gives a number. Vague brevity ("short", "not too long", "pas trop long") is NOT a
+  duration: leave max_runtime unset for shows, and use a generous 120 for movies.
 - clarify {question, suggestions?} — ask ONE short, warm question INSTEAD of recommending, but ONLY
   when the request is too vague to pick well AND a single answer would genuinely change the picks
   (a bare "recommend me something" / "what should I watch" with no genre, mood, length, or vibe and
