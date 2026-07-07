@@ -85,6 +85,16 @@ class ExecutionResult:
     # This turn only *explains* the picks already on screen (explain_picks). The items feed the
     # composer's answer but must NOT be re-emitted as a new strip — that's the 24-posters bug (B2).
     resurfaced: bool = False
+    # Set when a signal write landed this turn: the title it was written against (last one, if a
+    # message signals several). The service reads it to seed any follow-up recommendations on that
+    # title (see ChatService._seed_signal_followups), so "since you loved X…" phrasing is only ever
+    # backed by an X-seeded retrieval.
+    signal_title_id: uuid.UUID | None = None
+    signal_title_label: str | None = None
+    # When set, ``items`` were retrieved seeded by this title (label, e.g. "Cowboy Bebop (1998)").
+    # The composer context marks them "similar to <label>" — the ONLY case where the reply may draw
+    # a causal link from a title the user mentioned to the picks.
+    seeded_by: str | None = None
 
 
 # The top title must be at least this many times more voted than the runner-up to resolve a signal
@@ -256,6 +266,10 @@ def tool_log_signal(ctx: ToolContext, args: dict, result: ExecutionResult) -> No
             )
         )
     result.taste_dirty = True
+    # Remember what was signaled so the service can seed follow-up picks on it (fix for the
+    # fabricated "since you loved X, try Y" link over generic taste retrieval).
+    result.signal_title_id = title.id
+    result.signal_title_label = _title_label(title)
     result.actions.append(
         AgentAction(
             kind="logged_signal",
