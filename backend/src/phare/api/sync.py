@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Annotated
@@ -24,6 +26,7 @@ from phare.api.schemas import (
 )
 from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import Settings, get_settings
+from phare.core.fallback import record_fallback
 from phare.core.i18n import DEFAULT_LANGUAGE, Language
 from phare.core.sync_state import get_last_synced, set_last_synced
 from phare.core.tokens import get_source_token, store_source_token
@@ -39,9 +42,14 @@ from phare.providers.types import MetadataProvider, RawEvent, RawMediaType, Sour
 from phare.taste.service import maybe_refresh_taste, optional_llm_provider
 
 router = APIRouter(tags=["Sync"])
+logger = logging.getLogger(__name__)
 
 # Internal token rows that aren't user-facing "connected sources".
 _INTERNAL_SOURCES = {"trakt_refresh"}
+
+# How long a graceful shutdown waits for an in-flight auto-sync pass (the thread is a daemon, so it
+# dies with the process regardless — this just lets a quick pass finish cleanly).
+_AUTO_SYNC_JOIN_TIMEOUT = 5.0
 
 
 class PartialSyncError(Exception):
@@ -332,6 +340,43 @@ def _refresh_trakt_token(session: Session, settings: Settings, profile_id: uuid.
     return result.access_token
 
 
+def _trakt_ingest_with_refresh(
+    session: Session,
+    settings: Settings,
+    profile_id: uuid.UUID,
+    token: str,
+    *,
+    since: datetime | None,
+    language: Language,
+) -> IngestSummary:
+    """Ingest a profile's Trakt history, refreshing an expired access token once on a first-request
+    401. Shared by the sync endpoint and the background auto-sync so both recover from an expired
+    token the same way. A 401 mid-stream (after a batch committed) surfaces as ``PartialSyncError``
+    from ``_ingest_from`` — not retried here; the committed batches let the next run resume."""
+    try:
+        return _ingest_from(
+            session,
+            profile_id,
+            _trakt_source(settings, token),
+            source_name="trakt",
+            since=since,
+            language=language,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 401:
+            raise
+        # Access token rejected on the first request (nothing ingested yet) — refresh + retry once.
+        fresh = _refresh_trakt_token(session, settings, profile_id)
+        return _ingest_from(
+            session,
+            profile_id,
+            _trakt_source(settings, fresh),
+            source_name="trakt",
+            since=since,
+            language=language,
+        )
+
+
 @router.post("/sources/trakt/sync", response_model=IngestSummary)
 def sync_trakt(
     body: TraktSyncRequest,
@@ -346,28 +391,9 @@ def sync_trakt(
     _require_tmdb(settings)
     token = _resolve_token(session, body.profile_id, "trakt", body.access_token)
     since = _since_for(session, body.profile_id, "trakt", full=body.full)
-    try:
-        return _ingest_from(
-            session,
-            body.profile_id,
-            _trakt_source(settings, token),
-            source_name="trakt",
-            since=since,
-            language=language,
-        )
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code != 401:
-            raise
-        # Access token rejected on the first request (nothing ingested yet) — refresh + retry once.
-        fresh = _refresh_trakt_token(session, settings, body.profile_id)
-        return _ingest_from(
-            session,
-            body.profile_id,
-            _trakt_source(settings, fresh),
-            source_name="trakt",
-            since=since,
-            language=language,
-        )
+    return _trakt_ingest_with_refresh(
+        session, settings, body.profile_id, token, since=since, language=language
+    )
 
 
 @router.post("/sources/trakt/connect/start", response_model=TraktConnectStartResponse)
@@ -472,3 +498,119 @@ def list_connected_sources(
         last = None if kind == "requests" else get_last_synced(session, profile_id, row.source)
         out.append(ConnectedSource(source=row.source, kind=kind, last_synced_at=last))
     return out
+
+
+# --- Background auto-sync -------------------------------------------------------------------------
+#
+# Sources are synced on a manual button today; if you watch things all week your Phare taste drifts
+# until the next click. Principle 8 (self-triggering over manual steps): a background pass keeps
+# each connected account current on its own. Mirrors the catalog-refresh loop (catalog/refresh.py):
+# a single daemon thread, an interruptible wait, work split from wiring so tests drive it on a
+# rolled-back session. **Trakt only** — Plex/Jellyfin need their server URL (and Jellyfin user id),
+# which are supplied per request and never persisted, so they can't be reconstructed unattended.
+
+
+def _auto_sync_configured(settings: Settings) -> bool:
+    """Whether unattended Trakt sync can run: its OAuth app credentials + TMDB are both present."""
+    return bool(settings.trakt_client_id) and bool(settings.tmdb_api_key)
+
+
+def _profiles_with_trakt_token(session: Session) -> list[uuid.UUID]:
+    """Every profile that has a stored Trakt access token — the auto-sync candidates."""
+    return list(
+        session.scalars(
+            select(SourceToken.profile_id)
+            .where(SourceToken.source == "trakt")
+            .order_by(SourceToken.profile_id)
+        )
+    )
+
+
+def _auto_sync_trakt_profile(
+    session: Session, settings: Settings, profile_id: uuid.UUID, language: Language
+) -> None:
+    """Incrementally sync one profile's Trakt history from its stored token. Skips silently when the
+    token has gone (a concurrent disconnect); the caller isolates any other failure."""
+    token = get_source_token(session, settings, profile_id, "trakt")
+    if token is None:
+        return
+    since = get_last_synced(session, profile_id, "trakt")
+    _trakt_ingest_with_refresh(session, settings, profile_id, token, since=since, language=language)
+
+
+def run_auto_sync(
+    session: Session,
+    settings: Settings,
+    *,
+    sync_profile: Callable[[Session, Settings, uuid.UUID, Language], None] | None = None,
+    language: Language = DEFAULT_LANGUAGE,
+) -> int:
+    """Incrementally sync every profile with a stored Trakt token. Returns the count synced.
+
+    Best-effort per profile: a failure (expired-and-unrefreshable token, provider outage, a
+    ``PartialSyncError`` mid-stream) is rolled back, recorded on the fallback metric, logged, and
+    the next profile continues — one bad account never stalls the rest or the loop. The taste
+    refresh inside the sync regenerates in the default language, but the profile still *displays* in
+    the UI language (``summary_by_lang`` translates on demand — F1), so an unattended pass doesn't
+    pin a user's summary to English. Split from the thread wiring so tests drive it synchronously
+    with a fake ``sync_profile``."""
+    worker = sync_profile or _auto_sync_trakt_profile
+    synced = 0
+    for profile_id in _profiles_with_trakt_token(session):
+        try:
+            worker(session, settings, profile_id, language)
+            synced += 1
+        except Exception:  # noqa: BLE001 - one profile's failure must not stop the others
+            session.rollback()
+            record_fallback("auto_sync", "profile_failed")
+            logger.exception("auto_sync.profile_failed", extra={"profile_id": str(profile_id)})
+    return synced
+
+
+def run_auto_sync_once(settings: Settings) -> int:
+    """One auto-sync pass on its own session. Returns profiles synced (0 when unconfigured).
+    Best-effort: swallows everything so a flaky network never kills the loop (or the first tick)."""
+    if not _auto_sync_configured(settings):
+        return 0
+    from phare.db.base import get_session_factory
+
+    try:
+        with get_session_factory()() as session:
+            return run_auto_sync(session, settings)
+    except Exception:  # noqa: BLE001 - an auto-sync pass must never crash the loop / process
+        logger.exception("auto_sync.failed")
+        return 0
+
+
+def start_auto_sync_loop(settings: Settings) -> Callable[[], None]:
+    """Start the recurring source auto-sync in a daemon thread; return a ``stop()`` that ends it.
+
+    No-op (returns a no-op stop) when disabled (``source_sync_interval_seconds <= 0``) or when Trakt
+    isn't configured. The first pass fires after the short ``source_sync_initial_delay_seconds``
+    (not a full interval), so a box that restarts more often than the interval still syncs.
+    ``stop()`` signals the loop and waits briefly for an in-flight pass. Mirrors
+    ``start_refresh_loop``."""
+    interval = settings.source_sync_interval_seconds
+    if interval <= 0 or not _auto_sync_configured(settings):
+        return lambda: None
+
+    stop = threading.Event()
+    initial_delay = max(0, settings.source_sync_initial_delay_seconds)
+
+    def loop() -> None:
+        # Event.wait returns True only when stop is set; on timeout it returns False → run a pass.
+        if stop.wait(initial_delay):
+            return
+        run_auto_sync_once(settings)
+        while not stop.wait(interval):
+            run_auto_sync_once(settings)
+
+    thread = threading.Thread(target=loop, name="source-auto-sync", daemon=True)
+    thread.start()
+    logger.info("auto_sync.scheduled", extra={"interval_seconds": interval})
+
+    def shutdown() -> None:
+        stop.set()
+        thread.join(timeout=_AUTO_SYNC_JOIN_TIMEOUT)
+
+    return shutdown

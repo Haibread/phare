@@ -89,6 +89,15 @@ class Settings(BaseSettings):
     catalog_refresh_initial_delay_seconds: int = 300
     # Pages of each freshness list to pull per refresh (≈20 titles/page/kind/list).
     catalog_refresh_pages: int = 1
+    # Ongoing source freshness: every N seconds a background pass runs an *incremental* sync of each
+    # connected Trakt account, so a profile's taste keeps up with what its owner watches without a
+    # manual "sync" click (principle 8). 0 = off. Default 12h. Only Trakt auto-syncs: Plex/Jellyfin
+    # need their server URL (and Jellyfin user id) which aren't persisted, so they stay manual — see
+    # docs/configuration.md.
+    source_sync_interval_seconds: int = 43_200
+    # Delay before the *first* auto-sync after startup — short (not a full interval), like the
+    # catalog refresh, so a box that restarts more often than the interval still syncs.
+    source_sync_initial_delay_seconds: int = 120
     trakt_client_id: str | None = None
     trakt_client_secret: str | None = None  # needed only for the OAuth device flow
     trakt_base_url: str = "https://api.trakt.tv"
