@@ -179,6 +179,17 @@ def _fresh_facets_cache() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_query_translation_cache() -> None:
+    """Clear the search query-translation cache between tests.
+
+    Its key is (query, language) with no per-test component, so under pytest-randomly two tests
+    reusing a query would otherwise share a cached translation and break call-count asserts."""
+    from phare.catalog.service import _QUERY_TRANSLATIONS
+
+    _QUERY_TRANSLATIONS.clear()
+
+
+@pytest.fixture(autouse=True)
 def _sync_embedding_backfill(request: pytest.FixtureRequest) -> None:
     """Keep the "background" embedding backfill synchronous and on the test's own session.
 

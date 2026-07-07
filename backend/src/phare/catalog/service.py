@@ -17,8 +17,10 @@ from sqlalchemy import and_, func, not_, or_, select, text
 from sqlalchemy.orm import Session
 
 from phare.core.fallback import record_fallback
+from phare.core.i18n import Language
 from phare.db.models import Title, TitleEmbedding, TitleKind
 from phare.providers.embeddings_local import is_local_space
+from phare.providers.http import TTLCache
 from phare.providers.types import LLMProvider, MetadataProvider, TitleMetadata, canonical_source
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,16 @@ logger = logging.getLogger(__name__)
 # returned, but only after every above-floor match — and a semantic ANN neighbour must clear the
 # same bar. Mirrors the broad-import quality floor (``broad_import_from_tmdb``'s default).
 SEARCH_VOTE_FLOOR = 50
+
+# The semantic fill embeds queries against *English* catalog documents; a non-English query clusters
+# by language, not meaning (measured live: "film spatial triste" pulled French-language titles, not
+# sad space movies). So non-English queries are translated by the workhorse LLM before embedding —
+# one bounded mechanical call per (query, language), cached generously since search queries repeat.
+_QUERY_TRANSLATIONS = TTLCache(ttl=6 * 3600.0, maxsize=512)
+# A search query is a handful of words; anything longer than this out of the translator is the
+# model rambling (a preamble, an explanation) — embedding it would be worse than the raw query.
+_TRANSLATION_MAX_CHARS = 200
+_TRANSLATION_MAX_TOKENS = 100
 
 
 class CatalogSource(Protocol):
@@ -75,6 +87,37 @@ class CatalogDiscoverSource(Protocol):
 def _below_floor(title: Title) -> bool:
     """The Python twin of the SQL vote-floor predicate, for rows merged outside the ranked query."""
     return title.vote_count is None or title.vote_count < SEARCH_VOTE_FLOOR
+
+
+def _translated_query(query: str, language: Language, translator: LLMProvider) -> str:
+    """The query translated to English for embedding, or the raw query when translation fails.
+
+    One workhorse call per (query, language), cached across requests (only successes — a transient
+    provider blip retries on the next search). Guarded hard: search must never break on this, so an
+    error, an empty completion, or a rambling one all degrade to embedding the raw query."""
+    key = (query.lower(), language)
+    cached = _QUERY_TRANSLATIONS.get(key)
+    if cached is not None:
+        return str(cached)
+    prompt = (
+        "Translate this movie/TV search query to English. "
+        f"Return ONLY the translation, nothing else.\n\nQuery: {query}"
+    )
+    try:
+        raw = translator.complete(prompt, max_tokens=_TRANSLATION_MAX_TOKENS, temperature=0.0)
+    except Exception:  # noqa: BLE001 - a flaky provider must not sink the search request
+        record_fallback("search", "query_translation_failed", language=language)
+        return query
+    translated = raw.strip().strip("\"'").strip()
+    if not translated or len(translated) > _TRANSLATION_MAX_CHARS:
+        record_fallback("search", "query_translation_failed", language=language)
+        return query
+    _QUERY_TRANSLATIONS.set(key, translated)
+    logger.info(
+        "catalog.search.query_translated",
+        extra={"query": query, "translated": translated, "language": language},
+    )
+    return translated
 
 
 def _semantic_fill(
@@ -173,6 +216,8 @@ def search_titles(
     limit: int = 12,
     embedder: LLMProvider | None = None,
     embedding_version: str | None = None,
+    translator: LLMProvider | None = None,
+    language: Language | None = None,
 ) -> list[Title]:
     """Search the catalog by title. With a TMDB provider, pull live matches in first (upserting
     them so they become recommendable + requestable); always fall back to local substring match.
@@ -181,6 +226,11 @@ def search_titles(
     results are topped up with embedding-nearest titles for the query text — so "ghibli" surfaces
     Spirited Away, not just obscure documentaries whose title contains the word. Skipped entirely
     offline (no embedder, or the meaningless local hash space): exact lexical-only behaviour.
+
+    With a ``translator`` (the workhorse LLM) + a non-English request ``language``, the query is
+    translated to English before it's embedded — catalog documents are English, so a raw French
+    query clusters by document language instead of meaning. Only the semantic fill pays this;
+    English requests and translator-less callers (the chat agent path) never spend an LLM call.
     """
     query = query.strip()
     if not query:
@@ -270,8 +320,13 @@ def search_titles(
         # in noise, so offline search stays purely lexical (degrade gracefully, principle 5).
         and not is_local_space(embedding_version)
     ):
+        # Catalog documents are English: embed a non-English query via its English translation
+        # (gated on the *request* language — never language-detect the query text itself).
+        embed_query = query
+        if translator is not None and language is not None and language != "en":
+            embed_query = _translated_query(query, language, translator)
         fills = _semantic_fill(
-            session, query, embedder, embedding_version, exclude=seen, slots=weak_slots
+            session, embed_query, embedder, embedding_version, exclude=seen, slots=weak_slots
         )
     return [*lead, *fills, *junk][:limit]
 
