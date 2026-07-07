@@ -65,7 +65,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     from phare.catalog.refresh import start_refresh_loop
 
     stop_refresh = start_refresh_loop(settings)
+    # Ongoing source freshness: a recurring incremental sync of each connected Trakt account, so a
+    # profile's taste keeps up with what its owner watches (principle 8). No-op when disabled or
+    # Trakt isn't configured. Held so it can be stopped cleanly on shutdown.
+    from phare.api.sync import start_auto_sync_loop
+
+    stop_auto_sync = start_auto_sync_loop(settings)
     yield
+    stop_auto_sync()
     stop_refresh()
     logger.info("shutdown")
 

@@ -41,6 +41,8 @@ see [Offline / no-key behavior](#offline--no-key-behavior) below for what that a
 | `CATALOG_REFRESH_INTERVAL_SECONDS` | `86400` (24 h) | How often a background pass pulls **new/current releases** (trending + now-playing/on-the-air) and embeds them, so the catalog keeps up with new movies/TV. `0` disables it. No-op without a TMDB key. |
 | `CATALOG_REFRESH_INITIAL_DELAY_SECONDS` | `300` (5 min) | Delay before the **first** refresh after startup — short (not a full interval) so a box that restarts more often than the interval still refreshes, rather than starving. |
 | `CATALOG_REFRESH_PAGES` | `1` | Pages of each freshness list pulled per refresh (≈20 titles/page/kind/list). |
+| `SOURCE_SYNC_INTERVAL_SECONDS` | `43200` (12 h) | How often a background pass runs an **incremental sync** of each connected Trakt account, so a profile's taste keeps up with what its owner watches without a manual sync click. `0` disables it. **Trakt only** — see [Automatic source sync](#automatic-source-sync). No-op without Trakt + TMDB configured. |
+| `SOURCE_SYNC_INITIAL_DELAY_SECONDS` | `120` (2 min) | Delay before the **first** auto-sync after startup — short (not a full interval) so a box that restarts often still syncs. |
 | `TRAKT_CLIENT_ID` | _(unset)_ | Trakt source sync. |
 | `TRAKT_CLIENT_SECRET` | _(unset)_ | Also required for the Trakt OAuth device-connect flow. |
 | `SEERR_BASE_URL` / `SEERR_API_KEY` | _(unset)_ | Instance-wide Seerr fallback; per-profile creds set in the UI take precedence. |
@@ -97,6 +99,23 @@ server can't support instead of surfacing a raw config error when clicked:
 **Jellyfin** connects with a server URL + API key; the UI then calls `POST /sources/jellyfin/users`
 to list that server's users and offers a picker, so the operator never has to paste a raw user GUID.
 That call is subject to the same SSRF guard as the sync endpoints (internal URLs are rejected).
+
+### Automatic source sync
+
+Connecting a source runs one sync; after that, a background pass keeps it current on its own so a
+profile's taste doesn't drift until the next manual click (self-triggering over manual steps). It
+runs an **incremental** sync (only events since the last watermark) of every connected account, on
+boot after `SOURCE_SYNC_INITIAL_DELAY_SECONDS` and then every `SOURCE_SYNC_INTERVAL_SECONDS` (`0`
+disables it). It's best-effort: one account failing (expired token, provider outage) is recorded on
+`phare.fallback{component="auto_sync",reason="profile_failed"}` and the rest continue; a pass never
+crashes the process, and a mid-stream failure resumes next tick (the batched, idempotent upsert).
+
+**Trakt only, by design.** Trakt stores everything an unattended sync needs (an access + refresh
+token, plus the server-side OAuth app credentials), so it can renew and re-pull on its own. **Plex
+and Jellyfin can't auto-sync**: their server URL — and the Jellyfin user id — are supplied per
+request and never persisted, so a background pass has nothing to reconnect with. They stay
+manual-sync until that connection detail is stored (a future change). Manual `POST /sources/*/sync`
+is unaffected for all three.
 
 ### Resuming a failed sync
 
