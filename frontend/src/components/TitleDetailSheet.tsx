@@ -147,8 +147,12 @@ export function TitleDetailSheet({
       : null;
   const ratingIsThin = voteAverage !== null && (voteCount ?? 0) < FEW_VOTES;
 
+  // Header shows the localized name when one exists — freshest from the detail fetch, else the
+  // card's stamped copy, else canonical. Consistent with the (already localized) synopsis below.
+  const displayTitle = detail.data?.displayTitle ?? item.displayTitle ?? item.title;
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange} title={item.title}>
+    <Sheet open={open} onOpenChange={onOpenChange} title={displayTitle}>
       <div className={styles.detail} data-testid="title-detail">
         <div
           className={styles.detailPoster}

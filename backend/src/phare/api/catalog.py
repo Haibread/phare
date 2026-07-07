@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from phare.api.deps import Embedder, get_embedder, get_language, get_optional_chat_llm
-from phare.api.recommend import _poster_url
+from phare.api.recommend import _poster_url, localize_items
 from phare.api.schemas import ApiModel, CatalogSummary, EmbedSummary, RecommendationItem
 from phare.catalog.sample import seed_sample_catalog
 from phare.catalog.service import import_from_tmdb, search_titles
@@ -112,12 +112,13 @@ def search_catalog(
     confidences = confidences_for_ordered_titles(
         session, titles, centroid=centroid, taste=taste, model_version=model_version
     )
-    return SearchResponse(
-        results=[
-            _to_search_item(t, watched=t.id in watched, confidence=confidence)
-            for t, confidence in zip(titles, confidences, strict=True)
-        ]
-    )
+    results = [
+        _to_search_item(t, watched=t.id in watched, confidence=confidence)
+        for t, confidence in zip(titles, confidences, strict=True)
+    ]
+    # Localized display names for the result cards, bulk from the cache (one query, no TMDB).
+    localize_items(session, language, results)
+    return SearchResponse(results=results)
 
 
 @router.post("/catalog/sample", response_model=CatalogSummary)

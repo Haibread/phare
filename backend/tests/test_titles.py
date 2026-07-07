@@ -351,6 +351,69 @@ def test_detail_heal_never_writes_localized_genres_to_the_canonical_row(
     assert cached is not None and cached.genres == ["Science-Fiction fr"]  # cache holds display
 
 
+def test_detail_carries_the_localized_display_title_for_french(db_session: Session) -> None:
+    # A French open localizes name + synopsis: displayTitle carries TMDB-fr's name, `title` stays
+    # canonical, and the cache row stores the name for the card-level bulk stamping.
+    title = _seed_title(db_session, runtime_minutes=155)
+    provider = _CountingProvider(
+        TitleMetadata(
+            kind=TitleKind.movie,
+            tmdb_id=42,
+            title="Amour éternel",
+            overview="Synopsis en français.",
+            genres=["Drame"],
+            runtime_minutes=155,
+        )
+    )
+    client = _client(db_session, provider)
+
+    body = client.get(f"/titles/{title.id}", headers={"Accept-Language": "fr"}).json()
+
+    assert body["title"] == "Dune"  # canonical, untouched
+    assert body["displayTitle"] == "Amour éternel"
+    cached = db_session.get(TitleLocalization, {"title_id": title.id, "language": "fr"})
+    assert cached is not None and cached.title == "Amour éternel"
+
+
+def test_detail_display_title_is_null_for_english(db_session: Session) -> None:
+    # English is the canonical language: `title` IS the display text, so displayTitle stays null
+    # (the localization cache may still fill — that behavior is asserted elsewhere).
+    title = _seed_title(db_session, runtime_minutes=155)
+
+    body = _client(db_session, _CountingProvider(_meta(runtime_minutes=155))).get(
+        f"/titles/{title.id}"
+    )
+
+    assert body.json()["displayTitle"] is None
+
+
+def test_detail_refetches_a_nameless_cache_row_to_heal_it(db_session: Session) -> None:
+    # A cache row filled before the `title` column existed has overview but no name. Even inside
+    # the TTL, the open must spend one fetch to fill the name — old rows heal on the read path.
+    title = _seed_title(db_session, runtime_minutes=155)
+    db_session.add(
+        TitleLocalization(
+            title_id=title.id, language="fr", title=None, overview="Vieux synopsis.", genres=[]
+        )
+    )
+    db_session.flush()
+    provider = _CountingProvider(
+        TitleMetadata(kind=TitleKind.movie, tmdb_id=42, title="Amour éternel", runtime_minutes=155)
+    )
+
+    body = (
+        _client(db_session, provider)
+        .get(f"/titles/{title.id}", headers={"Accept-Language": "fr"})
+        .json()
+    )
+
+    assert provider.calls == 1
+    assert body["displayTitle"] == "Amour éternel"
+    cached = db_session.get(TitleLocalization, {"title_id": title.id, "language": "fr"})
+    db_session.refresh(cached)
+    assert cached.title == "Amour éternel"
+
+
 def test_title_model_credits_language_round_trip(db_session: Session) -> None:
     # The new columns persist and read back (default empty arrays, nullable language).
     empty = Title(kind=TitleKind.movie, title="Bare", tmdb_id=1)

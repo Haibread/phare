@@ -44,8 +44,9 @@ overwrite described below.
 
 `Title` rows are **canonical**: `title`, `overview`, `genres` (and everything else on the row) hold
 TMDB's language-neutral form (its en-US default), whatever language the user browses in.
-Per-language display text lives only in the **`title_localization`** cache — one row per
-`(title, language)`, TTL'd, filled lazily by the detail sheet.
+Per-language display text (localized name, synopsis, genre labels) lives only in the
+**`title_localization`** cache — one row per `(title, language)`, TTL'd, filled lazily by the
+detail sheet and by the background display-title fill below.
 
 The rule exists for two hard reasons: all titles share **one embedding space**, and a
 French-overview document clusters by *language*, not meaning (measured live: a French semantic
@@ -69,6 +70,18 @@ Consequences, enforced in code:
   exception to the heal's fill-only rule, because localized text is present-but-poisoned, not
   missing — and their embeddings dropped for lazy re-embedding. `original_language = 'fr'` rows are
   exempt (their canonical overview may legitimately be French).
+
+**Display titles on cards.** A non-English user still *sees* localized names everywhere ("Amour
+éternel", not "Kara Sevda"): every card DTO (home rows, search results, chat picks, the detail
+sheet) carries an additive nullable `displayTitle` next to the canonical `title`, and the frontend
+renders `displayTitle ?? title` (the chat citation matcher tries both names). It's filled from the
+`title_localization` cache **in bulk** — one query per response, never a per-card TMDB fetch on
+the hot path. Misses (titles served without a cached localization, including rows cached before
+the localized-name column existed) are queued for a **background fill**: a single rate-limited
+daemon worker (same ~30 rps bulk cap as the metadata walker) fetches their localized TMDB detail
+and fills the cache, so titles localize *as they get served* and the cache converges on what users
+actually look at. Self-triggering, no CLI; a strict no-op offline or for English requests — those
+cards just show the canonical title.
 
 ## TV is a tree
 

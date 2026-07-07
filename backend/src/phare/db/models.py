@@ -314,12 +314,15 @@ class TitleExplanation(Base):
 
 
 class TitleLocalization(Base):
-    """Cached localized synopsis + genres for a (title, language), fetched from TMDB.
+    """Cached localized display text (title, synopsis, genres) for a (title, language), from TMDB.
 
     A pure metadata cache — no LLM. The detail view shows the synopsis/genres in the request
-    language; without this it hit TMDB live on every open (~6 s observed, review C2). Keyed by
-    title + language, refreshed once past a long TTL, and served as the fallback when TMDB is
-    unreachable. ``fetched_at`` is the write time the TTL is measured against.
+    language; without this it hit TMDB live on every open (~6 s observed, review C2). ``title`` is
+    the localized display name ("Amour éternel" for *Kara Sevda*) stamped onto card DTOs in bulk —
+    the canonical ``Title.title`` stays language-neutral for the shared embedding space (see
+    docs/data-model.md, "Canonical vs localized text"). Keyed by title + language, refreshed once
+    past a long TTL, and served as the fallback when TMDB is unreachable. ``fetched_at`` is the
+    write time the TTL is measured against.
     """
 
     __tablename__ = "title_localization"
@@ -328,6 +331,9 @@ class TitleLocalization(Base):
         ForeignKey("title.id", ondelete="CASCADE"), primary_key=True
     )
     language: Mapped[str] = mapped_column(String(8), primary_key=True)
+    # Nullable: rows cached before the column existed have no localized name yet; the read path
+    # treats those as missing and the background fill heals them.
+    title: Mapped[str | None] = mapped_column(String(500))
     overview: Mapped[str | None] = mapped_column(Text)
     genres: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

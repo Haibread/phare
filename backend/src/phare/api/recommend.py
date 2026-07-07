@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -18,6 +19,7 @@ from phare.api.schemas import (
     RecommendationRow,
     RecommendationsResponse,
 )
+from phare.catalog.localization import display_titles
 from phare.core.auth import get_current_user, require_own_profile
 from phare.core.config import get_settings
 from phare.core.i18n import DEFAULT_LANGUAGE, Language
@@ -81,6 +83,24 @@ def to_row(row: Row) -> RecommendationRow:
     return RecommendationRow(key=row.key, title=row.title, items=[to_item(i) for i in row.items])
 
 
+def localize_items(
+    session: Session, language: Language, items: Sequence[RecommendationItem]
+) -> None:
+    """Stamp ``display_title`` on card DTOs from the localization cache — one bulk query total.
+
+    Called by every card-serving endpoint (home rows, search, chat) with ALL of the response's
+    items at once, so a page of rows costs a single SELECT, never N+1 — and never a TMDB fetch
+    (the hot-path latency budget is sacred). Titles without a cached localized name stay canonical
+    this request and are queued for the background fill (see ``catalog/localization``). A no-op
+    for English requests: canonical text IS the display text there.
+    """
+    names = display_titles(session, language, [item.title_id for item in items])
+    if not names:
+        return
+    for item in items:
+        item.display_title = names.get(item.title_id)
+
+
 def require_profile(user: User, profile_id: uuid.UUID) -> Profile:
     """Enforce isolation and return the caller's profile. 1:1, so it's the user's own profile."""
     require_own_profile(user, profile_id)
@@ -101,8 +121,10 @@ def get_recommendations(
     recommender = build_recommender(session, embedder, chat_llm, language)
     rows = recommender.rows(profile_id)
     session.commit()  # lazy embeddings (and any logging) persist
+    wire_rows = [to_row(row) for row in rows]
+    localize_items(session, language, [item for row in wire_rows for item in row.items])
     return RecommendationsResponse(
-        rows=[to_row(row) for row in rows],
+        rows=wire_rows,
         embeddings_degraded=embedder.degraded,
         profile_building=recommender.profile_building(profile_id),
     )
@@ -124,7 +146,9 @@ def get_dynamic_recommendations(
     recommender = build_recommender(session, embedder, chat_llm, language)
     rows, degraded = dynamic_rows(recommender, profile_id, llm=chat_llm)
     session.commit()
-    return RecommendationsResponse(rows=[to_row(row) for row in rows], degraded=degraded)
+    wire_rows = [to_row(row) for row in rows]
+    localize_items(session, language, [item for row in wire_rows for item in row.items])
+    return RecommendationsResponse(rows=wire_rows, degraded=degraded)
 
 
 @router.get("/profiles/{profile_id}/recommendations/conversion", response_model=ConversionResponse)

@@ -11,6 +11,7 @@ function titleDetail(overrides: Partial<TitleDetail> = {}): TitleDetail {
   return {
     titleId: "t1",
     title: "Arrival",
+    displayTitle: null,
     kind: "movie",
     year: 2016,
     runtimeMinutes: 116,
@@ -43,6 +44,7 @@ function recItem(overrides: Partial<RecommendationItem> = {}): RecommendationIte
   return {
     titleId: "t1",
     title: "Arrival",
+    displayTitle: null,
     kind: "movie",
     year: 2016,
     genres: ["Science Fiction", "Drama"],
@@ -74,6 +76,51 @@ describe("TitleDetailSheet", () => {
 
     const why = await screen.findByTestId("detail-why");
     await waitFor(() => expect(why).toHaveTextContent("Because you loved tense, cerebral sci-fi."));
+  });
+
+  describe("localized display title (round 12 follow-up)", () => {
+    it("shows the localized name in the header when the detail carries one", async () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(
+        titleDetail({ title: "Kara Sevda", displayTitle: "Amour éternel" }),
+      );
+      renderSheet(
+        <TitleDetailSheet
+          item={recItem({ title: "Kara Sevda" })}
+          open={true}
+          onOpenChange={() => {}}
+        />,
+      );
+      // The Sheet renders its title twice (visible header + sr-only description) — assert on the
+      // accessible heading specifically.
+      expect(await screen.findByRole("heading", { name: "Amour éternel" })).toBeInTheDocument();
+    });
+
+    it("shows the card's stamped displayTitle while the detail is still loading", () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockReturnValue(new Promise(() => {}));
+      renderSheet(
+        <TitleDetailSheet
+          item={recItem({ title: "Kara Sevda", displayTitle: "Amour éternel" })}
+          open={true}
+          onOpenChange={() => {}}
+        />,
+      );
+      expect(screen.getByRole("heading", { name: "Amour éternel" })).toBeInTheDocument();
+    });
+
+    it("keeps the canonical title in the header when nothing is localized", () => {
+      vi.spyOn(api, "streamTitleExplanation").mockResolvedValue();
+      vi.spyOn(api, "titleDetail").mockResolvedValue(titleDetail({ title: "Kara Sevda" }));
+      renderSheet(
+        <TitleDetailSheet
+          item={recItem({ title: "Kara Sevda" })}
+          open={true}
+          onOpenChange={() => {}}
+        />,
+      );
+      expect(screen.getByRole("heading", { name: "Kara Sevda" })).toBeInTheDocument();
+    });
   });
 
   describe("rating (round 8: TMDB vote average + count)", () => {
