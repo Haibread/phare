@@ -62,6 +62,9 @@ class Recommendation(BaseModel):
     kind: str
     year: int | None
     genres: list[str]
+    # Known runtime (minutes), when the candidate carried one — cited by the chat composer's
+    # per-item facts so the reply can only claim durations the data supports. None = unknown.
+    runtime_minutes: int | None = None
     score: float
     is_swing: bool = False
     confidence: float | None = None

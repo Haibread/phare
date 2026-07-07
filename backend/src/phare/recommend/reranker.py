@@ -618,6 +618,7 @@ def _to_rec(
         kind=candidate.kind,
         year=candidate.year,
         genres=candidate.genres,
+        runtime_minutes=candidate.runtime_minutes,
         score=round(score, 4),
         is_swing=is_swing,
         confidence=_confidence(
