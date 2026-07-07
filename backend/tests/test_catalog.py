@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -9,6 +11,7 @@ from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
 from phare.api.catalog import ensure_import_allowed
+from phare.api.deps import Embedder, get_embedder, get_optional_chat_llm
 from phare.catalog.sample import seed_sample_catalog
 from phare.catalog.service import (
     broad_import_from_tmdb,
@@ -549,6 +552,189 @@ def test_search_survives_a_semantic_embed_failure(db_session: Session) -> None:
         db_session, "nova", embedder=_ExplodingEmbedder(), embedding_version="fake-embed"
     )
     assert [t.id for t in results] == [junk.id]
+
+
+class _RecordingQueryEmbedder(_CountingQueryEmbedder):
+    """A counting embedder that also records the exact texts it was asked to embed."""
+
+    def __init__(self, vector: list[float]) -> None:
+        super().__init__(vector)
+        self.texts: list[str] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.texts.extend(texts)
+        return super().embed(texts)
+
+
+class _CountingTranslator:
+    """A fake workhorse LLM returning a fixed completion; counts calls (translation allows ONE)."""
+
+    def __init__(self, completion: str = "sad space movie") -> None:
+        self.completion = completion
+        self.calls = 0
+
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str:
+        self.calls += 1
+        return self.completion
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        raise AssertionError("the translator fake must never be asked to embed")
+
+
+class _ExplodingTranslator(_CountingTranslator):
+    def complete(
+        self, prompt: str, *, max_tokens: int | None = None, temperature: float | None = None
+    ) -> str:
+        super().complete(prompt, max_tokens=max_tokens, temperature=temperature)
+        raise RuntimeError("llm api down")
+
+
+def test_search_translates_a_french_query_before_the_semantic_fill(db_session: Session) -> None:
+    # The live repro: "film spatial triste" has no lexical match, and embedding the raw French text
+    # clusters by document language, not meaning. The workhorse must translate it ONCE, the embed
+    # must receive the translation (quotes stripped), and a repeat search must hit the cache.
+    high_life = _embedded_title(
+        db_session, tmdb_id=890001, title="High Life", vote_count=3000, vector=_unit_vector(0)
+    )
+    embedder = _RecordingQueryEmbedder(_unit_vector(0))
+    translator = _CountingTranslator('"sad space movie"')
+
+    results = search_titles(
+        db_session,
+        "film spatial triste",
+        embedder=embedder,
+        embedding_version="fake-embed",
+        translator=translator,
+        language="fr",
+    )
+    assert high_life.id in [t.id for t in results]
+    assert translator.calls == 1
+    assert embedder.texts == ["sad space movie"]  # the translation, guard-stripped of quotes
+
+    again = search_titles(
+        db_session,
+        "film spatial triste",
+        embedder=embedder,
+        embedding_version="fake-embed",
+        translator=translator,
+        language="fr",
+    )
+    assert high_life.id in [t.id for t in again]
+    assert translator.calls == 1  # cache hit — zero LLM calls on the repeat
+    assert embedder.texts == ["sad space movie", "sad space movie"]
+
+
+def test_search_english_request_never_pays_a_translation_call(db_session: Session) -> None:
+    # English queries already live in the documents' language: the fill embeds the raw query and
+    # the workhorse must not be called at all, even though a translator is wired in.
+    _embedded_title(
+        db_session, tmdb_id=890101, title="High Life", vote_count=3000, vector=_unit_vector(0)
+    )
+    embedder = _RecordingQueryEmbedder(_unit_vector(0))
+    translator = _CountingTranslator()
+
+    search_titles(
+        db_session,
+        "sad space movie",
+        embedder=embedder,
+        embedding_version="fake-embed",
+        translator=translator,
+        language="en",
+    )
+    assert translator.calls == 0
+    assert embedder.texts == ["sad space movie"]
+
+
+def test_search_strong_lexical_results_skip_translation_and_embed(db_session: Session) -> None:
+    # Zero weak slots → the semantic tier never fires, so neither the translator nor the embedder
+    # may be called — the no-fill path must stay LLM-free.
+    db_session.add_all(
+        Title(kind=TitleKind.movie, tmdb_id=890200 + i, title=f"Nova {i}", vote_count=100 + i)
+        for i in range(12)
+    )
+    db_session.flush()
+    embedder = _RecordingQueryEmbedder(_unit_vector(0))
+    translator = _CountingTranslator()
+
+    results = search_titles(
+        db_session,
+        "nova",
+        embedder=embedder,
+        embedding_version="fake-embed",
+        translator=translator,
+        language="fr",
+    )
+    assert len(results) == 12
+    assert translator.calls == 0
+    assert embedder.calls == 0
+
+
+@pytest.mark.parametrize(
+    "translator",
+    [
+        _ExplodingTranslator(),
+        _CountingTranslator(""),  # empty completion
+        _CountingTranslator("word " * 100),  # rambling completion, absurd for a search query
+    ],
+    ids=["error", "empty", "rambling"],
+)
+def test_search_survives_a_query_translation_failure(
+    db_session: Session, translator: _CountingTranslator, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A translation hiccup degrades to embedding the raw query — recorded as a fallback, never a
+    # broken search. (Failures aren't cached, so the next search retries the translation.)
+    high_life = _embedded_title(
+        db_session, tmdb_id=890301, title="High Life", vote_count=3000, vector=_unit_vector(0)
+    )
+    embedder = _RecordingQueryEmbedder(_unit_vector(0))
+
+    with caplog.at_level(logging.WARNING, logger="phare.fallback"):
+        results = search_titles(
+            db_session,
+            "film spatial triste",
+            embedder=embedder,
+            embedding_version="fake-embed",
+            translator=translator,
+            language="fr",
+        )
+    assert high_life.id in [t.id for t in results]  # results still served
+    assert embedder.texts == ["film spatial triste"]  # raw-query embed fallback
+    fallback = next(r for r in caplog.records if r.message == "search.fallback")
+    assert fallback.reason == "query_translation_failed"
+
+
+def test_search_endpoint_wires_language_and_workhorse_into_translation(
+    db_session: Session,
+) -> None:
+    # End-to-end wiring: a French Accept-Language request through the API must reach the semantic
+    # fill with the translated query — proving the endpoint passes language + workhorse through.
+    user = make_account(db_session)
+    high_life = _embedded_title(
+        db_session, tmdb_id=890401, title="High Life", vote_count=3000, vector=_unit_vector(0)
+    )
+    embedder = _RecordingQueryEmbedder(_unit_vector(0))
+    translator = _CountingTranslator()
+
+    client = authed_client(
+        db_session,
+        user,
+        overrides={
+            get_embedder: lambda: Embedder(
+                provider=embedder, read_version="fake-embed", write_version="fake-embed"
+            ),
+            get_optional_chat_llm: lambda: translator,
+        },
+    )
+    body = client.post(
+        f"/profiles/{user.profile.id}/catalog/search",
+        json={"q": "film spatial triste"},
+        headers={"Accept-Language": "fr"},
+    ).json()
+    assert str(high_life.id) in {item["titleId"] for item in body["results"]}
+    assert translator.calls == 1
+    assert embedder.texts == ["sad space movie"]
 
 
 def test_import_guard_blocks_dev_without_confirm() -> None:

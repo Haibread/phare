@@ -66,82 +66,113 @@ class PreparedTurn:
     degraded: bool = False
 
 
-def intent_filter(intent: ChatIntent):
-    """Build a candidate filter from an intent. Runtime is a hard cap; genre is best-effort."""
+# Fallback slate size for direct/test callers of :func:`intent_filter` — matches
+# RecommendationService's default ``row_size``. The real call sites pass the recommender's own.
+_DEFAULT_SLATE_SIZE = 12
 
-    def apply(candidates: list[Candidate]) -> list[Candidate]:
+
+@dataclass
+class _IntentCandidateFilter:
+    """Callable candidate filter built from a chat intent (see :func:`intent_filter`)."""
+
+    intent: ChatIntent
+    slate_size: int
+    # True once any invocation had to keep unknown-runtime candidates under an active cap — read by
+    # the offline reply so its copy never claims a runtime fit those items may not have.
+    runtime_unknown_kept: bool = False
+
+    def __call__(self, candidates: list[Candidate]) -> list[Candidate]:
         result = candidates
-        if intent.max_runtime is not None:
-            # A candidate with a known runtime must fit the cap. One with an *unknown* runtime is a
-            # coin flip against "under N minutes" — a 167-minute film with a NULL runtime silently
-            # passed a "under 2 hours" request before. tool_recommend already runs the TMDB runtime
-            # backfill on a capped turn, so a still-NULL runtime here is one TMDB couldn't fill;
-            # dropping it keeps the cap honest. But only when known-fitting titles remain — offline
-            # (no backfill ran, so the whole pool is NULL) dropping them all would empty the slate,
-            # a worse failure than a loose cap; there we keep the NULL-runtime pool and flag it.
-            known_fit = [
-                c
-                for c in result
-                if c.runtime_minutes is not None and c.runtime_minutes <= intent.max_runtime
-            ]
-            dropped_unknown = sum(1 for c in result if c.runtime_minutes is None)
-            if known_fit:
-                if dropped_unknown:
-                    record_fallback(
-                        "intent_filter",
-                        "runtime_unknown_dropped",
-                        dropped=dropped_unknown,
-                        max_runtime=intent.max_runtime,
-                    )
-                result = known_fit
-            else:
-                # No known-fitting title — keep the unknown-runtime pool rather than empty the
-                # slate, but make the loosened cap visible (the runtimes never got backfilled).
-                result = [
-                    c
-                    for c in result
-                    if c.runtime_minutes is None or c.runtime_minutes <= intent.max_runtime
-                ]
-                if dropped_unknown:
-                    record_fallback(
-                        "intent_filter",
-                        "runtime_cap_unenforced",
-                        unknown=dropped_unknown,
-                        max_runtime=intent.max_runtime,
-                    )
-        if intent.kind is not None:
+        if self.intent.kind is not None:
             # Hard filter — "a movie for tonight" must not return a show (review A5).
-            result = [c for c in result if c.kind == intent.kind]
-        if intent.include_genres:
+            result = [c for c in result if c.kind == self.intent.kind]
+        if self.intent.include_genres:
             # Origin-scoped words ("anime" = Animation made in Japan) also require the candidate's
             # ``original_language`` — a Batman-heavy profile asking for anime must not get DC
             # animated movies. Enforceable only when the pool carries language data at all: on a
             # pre-heal catalog (every candidate NULL) the scoped words downgrade to their plain
             # genre — recorded, never silent — so the request stays useful before the heal runs.
             enforce_origin = any(c.original_language is not None for c in result)
-            if not enforce_origin and genres.has_origin_scoped(intent.include_genres):
-                genres.record_origin_language_fallback(intent.include_genres)
+            if not enforce_origin and genres.has_origin_scoped(self.intent.include_genres):
+                genres.record_origin_language_fallback(self.intent.include_genres)
             matched = [
                 c
                 for c in result
                 if genres.genre_match_with_origin(
-                    intent.include_genres,
+                    self.intent.include_genres,
                     c.genres,
                     c.original_language,
                     enforce_origin=enforce_origin,
                 )
             ]
-            # Don't return nothing just because the catalog is thin — fall back to runtime-only, but
-            # make the miss visible (A3/G1) so a vocabulary bug can't hide behind an empty match.
+            # Don't return nothing just because the catalog is thin — fall back to the other
+            # constraints only, but make the miss visible (A3/G1) so a vocabulary bug can't hide
+            # behind an empty match.
             if matched:
                 result = matched
             else:
                 genres.record_genre_filter_fallback(
-                    intent.include_genres, {g for c in result for g in c.genres}
+                    self.intent.include_genres, {g for c in result for g in c.genres}
                 )
+        if self.intent.max_runtime is not None:
+            result = self._apply_runtime_cap(result, self.intent.max_runtime)
         return result
 
-    return apply
+    def _apply_runtime_cap(self, result: list[Candidate], cap: int) -> list[Candidate]:
+        """Enforce the runtime cap without starving the slate on a runtime-poor pool.
+
+        A candidate with a *known* runtime must fit the cap — known-over-cap is always dropped. One
+        with an *unknown* runtime is a coin flip against "under N minutes" (a 167-minute film with
+        a NULL runtime once slipped into an "under 2 hours" slate), so it never outranks a title
+        that provably fits. But dropping every unknown starves real pools: TV rows rarely carry an
+        episode runtime, and a live "série policière, pas trop longue" turn threw away 60 of 63
+        crime shows and served only kids' cartoons — the sole titles with a known 22-minute
+        runtime. So unknown-runtime candidates are a **lower tier**: used only to fill the slate
+        slots the known-under-cap tier can't, in pool order, and recorded
+        (``runtime_unknown_kept``) so the degradation is observable. With no known fit at all
+        (e.g. offline — no backfill ran, the whole pool is NULL) the unknown pool is kept and the
+        cap flagged unenforced, as before.
+        """
+        known_fit = [
+            c for c in result if c.runtime_minutes is not None and c.runtime_minutes <= cap
+        ]
+        unknown = [c for c in result if c.runtime_minutes is None]
+        if len(known_fit) >= self.slate_size or not unknown:
+            # Enough provably-fitting titles (or no unknowns to reach for): serve only those.
+            # Unused unknowns are just unused — not a degradation, so nothing is recorded.
+            return known_fit
+        if known_fit:
+            filler = unknown[: self.slate_size - len(known_fit)]
+            self.runtime_unknown_kept = True
+            record_fallback(
+                "intent_filter",
+                "runtime_unknown_kept",
+                kept=len(filler),
+                max_runtime=cap,
+            )
+            return [*known_fit, *filler]
+        # No known-fitting title — keep the unknown-runtime pool rather than empty the slate, but
+        # make the loosened cap visible (the runtimes never got backfilled).
+        self.runtime_unknown_kept = True
+        record_fallback(
+            "intent_filter",
+            "runtime_cap_unenforced",
+            unknown=len(unknown),
+            max_runtime=cap,
+        )
+        return unknown
+
+
+def intent_filter(
+    intent: ChatIntent, *, slate_size: int = _DEFAULT_SLATE_SIZE
+) -> _IntentCandidateFilter:
+    """Build a candidate filter from an intent. Runtime is a hard cap; genre is best-effort.
+
+    ``slate_size`` is how many items the caller will actually serve (the recommender's row size):
+    the runtime tiering reaches for unknown-runtime filler only when the known-under-cap tier
+    can't fill that many slots by itself.
+    """
+    return _IntentCandidateFilter(intent=intent, slate_size=slate_size)
 
 
 def _drop_mentioned(items: list[Recommendation], message: str) -> list[Recommendation]:
@@ -162,8 +193,18 @@ def _drop_mentioned(items: list[Recommendation], message: str) -> list[Recommend
     return kept
 
 
-def _reply_text(intent: ChatIntent, count: int, language: Language = DEFAULT_LANGUAGE) -> str:
-    """Deterministic reply used in the offline (no-LLM) path."""
+def _reply_text(
+    intent: ChatIntent,
+    count: int,
+    language: Language = DEFAULT_LANGUAGE,
+    *,
+    runtime_enforced: bool = True,
+) -> str:
+    """Deterministic reply used in the offline (no-LLM) path.
+
+    ``runtime_enforced=False`` means unknown-runtime picks made the slate (the filter's lower
+    tier), so the copy must not claim they fit "under N minutes" — the claim is dropped.
+    """
     if count == 0:
         return translate(language, "chat.offlineNoMatch")
     bits: list[str] = []
@@ -172,7 +213,7 @@ def _reply_text(intent: ChatIntent, count: int, language: Language = DEFAULT_LAN
     descriptor = f"{' '.join(bits)} " if bits else ""
     runtime = (
         translate(language, "chat.runtimeUnder", minutes=intent.max_runtime)
-        if intent.max_runtime
+        if intent.max_runtime and runtime_enforced
         else ""
     )
     return translate(language, "chat.offlinePicks", descriptor=descriptor, runtime=runtime)
@@ -251,11 +292,12 @@ class ChatService:
 
     def _prepare_offline(self, profile_id: uuid.UUID, message: str) -> PreparedTurn:
         intent = keyword_intent(message)  # offline floor; no writes without the LLM
+        candidate_filter = intent_filter(intent, slate_size=self.recommender.row_size)
         items = _drop_mentioned(
             self.recommender.recommend(
                 profile_id,
                 extra_hard_avoids=intent.exclude_genres,
-                candidate_filter=intent_filter(intent),
+                candidate_filter=candidate_filter,
                 include_genres=intent.include_genres,
                 max_runtime=intent.max_runtime,
                 rewatch=intent.rewatch,
@@ -269,7 +311,13 @@ class ChatService:
             items=items,
             actions=[],
             intent=intent,
-            reply_text=_reply_text(intent, len(items), language),
+            reply_text=_reply_text(
+                intent,
+                len(items),
+                language,
+                # Unknown-runtime picks may be on the slate — don't claim "under N minutes".
+                runtime_enforced=not candidate_filter.runtime_unknown_kept,
+            ),
             language=language,
         )
 

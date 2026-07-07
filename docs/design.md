@@ -239,6 +239,14 @@ better-known title that merely starts with the query. Two guards keep the junk t
   the demoted junk, clear the same vote floor, and use the same wide-`ef_search` deterministic ANN
   as candidate generation. Offline (no embedding key → the local hash space) the tier is skipped
   entirely and search stays purely lexical.
+- **Query translation.** Catalog documents are English, so embedding a non-English query clusters
+  by document language instead of meaning ("film spatial triste" pulled French films, not sad space
+  movies). When the semantic fill fires on a non-English request (gated on the request's
+  `Accept-Language`, never on detecting the query's language), the workhorse LLM first translates
+  the query to English — one bounded mechanical call per (query, language), cached in-process for
+  hours. English requests, lexical-only searches, and offline mode never pay the call, and any
+  translation failure falls back to embedding the raw query (recorded as a `search` fallback) —
+  search never breaks on it.
 
 Search cards show a compact **TMDB rating** (`★ 8.4 · 37k`, locale-aware compact count; hidden when
 a row has no rating) so a junk namesake is tellable from the real film at a glance — home rows don't

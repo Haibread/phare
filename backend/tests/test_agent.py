@@ -169,6 +169,15 @@ def test_offline_reply_text_localises() -> None:
     assert fr.startswith("Voici quelques suggestions") and "90 minutes" in fr
 
 
+def test_offline_reply_drops_runtime_claim_when_unknown_runtimes_made_the_slate() -> None:
+    # When the filter had to fill the slate with unknown-runtime picks, the copy must not claim
+    # they fit "under N minutes" — honesty over engagement (principle 4).
+    intent = ChatIntent(include_genres=["Comedy"], max_runtime=90)
+    text = _reply_text(intent, 3, runtime_enforced=False)
+    assert "90" not in text and "minutes" not in text
+    assert text.startswith("Here are a few comedy picks")
+
+
 def test_template_reply_localises_framing() -> None:
     result = ExecutionResult(actions=[AgentAction(kind="logged_signal", summary="loved Heat")])
     fr = _compose_reply_template(result, "fr")
@@ -274,20 +283,44 @@ def _runtime_cand(title: str, runtime: int | None) -> Candidate:
     )
 
 
-def test_intent_filter_drops_unknown_runtime_under_a_cap() -> None:
+def test_intent_filter_ignores_unknown_runtimes_when_known_tier_fills_the_slate() -> None:
     # A NULL-runtime candidate is a coin flip against "under N minutes" — a 167-min film with an
-    # unknown runtime used to pass a "under 2 hours" cap silently (the reported Solaris tail). With
-    # a cap active and known-fitting titles present, drop the unknowns rather than gamble.
+    # unknown runtime used to pass a "under 2 hours" cap silently (the reported Solaris tail).
+    # With enough known-fitting titles to fill the slate, the unknowns are simply unused — no
+    # gamble taken, and nothing recorded (an unused lower tier is not a degradation).
     pool = [
-        _runtime_cand("Fits", 100),
+        _runtime_cand("Fits A", 100),
+        _runtime_cand("Fits B", 90),
         _runtime_cand("Too Long", 150),
         _runtime_cand("Unknown", None),
     ]
     with mock.patch("phare.agent.service.record_fallback") as record:
-        kept = intent_filter(ChatIntent(max_runtime=120))(pool)
-    assert [c.title for c in kept] == ["Fits"]  # unknown + too-long both gone
+        filt = intent_filter(ChatIntent(max_runtime=120), slate_size=2)
+        kept = filt(pool)
+    assert [c.title for c in kept] == ["Fits A", "Fits B"]  # unknown unused, too-long gone
+    record.assert_not_called()
+    assert filt.runtime_unknown_kept is False
+
+
+def test_intent_filter_fills_a_starved_slate_from_the_unknown_tier() -> None:
+    # The live starvation case in miniature: too few known-under-cap titles for the slate. The
+    # unknown-runtime tier fills the remaining slots (pool order), the known-over-cap titles stay
+    # out, and the degradation is recorded so the loosened cap is observable.
+    pool = [
+        _runtime_cand("Fits", 100),
+        _runtime_cand("Too Long", 150),
+        _runtime_cand("Unknown A", None),
+        _runtime_cand("Unknown B", None),
+        _runtime_cand("Unknown C", None),
+    ]
+    with mock.patch("phare.agent.service.record_fallback") as record:
+        filt = intent_filter(ChatIntent(max_runtime=120), slate_size=3)
+        kept = filt(pool)
+    assert [c.title for c in kept] == ["Fits", "Unknown A", "Unknown B"]  # known first, then filler
     record.assert_called_once()
-    assert record.call_args.args == ("intent_filter", "runtime_unknown_dropped")
+    assert record.call_args.args == ("intent_filter", "runtime_unknown_kept")
+    assert record.call_args.kwargs == {"kept": 2, "max_runtime": 120}
+    assert filt.runtime_unknown_kept is True
 
 
 def test_intent_filter_keeps_unknown_runtimes_when_nothing_else_fits() -> None:
@@ -296,19 +329,54 @@ def test_intent_filter_keeps_unknown_runtimes_when_nothing_else_fits() -> None:
     # failure than a loose cap. Keep the unknown-runtime pool and flag the cap as unenforced.
     pool = [_runtime_cand("Unknown A", None), _runtime_cand("Unknown B", None)]
     with mock.patch("phare.agent.service.record_fallback") as record:
-        kept = intent_filter(ChatIntent(max_runtime=120))(pool)
+        filt = intent_filter(ChatIntent(max_runtime=120))
+        kept = filt(pool)
     assert {c.title for c in kept} == {"Unknown A", "Unknown B"}  # kept, not emptied
     record.assert_called_once()
     assert record.call_args.args == ("intent_filter", "runtime_cap_unenforced")
+    assert filt.runtime_unknown_kept is True
 
 
 def test_intent_filter_no_runtime_fallback_when_all_runtimes_known() -> None:
-    # A fully-backfilled pool under a cap needs no fallback (the common case once enriched).
+    # A fully-backfilled pool under a cap needs no fallback (the common case once enriched) — a
+    # thin all-known pool stays thin and honest, never padded (there are no unknowns to reach for).
     pool = [_runtime_cand("Fits", 90), _runtime_cand("Too Long", 200)]
     with mock.patch("phare.agent.service.record_fallback") as record:
         kept = intent_filter(ChatIntent(max_runtime=120))(pool)
     assert [c.title for c in kept] == ["Fits"]
     record.assert_not_called()
+
+
+def test_intent_filter_no_cap_leaves_runtimes_alone() -> None:
+    # Without a max_runtime, runtime data (known, unknown, long) never filters anything.
+    pool = [
+        _runtime_cand("Long", 190),
+        _runtime_cand("Unknown", None),
+        _runtime_cand("Short", 85),
+    ]
+    with mock.patch("phare.agent.service.record_fallback") as record:
+        kept = intent_filter(ChatIntent())(pool)
+    assert [c.title for c in kept] == ["Long", "Unknown", "Short"]
+    record.assert_not_called()
+
+
+def test_intent_filter_runtime_cap_regression_crime_shows_not_only_cartoons() -> None:
+    # The live regression ("Une série policière intelligente, pas trop longue"): 20 crime shows
+    # with NULL runtime + 3 kids' cartoons with a well-known 22-min episode, cap 40. Dropping the
+    # unknowns served 100% Scooby-Doo; the tiered filter must keep the crime shows as filler.
+    cartoons = [_runtime_cand(f"Cartoon {i}", 22) for i in range(3)]
+    crime = [_runtime_cand(f"Crime Show {i}", None) for i in range(20)]
+    too_long = [_runtime_cand("Known Long Show", 65)]
+    with mock.patch("phare.agent.service.record_fallback") as record:
+        kept = intent_filter(ChatIntent(max_runtime=40), slate_size=12)(
+            [*cartoons, *too_long, *crime]
+        )
+    titles = [c.title for c in kept]
+    assert len(kept) == 12  # a full slate, not a 3-cartoon strip
+    assert sum(1 for t in titles if t.startswith("Crime Show")) == 9  # filled from the unknown tier
+    assert "Known Long Show" not in titles  # known-over-cap stays excluded
+    record.assert_called_once()
+    assert record.call_args.args == ("intent_filter", "runtime_unknown_kept")
 
 
 def test_strip_leading_think_drops_reasoning_block() -> None:

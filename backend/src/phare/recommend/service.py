@@ -147,6 +147,13 @@ def _pool_matches_genres(pool: Sequence[Candidate], wanted: Sequence[str]) -> bo
     )
 
 
+def _known_under_cap(pool: Sequence[Candidate], cap: int) -> int:
+    """How many candidates *provably* fit a runtime cap — a NULL runtime doesn't count. The intent
+    filter tops a thin known-under-cap tier up with unknown-runtime filler, so pool size alone
+    can't measure runtime starvation; this can."""
+    return sum(1 for c in pool if c.runtime_minutes is not None and c.runtime_minutes <= cap)
+
+
 class RecommendationService:
     """Builds rows and ad-hoc recommendations for one engine configuration."""
 
@@ -607,7 +614,17 @@ class RecommendationService:
         # filter's zero-match fallback can hand back a full pool with no genre match in it (see the
         # docstring wrinkle). Without include_genres this is never starved and behaves as before.
         genre_starved = bool(include_genres) and not _pool_matches_genres(filtered, include_genres)
-        if len(filtered) >= k * _REFETCH_POOL_FLOOR_MULT and not genre_starved:
+        # Same masking problem for a runtime cap: the intent filter degrades instead of starving —
+        # it tops a thin known-under-cap tier up to the slate with unknown-runtime filler — so a
+        # runtime-starved pool also "looks full". When fewer than k candidates *provably* fit the
+        # cap, still try the SQL re-fetch: the constrained subspace (plus its runtime enrichment)
+        # can surface more known-fitting titles than the taste-nearest slice happened to carry.
+        runtime_starved = max_runtime is not None and _known_under_cap(filtered, max_runtime) < k
+        if (
+            len(filtered) >= k * _REFETCH_POOL_FLOOR_MULT
+            and not genre_starved
+            and not runtime_starved
+        ):
             return filtered
         # Resolve the intent genres to structured constraints — literal catalog labels (so the SQL
         # overlap honours the same alias semantics as the in-memory match; an empty result means
@@ -646,6 +663,14 @@ class RecommendationService:
         # found real genre matches, they win regardless of size (5 honest anime beat 58 fallback
         # thrillers). Otherwise the historical "larger pool wins" comparison stands.
         if genre_starved and refetched and _pool_matches_genres(refetched, include_genres):
+            return refetched
+        # Likewise, on a runtime-starved turn the pool that *provably* fits the cap best wins —
+        # both pools are filler-topped to the same size, so raw size can't tell them apart.
+        if (
+            runtime_starved
+            and max_runtime is not None
+            and _known_under_cap(refetched, max_runtime) > _known_under_cap(filtered, max_runtime)
+        ):
             return refetched
         return refetched if len(refetched) > len(filtered) else filtered
 

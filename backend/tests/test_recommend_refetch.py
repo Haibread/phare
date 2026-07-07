@@ -359,3 +359,61 @@ def test_refetch_resolves_french_genre_alias_to_catalog_label(db_session: Sessio
         vote_mix=True,
     )
     assert len(items) >= 10
+
+
+def test_runtime_cap_on_a_runtime_poor_pool_does_not_starve_to_cartoons(
+    db_session: Session, caplog
+) -> None:
+    # The live prod regression ("Une série policière intelligente, pas trop longue"): the planner
+    # extracts crime + max_runtime=40, the re-fetch finds the right Crime shows — and then the old
+    # filter dropped all 20 NULL-runtime crime shows (TV rows almost never carry an episode
+    # runtime), leaving only the 3 kids' cartoons with a well-known 22-min episode. The tiered
+    # filter must fill the slate from the unknown-runtime crime tier instead, visibly.
+    import logging
+
+    from phare.agent.schema import ChatIntent
+    from phare.agent.service import intent_filter
+
+    profile = Profile(display_name="crime fan")
+    db_session.add(profile)
+    db_session.flush()
+    watched = _add_title(db_session, tmdb_id=8000, genres=["Crime"], vector=_THRILLER, runtime=50)
+    db_session.add(
+        WatchEvent(
+            profile_id=profile.id, title_id=watched.id, type=EventType.watched, source="test"
+        )
+    )
+    # 20 crime shows near the taste centroid — none with a known runtime (the live TV reality).
+    crime_ids = {
+        _add_title(
+            db_session, tmdb_id=8100 + i, genres=["Crime"], vector=_THRILLER, runtime=None
+        ).id
+        for i in range(20)
+    }
+    # 3 kids' cartoons with a known 22-minute episode — the only titles that provably fit cap 40.
+    cartoon_ids = {
+        _add_title(db_session, tmdb_id=8200 + i, genres=["Crime"], vector=_THRILLER, runtime=22).id
+        for i in range(3)
+    }
+    db_session.flush()
+
+    intent = ChatIntent(include_genres=["crime"], max_runtime=40)
+    service = _service(db_session)
+    with caplog.at_level(logging.WARNING, logger="phare.fallback"):
+        items = service.recommend(
+            profile.id,
+            candidate_filter=intent_filter(intent, slate_size=service.row_size),
+            include_genres=intent.include_genres,
+            max_runtime=intent.max_runtime,
+            vote_mix=True,
+        )
+
+    fetched = {i.title_id for i in items}
+    assert not fetched <= cartoon_ids  # NOT 100% Scooby-Doo
+    assert len(fetched & crime_ids) >= 5  # the unknown-runtime crime tier fills the slate
+    assert len(items) >= 10  # a real slate, not a 3-item strip
+    # The degradation is observable — unknown-runtime filler was recorded, not silent.
+    assert any(
+        r.name == "phare.fallback" and getattr(r, "reason", "") == "runtime_unknown_kept"
+        for r in caplog.records
+    )

@@ -114,6 +114,8 @@ def test_tmdb_get_show_uses_created_by_and_aggregate_credits() -> None:
         "name": "Game of Thrones",
         "first_air_date": "2011-04-17",
         "episode_run_time": [60],
+        # ``episode_run_time`` wins over the last-episode fallback when both are present.
+        "last_episode_to_air": {"runtime": 80},
         "overview": "Westeros.",
         "genres": [{"id": 1, "name": "Sci-Fi & Fantasy"}],
         "original_language": "en",
@@ -136,10 +138,44 @@ def test_tmdb_get_show_uses_created_by_and_aggregate_credits() -> None:
     meta = _tmdb(handler).get_title(1399, TitleKind.show)
 
     assert meta is not None
-    assert meta.runtime_minutes == 60
+    assert meta.runtime_minutes == 60  # episode_run_time first — not the last-episode 80
     assert meta.original_language == "en"
     assert meta.directors == ["David Benioff", "D. B. Weiss"]  # creators fill the directors slot
     assert meta.top_cast == ["Actor 0", "Actor 1", "Actor 2", "Actor 3", "Actor 4"]
+
+
+def _show_payload(**extra: object) -> dict[str, object]:
+    """A minimal TV detail payload; ``extra`` overlays the runtime-bearing fields under test."""
+    return {"id": 1399, "name": "Some Show", "first_air_date": "2011-04-17", **extra}
+
+
+def test_tmdb_show_episode_runtime_falls_back_to_last_episode_to_air() -> None:
+    # Modern shows very often ship an EMPTY ``episode_run_time`` list, but the appended
+    # ``last_episode_to_air`` block carries the latest episode's runtime — for a show,
+    # ``runtime_minutes`` means EPISODE length, so that fallback is what keeps TV rows
+    # filterable by a chat runtime cap.
+    payload = _show_payload(episode_run_time=[], last_episode_to_air={"runtime": 52})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    meta = _tmdb(handler).get_title(1399, TitleKind.show)
+
+    assert meta is not None
+    assert meta.runtime_minutes == 52
+
+
+def test_tmdb_show_episode_runtime_none_when_neither_source_has_it() -> None:
+    # Neither ``episode_run_time`` nor a last-episode block at all → honest None, never a guess.
+    payload = _show_payload(episode_run_time=[])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    meta = _tmdb(handler).get_title(1399, TitleKind.show)
+
+    assert meta is not None
+    assert meta.runtime_minutes is None
 
 
 def test_tmdb_language_is_sent_and_localises_the_response() -> None:
