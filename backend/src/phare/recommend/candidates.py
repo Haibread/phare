@@ -60,6 +60,7 @@ def generate_candidates(
     from_watched: bool = False,
     genre_constraints: Sequence[genres.GenreConstraint] = (),
     max_runtime: int | None = None,
+    negative_centroid: Sequence[float] | None = None,
 ) -> list[Candidate]:
     """Nearest titles to the centroid, hard-avoids removed.
 
@@ -118,6 +119,15 @@ def generate_candidates(
             or_(Title.runtime_minutes.is_(None), Title.runtime_minutes <= max_runtime)
         )
     distance = TitleEmbedding.embedding.cosine_distance(list(centroid))
+    # Repulsion signal (round 16): the cosine to the *negative* taste centroid, selected alongside
+    # the ranking distance so the re-ranker can demote titles that resemble what the profile avoids.
+    # A second cheap distance over the same fetched rows — it never touches the ORDER BY, so ranking
+    # (and its determinism) is unchanged. Absent when the profile has no negative signal.
+    neg_distance = (
+        TitleEmbedding.embedding.cosine_distance(list(negative_centroid))
+        if negative_centroid is not None
+        else None
+    )
     # Over-fetch so the post-filter for hard-avoids can't starve the result below ``limit``.
     pool = limit * 3 + len(hard_avoids) + 10
     # The re-ranker must be deterministic, but the ``ix_title_embedding_hnsw`` index is an
@@ -126,8 +136,11 @@ def generate_candidates(
     # user sees on reload. Widen the search beam so recall is effectively exact for a self-hosted
     # catalog (works at N=200, principle 5); ``SET LOCAL`` scopes it to this transaction.
     session.execute(text("SET LOCAL hnsw.ef_search = 1000"))
+    columns = [Title, distance.label("distance")]
+    if neg_distance is not None:
+        columns.append(neg_distance.label("neg_distance"))
     rows = session.execute(
-        select(Title, distance.label("distance"))
+        select(*columns)
         .join(TitleEmbedding, TitleEmbedding.title_id == Title.id)
         .where(
             TitleEmbedding.model_version == model_version,
@@ -141,7 +154,8 @@ def generate_candidates(
 
     candidates: list[Candidate] = []
     dropped_by_avoids = 0
-    for title, dist in rows:
+    for row in rows:
+        title, dist = row[0], row[1]
         if _is_hard_avoided(title, hard_avoids):
             dropped_by_avoids += 1
             continue
@@ -161,6 +175,7 @@ def generate_candidates(
                 overview=title.overview,
                 poster_path=title.poster_path,
                 similarity=1.0 - float(dist),
+                neg_similarity=1.0 - float(row[2]) if neg_distance is not None else None,
             )
         )
         if len(candidates) >= limit:

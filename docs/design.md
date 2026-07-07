@@ -47,8 +47,11 @@ filters) → re-ranker → explanations (LLM)`.
       released and recorded as a `facet_quota_starved` fallback, never silently.
     - The re-ranker, mood nudge, and constraint-aware re-fetch all compose unchanged — mood nudges
       each facet, the re-fetch runs per facet. **Negatives** (abandonment / dislike) are *not*
-      clustered: they push the whole taste away, so they ride into every facet centroid, never seed
-      their own.
+      clustered: they push the whole taste away, so they ride into the *single* centroid, but a
+      per-facet query vector is built from positive signal only. So once a profile splits into ≥2
+      facets, the retrieval queries carry no repulsion — that job moves to the re-ranker's
+      **negative-repulsion penalty** (below), which acts on every candidate regardless of facet
+      count.
     - **k=1 degradation.** A small history (< ~8 positively-weighted titles) or an already-cohesive
       taste collapses to a single facet whose centroid **equals** the historical one — so N=1 and
       single-mode profiles behave exactly as before (principle 5). Rewatch rows and title-anchored
@@ -119,6 +122,18 @@ filters) → re-ranker → explanations (LLM)`.
     2049* stays whole), while *Alien*/*Aliens* still fold together. The best-scored instalment is
     kept; the freed slot goes to an unrelated title. Applied before the slate is composed, so it
     covers the home rows, the chat slate, **and** swings uniformly.
+  - **Negative-taste repulsion** (round 16). A **negative centroid** — the magnitude-weighted
+    average embedding of what the profile pushes away (abandoned / disliked / low-rated) — is built
+    alongside the taste centroid. Each candidate carries its cosine to it (`neg_similarity`,
+    computed as a second cheap distance in the ANN query), and the re-ranker turns that into a
+    bounded score penalty: a title sitting in the disliked neighbourhood is demoted, rescaled over
+    the embedder's compressed band so it discriminates (≈0 for the many titles unrelated to the
+    dislikes, rising only for the genuinely dislike-adjacent). It's **score-only** — never folded
+    into displayed confidence (a pick isn't *less likely to fit you* for resembling a dislike, it's
+    just ranked lower) — and transparent in the score breakdown (`neg_penalty`). Because it acts
+    post-retrieval on every candidate, it repels regardless of facet count, where the query-vector
+    signal can't (see the facet note above). Hard-avoids remain the separate hard *filter*; this is
+    the soft, graded push.
 - **Swing-for-the-fences:** every slate reserves a few deliberate high-novelty picks, *not*
   judged on accuracy. Discovery is the point; pure accuracy yields a popularity machine.
 - **Explanations (LLM):** short, spoiler-safe, never cite another user, express confidence.

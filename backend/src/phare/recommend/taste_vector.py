@@ -191,6 +191,30 @@ def blend_contributions(contributions: list[TasteContribution]) -> list[float] |
     return [value / total_abs for value in accumulator]
 
 
+def negative_centroid(contributions: list[TasteContribution]) -> list[float] | None:
+    """A point in embedding space pointing *toward* what the profile pushes away — the
+    magnitude-weighted average embedding of its negatively-weighted titles (abandoned, disliked,
+    low-rated). ``None`` when the profile carries no negative signal.
+
+    Distinct from :func:`compute_taste_centroid`, which nets positive and negative signal into one
+    query vector: there a dislike merely *subtracts* from where we search; here the negatives get
+    their own centroid so the re-ranker can read a candidate's cosine to it as "how much like your
+    dislikes is this" and demote accordingly. This matters because the taste **facets** deliberately
+    cluster only positive signal (a dislike pushes the whole taste away, it doesn't seed its own
+    mode — see :mod:`phare.recommend.taste_facets`), so once a profile has ≥2 facets the retrieval
+    query vectors carry no repulsion at all; this rerank-side centroid is where it comes back.
+
+    The magnitudes are flipped positive so the blend averages *toward* the disliked embeddings (a
+    point to measure closeness to), rather than the negated direction the signed centroid would
+    give."""
+    negatives = [
+        TasteContribution(title_id=c.title_id, embedding=c.embedding, weight=-c.weight)
+        for c in contributions
+        if c.weight < 0.0
+    ]
+    return blend_contributions(negatives)
+
+
 def compute_taste_centroid(
     session: Session,
     profile_id: uuid.UUID,

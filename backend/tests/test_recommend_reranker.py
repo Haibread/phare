@@ -610,6 +610,50 @@ def test_franchise_dedup_respects_kind() -> None:
     assert len(kinds) == 2  # both survive — different kinds
 
 
+# --- negative-taste repulsion (round 16): demote candidates close to the disliked centroid --------
+
+
+def test_neg_similarity_penalty_demotes_a_dislike_adjacent_title() -> None:
+    # Two equally-similar titles; the one sitting in the disliked neighbourhood (high
+    # neg_similarity) is demoted below the neutral one purely by the repulsion penalty.
+    neutral = _cand(title="Neutralpick", sim=0.5).model_copy(update={"neg_similarity": -0.4})
+    adjacent = _cand(title="Dislikeadjacent", sim=0.5).model_copy(update={"neg_similarity": 0.95})
+    recs = rerank([adjacent, neutral], {}, k=2, swing_slots=0)
+    assert recs[0].title == "Neutralpick"
+
+
+def test_neg_penalty_is_transparent_and_absent_without_signal() -> None:
+    # Inspectability (principle 2): the penalty shows in the score breakdown when the candidate
+    # carries a neg_similarity, and the component is omitted entirely when it doesn't (no negative
+    # signal → no penalty, unchanged component set for the historical no-negative path).
+    with_neg = _cand(title="x", sim=0.4).model_copy(update={"neg_similarity": 0.95})
+    _, comp = score_candidate(with_neg, {})
+    assert comp["neg_penalty"] > 0
+    _, comp_none = score_candidate(_cand(title="y", sim=0.4), {})
+    assert "neg_penalty" not in comp_none
+
+
+def test_neg_penalty_is_zero_far_from_the_disliked_centroid() -> None:
+    # A candidate whose cosine to the disliked centroid sits below the embedder's compressed band
+    # reads as no penalty — the repulsion discriminates, it isn't a flat tax on every title.
+    far = _cand(title="Faraway", sim=0.4).model_copy(update={"neg_similarity": -0.2})
+    _, comp = score_candidate(far, {})
+    assert comp["neg_penalty"] == 0.0
+
+
+def test_neg_penalty_is_score_only_and_never_touches_confidence() -> None:
+    # The repulsion demotes but is never folded into displayed confidence: a pick isn't *less likely
+    # to fit you* for resembling a dislike, it's just ranked below its neighbours (honesty).
+    base = _cand(title="Candidate", sim=0.7, genres=["Drama"], vote_count=5_000)
+    taste: dict[str, Any] = {"affinities": {"Drama": 1.0}, "confidence": 0.8}
+    plain = rerank([base], taste, k=1, swing_slots=0)[0]
+    demoted = rerank([base.model_copy(update={"neg_similarity": 0.95})], taste, k=1, swing_slots=0)[
+        0
+    ]
+    assert demoted.confidence == plain.confidence  # confidence untouched
+    assert demoted.score < plain.score  # but the score is demoted
+
+
 def test_franchise_dedup_leaves_unrelated_titles_untouched() -> None:
     # A pool of genuinely distinct titles is returned in full — the guard only ever drops a sibling.
     cands = [
