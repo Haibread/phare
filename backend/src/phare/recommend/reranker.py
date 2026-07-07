@@ -14,6 +14,7 @@ Every input maps to a stable output, so this is exhaustively unit-testable with 
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -383,6 +384,105 @@ def _facet_quotas(
     return quotas or None
 
 
+# Franchise de-duplication (round-14 live finding: a chat slate carried both "Rush Hour 2" and
+# "Rush Hour 3" — two instalments of one franchise is a wasted slot MMR can't see, since sequels sit
+# close in embedding space but not close enough to be squashed by genre diversity). There is no
+# franchise id in the data, so the key is approximated from the title. It must be *conservative*:
+# merging two distinct works (dropping a good rec) is worse than missing a real sequel (a cosmetic
+# dup), so the derivation errs toward None.
+#
+# Trailing tokens stripped when deriving the key — instalment markers, not part of the franchise
+# name: roman numerals in the realistic sequel range, and the words that introduce a number
+# ("Part 2", "Vol. 2", "Chapter 4").
+_SEQUEL_ROMAN = frozenset(
+    {"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii", "xiii"}
+)
+_SEQUEL_WORDS = frozenset({"part", "chapter", "vol", "volume"})
+# A trailing arabic numeral only reads as a sequel index up to here (mirrors the roman set's xiii).
+# Above it the number is almost always meaningful, not an instalment — a year ("Blade Runner 2049"),
+# a synthetic id ("Title 600"), or a title number ("Apollo 13" strips, "Apollo 18" does not, so the
+# two never merge; "Fahrenheit 451", "1917" stay whole). Under-merging is the safe direction.
+_MAX_ARABIC_SEQUEL = 13
+
+
+def _is_sequel_marker(token: str) -> bool:
+    """Whether a trailing token is an instalment marker rather than part of the franchise name."""
+    if token in _SEQUEL_ROMAN or token in _SEQUEL_WORDS:
+        return True
+    return token.isdigit() and int(token) <= _MAX_ARABIC_SEQUEL
+
+
+# A lone single word shorter than this is too generic to stand as a franchise ("It", "Up", "Her") —
+# only multi-word keys or *distinctive* single words (length ≥ this) dedupe. Chosen so "It" (2) can
+# never merge with "It Follows" (two words, keys separately as ``it follows``) while "Alien"/"Jaws"
+# still collapse their instalments — the tricky cases the guard is specced against.
+_MIN_SINGLE_WORD_FRANCHISE_LEN = 4
+# Strip leading/trailing punctuation off a token (so "Vol." → "vol") while keeping it intact inside.
+_TOKEN_EDGE_PUNCT = re.compile(r"^\W+|\W+$")
+
+
+def _franchise_key(candidate: Candidate) -> str | None:
+    """A conservative franchise identity for a title, or ``None`` when it isn't safely one.
+
+    Drop any subtitle (everything after the first ``:`` or a spaced `` - ``), then strip trailing
+    instalment markers (arabic numerals — "Rush Hour *3*"; roman numerals — "Rocky *II*"; and the
+    words that precede a number — "*Part* 2", "*Vol* 2"). Two titles share a franchise iff they have
+    the same ``kind`` and the same key. Deliberately conservative — it must never merge two
+    *distinct* works:
+
+    - a single-word key must be *distinctive* (length ≥ ``_MIN_SINGLE_WORD_FRANCHISE_LEN``) to
+      count, so "It" (2 chars) is never a franchise and cannot swallow "It Follows" (two words →
+      keys separately as ``it follows``);
+    - "Alien"/"Aliens" *should* merge, so a distinctive single-word key is folded to its singular
+      (a trailing ``s`` dropped only when the stem stays ≥ 4 — which keeps "Cars"→"cars" from
+      collapsing onto a hypothetical "Car").
+
+    Returns the normalised key, or ``None`` when the title yields nothing franchise-worthy — a
+    ``None`` key never dedupes, so unknowns are simply left alone (honest under-merging)."""
+    title = candidate.title.casefold()
+    for sep in (":", " - "):
+        cut = title.find(sep)
+        if cut != -1:
+            title = title[:cut]
+    tokens = [t for t in (_TOKEN_EDGE_PUNCT.sub("", tok) for tok in title.split()) if t]
+    while tokens and _is_sequel_marker(tokens[-1]):
+        tokens.pop()
+    if not tokens:
+        return None
+    if len(tokens) == 1:
+        stem = tokens[0]
+        if stem.endswith("s") and len(stem) - 1 >= _MIN_SINGLE_WORD_FRANCHISE_LEN:
+            stem = stem[:-1]
+        if len(stem) < _MIN_SINGLE_WORD_FRANCHISE_LEN:
+            return None
+        return stem
+    return " ".join(tokens)
+
+
+def _dedupe_franchises(
+    scored: list[tuple[float, Candidate, dict[str, float]]],
+) -> list[tuple[float, Candidate, dict[str, float]]]:
+    """Keep at most one title per ``(franchise, kind)`` — the best-scored one.
+
+    ``scored`` must already be ordered by score descending, so the first candidate seen for a
+    franchise is its strongest representative. Applied *before* any slate is composed, so it
+    protects every path uniformly: the row path (MMR), the chat path (vote-mix — where the live
+    "Rush Hour 2 + Rush Hour 3" dup was actually seen, and which never touches
+    :func:`_select_diverse`), and swings (their leftover pool is drawn from the same deduped set).
+    Candidates with no franchise key (``None``) are always kept — an unknown never merges."""
+    seen: set[tuple[str, str]] = set()
+    kept: list[tuple[float, Candidate, dict[str, float]]] = []
+    for item in scored:
+        key = _franchise_key(item[1])
+        if key is not None:
+            ident = (key, item[1].kind)
+            if ident in seen:
+                continue
+            seen.add(ident)
+        kept.append(item)
+    return kept
+
+
 def _select_diverse(
     scored: list[tuple[float, Candidate, dict[str, float]]],
     count: int,
@@ -567,6 +667,10 @@ def rerank(
         score, components = score_candidate(candidate, taste, sim_rel=sim_rel)
         scored.append((score, candidate, components))
     scored.sort(key=lambda item: item[0], reverse=True)
+    # Collapse franchise instalments to one (best-scored) representative before composing any slate,
+    # so no path shows "Rush Hour 2" *and* "Rush Hour 3". Runs on the score-sorted pool, so it keeps
+    # the strongest sibling; both the vote-mix and MMR paths (and swings) inherit the deduped pool.
+    scored = _dedupe_franchises(scored)
 
     if vote_mix:
         chosen = _select_vote_mix(scored, k)

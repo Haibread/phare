@@ -15,7 +15,11 @@ test("chat agent replies to a tapped suggestion with mood-filtered picks", async
   await expect(page.getByTestId("chat-user").first()).toBeVisible();
   const agent = page.getByTestId("chat-agent").first();
   await expect(agent).toBeVisible({ timeout: 20_000 });
-  await expect(agent.getByTestId("chat-item").first()).toBeVisible();
+  // A returned pick renders as "chat-item", or "chat-item-cited" when the reply names it — accept
+  // either so the assertion doesn't flake on whether the pick was cited in the sentence.
+  await expect(
+    agent.locator('[data-testid="chat-item"], [data-testid="chat-item-cited"]').first(),
+  ).toBeVisible();
 
   // After a reply, follow-up suggestions are offered to keep the conversation going.
   await expect(page.getByTestId("chat-suggestion").first()).toBeVisible();

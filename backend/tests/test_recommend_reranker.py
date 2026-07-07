@@ -13,6 +13,7 @@ from phare.recommend.reranker import (
     _FIT_STRONG,
     _FIT_TRY,
     _UNPROVEN_CONF_CAP,
+    _franchise_key,
     confidence_for_pool,
     rerank,
     score_candidate,
@@ -526,3 +527,93 @@ def test_swing_novelty_reads_the_raw_cosine() -> None:
     recs = rerank(pool, {}, k=3, swing_slots=1)
     swing = next(r for r in recs if r.is_swing)
     assert swing.title == "raw-low"
+
+
+# --- franchise de-duplication (round-14 live finding: Rush Hour 2 + Rush Hour 3 in one slate) ---
+
+
+def test_franchise_key_merges_and_separates_the_tricky_cases() -> None:
+    # The brief's explicit cases. Alien/Aliens SHOULD share a franchise; "It" must NOT swallow "It
+    # Follows"; numerals, roman numerals, subtitles and instalment words all collapse to the name.
+    def key(title: str) -> str | None:
+        return _franchise_key(_cand(title=title, sim=0.5))
+
+    assert key("Rush Hour") == key("Rush Hour 2") == key("Rush Hour 3")  # arabic numerals
+    assert key("Alien") == key("Aliens")  # singular/plural fold
+    assert key("Alien") == key("Alien 3") == key("Alien: Resurrection")  # numeral + subtitle
+    assert key("Rocky") == key("Rocky II")  # roman numerals
+    assert key("Guardians of the Galaxy") == key("Guardians of the Galaxy Vol. 2")  # "Vol." word
+    assert key("It") is None  # a lone short word is too generic to be a franchise
+    assert key("It") != key("It Follows")  # so "It" can never swallow "It Follows"
+    assert key("It Follows") is not None
+    # The plural fold is guarded so it can't over-merge: "Cars" (stem "car" < 4) stays distinct.
+    assert key("Cars") is not None and key("Cars") != key("Car")
+    # A large trailing number is meaningful (a year, an id), not a sequel index — it isn't
+    # stripped, so "Blade Runner 2049" stays whole and "Apollo 13"/"Apollo 18" stay apart.
+    assert key("Blade Runner 2049") != key("Blade Runner")
+    assert key("Apollo 13") != key("Apollo 18")
+    assert key("Title 600") != key("Title 601")  # synthetic ids never collapse into one franchise
+
+
+def test_franchise_dedup_keeps_one_instalment_per_slate() -> None:
+    # The reported regression: a slate showed Rush Hour 2 AND Rush Hour 3. Only the best-scored
+    # instalment survives; the freed slot goes to an unrelated title.
+    cands = [
+        _cand(title="Rush Hour", sim=0.62, genres=["Action"]),
+        _cand(title="Rush Hour 2", sim=0.60, genres=["Action"]),
+        _cand(title="Rush Hour 3", sim=0.58, genres=["Action"]),
+        _cand(title="Someunrelatedfilm", sim=0.55, genres=["Drama"]),
+        _cand(title="Anotherdistinctone", sim=0.50, genres=["Comedy"]),
+    ]
+    titles = [r.title for r in rerank(cands, {}, k=3, swing_slots=0)]
+    assert sum(t.startswith("Rush Hour") for t in titles) == 1  # one instalment, not three
+    assert "Rush Hour" in titles  # the best-scored sibling is the one kept
+    assert "Someunrelatedfilm" in titles and "Anotherdistinctone" in titles  # freed slots reused
+
+
+def test_franchise_dedup_applies_to_the_chat_vote_mix_path() -> None:
+    # The live finding was on the CHAT slate (vote_mix), which never goes through _select_diverse —
+    # so the guard lives before the path split and must hold here too. Padding titles are glued
+    # (Padding0…) so they carry distinct keys and aren't themselves deduped.
+    cands = [
+        _cand(title="Rush Hour", sim=0.62, vote_count=3_000),
+        _cand(title="Rush Hour 2", sim=0.61, vote_count=3_000),
+        _cand(title="Rush Hour 3", sim=0.60, vote_count=3_000),
+        *[_cand(title=f"Padding{i}", sim=0.40 + 0.01 * i, vote_count=1_000) for i in range(11)],
+    ]
+    titles = [r.title for r in rerank(cands, {}, k=12, vote_mix=True)]
+    assert "Rush Hour" in titles
+    assert (
+        sum(t.startswith("Rush Hour") for t in titles) == 1
+    )  # not 2+ instalments in the chat slate
+
+
+def test_franchise_dedup_covers_swing_slots() -> None:
+    # Swings are drawn from the deduped leftover pool, so a sequel can't sneak in as a novelty pick
+    # when its sibling already holds a slot ("franchise dup wastes swings too").
+    main_pool = [
+        _cand(title=f"Distinctfilm{i}", sim=0.9 - i * 0.05, genres=[f"G{i}"]) for i in range(4)
+    ]
+    saga = [
+        _cand(title="Sagaflick", sim=0.30, genres=["Action"]),  # novel (low sim) → swing candidate
+        _cand(title="Sagaflick 2", sim=0.28, genres=["Action"]),  # sibling, also novel
+    ]
+    titles = [r.title for r in rerank([*main_pool, *saga], {}, k=6, swing_slots=2)]
+    assert sum(t.startswith("Sagaflick") for t in titles) == 1
+
+
+def test_franchise_dedup_respects_kind() -> None:
+    # Same normalised name, different kind (a film and a series) are not the same franchise.
+    movie = _cand(title="Fargo", sim=0.6)  # _cand defaults kind="movie"
+    series = _cand(title="Fargo", sim=0.5).model_copy(update={"kind": "tv"})
+    kinds = {(r.title, r.kind) for r in rerank([movie, series], {}, k=2, swing_slots=0)}
+    assert len(kinds) == 2  # both survive — different kinds
+
+
+def test_franchise_dedup_leaves_unrelated_titles_untouched() -> None:
+    # A pool of genuinely distinct titles is returned in full — the guard only ever drops a sibling.
+    cands = [
+        _cand(title=name, sim=0.6 - i * 0.02) for i, name in enumerate(["Heat", "Drive", "Alien"])
+    ]
+    titles = {r.title for r in rerank(cands, {}, k=3, swing_slots=0)}
+    assert titles == {"Heat", "Drive", "Alien"}
