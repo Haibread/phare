@@ -11,7 +11,7 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
 # nginx-unprivileged runs as a non-root user (uid 101) and listens on 8080 by default.
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /usr/local/src/phare-frontend/dist /usr/share/nginx/html
 EXPOSE 8080
