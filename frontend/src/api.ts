@@ -114,13 +114,13 @@ export type OnboardingStatus = z.infer<typeof onboardingStatusSchema>;
 export const tasteSchema = z.object({
   profileId: z.string(),
   summary: z.string().nullable(),
-  structured: z.record(z.unknown()),
+  structured: z.record(z.string(), z.unknown()),
   // Display-only localization of free-form chips: canonical value -> label in the UI language. The
   // canonical values in `structured` never change (overrides key on them); chips missing from the
   // map fall back to the static vocab table, then the canonical string. Defaulted so an older
   // backend that doesn't send it yet still parses.
-  displayTerms: z.record(z.string()).default({}),
-  userOverrides: z.record(z.unknown()),
+  displayTerms: z.record(z.string(), z.string()).default({}),
+  userOverrides: z.record(z.string(), z.unknown()),
   confidence: z.number().nullable(),
   modelVersion: z.string().nullable(),
   generatedAt: z.string().nullable(),
@@ -162,7 +162,7 @@ export const recommendationItemSchema = z.object({
   confidence: z.number().nullable(),
   explanation: z.string().nullable(),
   posterUrl: z.string().nullable(),
-  components: z.record(z.number()),
+  components: z.record(z.string(), z.number()),
   watched: z.boolean(),
   // TMDB rating, filled on search results so the cards can show "★ 8.4 · 37k". Defaults tolerate
   // an older backend that doesn't send them; null hides the rating line.
@@ -365,7 +365,7 @@ export type JellyfinUser = z.infer<typeof jellyfinUserSchema>;
 // Seerr library availability per title: "available" | "queued" | "requestable" | "unknown".
 const availabilitySchema = z.object({
   configured: z.boolean(),
-  results: z.record(z.string()),
+  results: z.record(z.string(), z.string()),
 });
 export type Availability = z.infer<typeof availabilitySchema>;
 const requestResultSchema = z.object({ ok: z.boolean(), availability: z.string() });
