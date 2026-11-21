@@ -111,6 +111,10 @@ config change — expect `4/4 PASS`, and read the per-persona reasons if not.
 docker compose exec backend phare evaluate    # against the live instance + configured models
 ```
 
+## Contributing
+
+Setup, tests, hooks and CI: [`CONTRIBUTING.md`](CONTRIBUTING.md). Vulnerability reports: [`SECURITY.md`](SECURITY.md).
+
 ## Attribution
 
 This product uses the TMDB API but is not endorsed or certified by TMDB. Watch-history data comes
