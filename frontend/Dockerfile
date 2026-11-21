@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /usr/local/src/phare-frontend
 COPY package.json package-lock.json ./
 RUN npm ci
